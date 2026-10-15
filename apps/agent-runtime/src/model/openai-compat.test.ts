@@ -117,4 +117,34 @@ describe('OpenAICompatGateway', () => {
       await new Promise<void>((r) => bad.server.close(() => r()));
     }
   });
+
+  it('2xx 但响应体非法 JSON 时以 model_bad_json 抛错', async () => {
+    const bad = createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end('{not json');
+    });
+    await new Promise<void>((r) => bad.listen(0, () => r()));
+    const addr = bad.address();
+    const port = typeof addr === 'object' && addr ? addr.port : 0;
+    try {
+      const gw = new OpenAICompatGateway({
+        baseUrl: `http://127.0.0.1:${port}`,
+        apiKey: 'k',
+        model: 'deepseek-chat',
+      });
+      await expect(
+        gw.chat({ messages: [{ role: 'user', content: 'hi' }], tools: [] }),
+      ).rejects.toThrow('model_bad_json');
+    } finally {
+      await new Promise<void>((r) => bad.close(() => r()));
+    }
+  });
+
+  it('tools 为空时请求体不含 tools 键', async () => {
+    const gw = new OpenAICompatGateway({ baseUrl, apiKey: 'k', model: 'deepseek-chat' });
+    await gw.chat({ messages: [{ role: 'user', content: 'hi' }], tools: [] });
+
+    const body = lastBody() as Record<string, unknown>;
+    expect('tools' in body).toBe(false);
+  });
 });

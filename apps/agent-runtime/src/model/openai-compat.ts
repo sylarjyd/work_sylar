@@ -37,7 +37,12 @@ export class OpenAICompatGateway implements ModelGateway {
       }),
     });
     if (!res.ok) throw new Error(`model_http_${res.status}`);
-    const data = (await res.json()) as OpenAIResponse;
+    let data: OpenAIResponse;
+    try {
+      data = (await res.json()) as OpenAIResponse;
+    } catch {
+      throw new Error('model_bad_json');
+    }
     const msg = data.choices?.[0]?.message;
     return {
       content: msg?.content ?? '',
@@ -59,7 +64,7 @@ function toWireMessage(m: ModelMessage): Record<string, unknown> {
   const out: Record<string, unknown> = { role: m.role, content: m.content };
   if (m.toolCalls?.length) {
     out.tool_calls = m.toolCalls.map((tc) => ({
-      id: tc.id,
+      id: tc.id || randomUUID(),
       type: 'function',
       function: { name: tc.name, arguments: JSON.stringify(tc.args) },
     }));
@@ -70,7 +75,8 @@ function toWireMessage(m: ModelMessage): Record<string, unknown> {
 
 function safeParse(s: string): Record<string, unknown> {
   try {
-    return JSON.parse(s) as Record<string, unknown>;
+    const v = JSON.parse(s);
+    return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
   } catch {
     return {};
   }
