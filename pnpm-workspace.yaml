@@ -15,3 +15,6 @@ onlyBuiltDependencies:
   - "@swc/core"
   - sharp
   - unrs-resolver
+  # @prisma/client 的 postinstall 会自动跑 `prisma generate`；不放行则干净检出缺 client。
+  - "@prisma/client"
+  - prisma

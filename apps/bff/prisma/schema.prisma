@@ -55,7 +55,7 @@ model Message {
   createdAt DateTime @default(now())
   session   Session  @relation(fields: [sessionId], references: [id])
 
-  @@index([sessionId, seq])
+  @@unique([sessionId, seq])
 }
 
 model Task {
@@ -91,5 +91,5 @@ model Step {
   ts      DateTime @default(now())
   run     Run      @relation(fields: [runId], references: [id])
 
-  @@index([runId, seq])
+  @@unique([runId, seq])
 }
