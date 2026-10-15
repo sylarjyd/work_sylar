@@ -15,6 +15,9 @@ let token: string;
 const sessions: { id: string; tenantId: string; userId: string; title: string; createdAt: Date }[] = [];
 const messages: { id: string; sessionId: string; role: string; content: string; seq: number }[] = [];
 
+// 单调递增，跨 beforeEach 不重置，贴近真实自增主键（否则 id 会随 fake 重置而复用）。
+let seq = 0;
+
 const fakePrisma = {
   session: {
     findMany: async ({ where }: { where: { tenantId: string; userId: string } }) =>
@@ -24,7 +27,7 @@ const fakePrisma = {
         (s) => s.id === where.id && s.tenantId === where.tenantId && s.userId === where.userId,
       ) ?? null,
     create: async ({ data }: { data: { tenantId: string; userId: string; title: string } }) => {
-      const row = { id: `s${sessions.length + 1}`, createdAt: new Date(), ...data };
+      const row = { id: `s${++seq}`, createdAt: new Date(), ...data };
       sessions.push(row);
       return row;
     },
@@ -93,13 +96,37 @@ describe('SessionsController', () => {
     expect(arr.map((m: { seq: number }) => m.seq)).toEqual([0, 1]);
   });
 
-  it('访问不属于自己的会话返回 404', async () => {
-    const other = signToken({ sub: 'u2', tenantId: 't2' });
+  it('省略 title 时创建会话使用默认标题', async () => {
     const res = await app.inject({
+      method: 'POST',
+      url: '/api/sessions',
+      headers: auth(),
+      payload: {},
+    });
+    expect(res.statusCode).toBe(201);
+    expect(JSON.parse(res.payload).title).toBe('新会话');
+  });
+
+  it('跨租户访问他人会话返回 404', async () => {
+    // 先落库一个确属 u1/t1 的会话：下面别的用户拿到 404 必须是「归属不匹配」而非「会话不存在」，
+    // 否则用例无法区分存在性与归属，断言会退化成空集检查。
+    sessions.push({ id: 's-owned', tenantId, userId, title: 'owned', createdAt: new Date() });
+
+    const other = signToken({ sub: 'u2', tenantId: 't2' });
+    const denied = await app.inject({
       method: 'GET',
-      url: '/api/sessions/s1/messages',
+      url: '/api/sessions/s-owned/messages',
       headers: { authorization: `Bearer ${other}` },
     });
-    expect(res.statusCode).toBe(404);
+    expect(denied.statusCode).toBe(404);
+
+    // 同一会话由属主读取应当成功，证明确实存在且归属过滤生效。
+    const owned = await app.inject({
+      method: 'GET',
+      url: '/api/sessions/s-owned/messages',
+      headers: auth(),
+    });
+    expect(owned.statusCode).toBe(200);
+    expect(JSON.parse(owned.payload)).toEqual([]);
   });
 });
