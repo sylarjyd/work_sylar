@@ -22,6 +22,7 @@ export class TasksController {
     @Res() reply: FastifyReply,
   ): Promise<void> {
     const runtimeUrl = process.env.AGENT_RUNTIME_URL ?? 'http://localhost:4001';
+    const runtimeToken = process.env.AGENT_RUNTIME_TOKEN;
     const goal = body?.goal;
 
     // 边界校验：goal 必须是非空字符串。此时尚未建 task/run，也尚未 hijack，
@@ -59,7 +60,11 @@ export class TasksController {
     try {
       upstream = await fetch(`${runtimeUrl}/runs`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: {
+          'content-type': 'application/json',
+          // 配了共享密钥才带；不配时与未开启鉴权的 runtime 保持兼容。
+          ...(runtimeToken ? { 'x-agent-runtime-token': runtimeToken } : {}),
+        },
         body: JSON.stringify({ runId, sessionId, goal, messages }),
       });
     } catch {

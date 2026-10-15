@@ -83,6 +83,29 @@ describe('runtime server', () => {
     expect(res.status).toBe(404);
   });
 
+  it('设置 AGENT_RUNTIME_TOKEN 后：缺 token 返回 401，正确 token 放行', async () => {
+    process.env.AGENT_RUNTIME_TOKEN = 'secret-tok';
+    try {
+      const payload = {
+        runId: 'r1',
+        sessionId: 's1',
+        goal: 'g',
+        messages: [{ role: 'user', content: 'g' }],
+      };
+      const denied = await postRuns(payload);
+      expect(denied.status).toBe(401);
+      const allowed = await fetch(`${baseUrl}/runs`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-agent-runtime-token': 'secret-tok' },
+        body: JSON.stringify(payload),
+      });
+      expect(allowed.status).toBe(200);
+      await allowed.text(); // 排空响应体，避免连接悬挂
+    } finally {
+      delete process.env.AGENT_RUNTIME_TOKEN;
+    }
+  });
+
   it('网关抛错时 SSE 只吐 error 事件、不含 done', async () => {
     const boomGateway: ModelGateway = {
       async chat() {

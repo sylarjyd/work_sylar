@@ -27,6 +27,14 @@ export function createRuntimeServer(deps: RuntimeDeps = {}): Server {
     }
 
     if (req.method === 'POST' && req.url === '/runs') {
+      // BFF→runtime 共享密钥：设置 AGENT_RUNTIME_TOKEN 后强制校验，供网络化部署用；
+      // 未设置时仅靠入口默认绑本机（见 isEntry）限制可达面。
+      const token = process.env.AGENT_RUNTIME_TOKEN;
+      if (token && req.headers['x-agent-runtime-token'] !== token) {
+        res.writeHead(401, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: 'unauthorized' }));
+        return;
+      }
       let body = '';
       req.on('data', (chunk) => (body += chunk));
       req.on('end', () => {
@@ -77,7 +85,10 @@ if (isEntry) {
   loadRootEnv();
   // 独立端口变量：与 bff 的 PORT 分开，避免根 .env 里 PORT=4000 把 runtime 也顶到 4000。
   const port = Number(process.env.AGENT_RUNTIME_PORT ?? 4001);
-  createRuntimeServer().listen(port, () => {
-    console.log(`agent-runtime listening on http://localhost:${port}`);
+  // 默认只绑本机：该端点无内置鉴权（仅有可选 token），暴露到网络等于开放一个无鉴权的模型入口。
+  // 部署到网络时须显式设 AGENT_RUNTIME_HOST=0.0.0.0 并同时配置 AGENT_RUNTIME_TOKEN。
+  const host = process.env.AGENT_RUNTIME_HOST ?? '127.0.0.1';
+  createRuntimeServer().listen(port, host, () => {
+    console.log(`agent-runtime listening on http://${host}:${port}`);
   });
 }
