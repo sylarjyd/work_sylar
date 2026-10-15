@@ -12,6 +12,20 @@ pnpm test       # 全量测试
 pnpm build      # 全量构建
 ```
 
+## 本地配置
+
+```bash
+cp .env.example .env      # 填入 DEEPSEEK_API_KEY（缺省时 Agent 走确定性 Mock，链路仍可验证）
+pnpm --filter @ai-office/bff db:up      # 起 Postgres
+pnpm --filter @ai-office/bff db:push    # 同步表结构
+```
+
+## M1 已具备
+
+- 账号：邮箱+密码注册登录，JWT 鉴权
+- 会话：多会话、消息历史持久化（Postgres + Prisma）
+- Agent：真模型驱动的 Agent Loop（plan→act→observe），内置 `web.search` / `web.fetch`
+
 ## 包结构
 
 - `packages/shared` —— 协议类型与 SSE 编解码

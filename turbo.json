@@ -1,6 +1,16 @@
 {
   "$schema": "https://turbo.build/schema.json",
-  "globalPassThroughEnv": ["PORT", "AGENT_RUNTIME_URL", "NEXT_PUBLIC_BFF_URL"],
+  "globalPassThroughEnv": [
+    "PORT",
+    "AGENT_RUNTIME_URL",
+    "NEXT_PUBLIC_BFF_URL",
+    "DATABASE_URL",
+    "JWT_SECRET",
+    "DEEPSEEK_API_KEY",
+    "MODEL_BASE_URL",
+    "MODEL_NAME",
+    "TAVILY_API_KEY"
+  ],
   "tasks": {
     "build": { "dependsOn": ["^build"], "outputs": ["dist/**", ".next/**"] },
     "test": { "dependsOn": ["^build"] },
