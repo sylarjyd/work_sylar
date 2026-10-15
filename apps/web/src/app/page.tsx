@@ -52,6 +52,18 @@ export default function Home() {
     return s;
   }
 
+  async function handleNewSession() {
+    try {
+      await newSession();
+    } catch (err) {
+      if (isUnauthorized(err)) {
+        router.push('/login');
+        return;
+      }
+      setError(String(err));
+    }
+  }
+
   async function run() {
     setEvents([]);
     setRunning(true);
@@ -103,7 +115,7 @@ export default function Home() {
             <option key={s.id} value={s.id}>{s.title}</option>
           ))}
         </select>
-        <button onClick={newSession}>新建会话</button>
+        <button onClick={() => void handleNewSession()}>新建会话</button>
         <button
           onClick={() => { clearToken(); router.push('/login'); }}
           style={{ marginLeft: 'auto' }}
