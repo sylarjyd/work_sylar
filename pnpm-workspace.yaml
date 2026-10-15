@@ -18,3 +18,6 @@ onlyBuiltDependencies:
   # @prisma/client 的 postinstall 会自动跑 `prisma generate`；不放行则干净检出缺 client。
   - "@prisma/client"
   - prisma
+  # argon2 是原生模块：镜像里 win32-x64 的预编译二进制（argon2.glibc.node）加载即
+  # 段错误，必须放行其 install 脚本（node-gyp-build）在本机用源码重建。
+  - argon2
