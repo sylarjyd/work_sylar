@@ -14,7 +14,16 @@ import { signToken } from '../auth/jwt';
 let upstream: Server;
 let app: NestFastifyApplication;
 let baseUrl: string;
-const stored: { steps: unknown[]; messages: unknown[] } = { steps: [], messages: [] };
+let runtimeUrl: string;
+// 上游行为开关：正常流 / 中途发 error 事件。
+let upstreamMode: 'ok' | 'error' = 'ok';
+
+const stored: {
+  steps: unknown[];
+  messages: unknown[];
+  runUpdates: unknown[];
+  taskUpdates: unknown[];
+} = { steps: [], messages: [], runUpdates: [], taskUpdates: [] };
 
 const session = { id: 's1', tenantId: 't1', userId: 'u1', title: 'x', createdAt: new Date() };
 
@@ -33,8 +42,20 @@ const fakePrisma = {
       return data;
     },
   },
-  task: { create: async ({ data }: { data: unknown }) => ({ id: 'task1', ...(data as object) }), update: async () => ({}) },
-  run: { create: async ({ data }: { data: unknown }) => ({ id: 'run1', ...(data as object) }), update: async () => ({}) },
+  task: {
+    create: async ({ data }: { data: unknown }) => ({ id: 'task1', ...(data as object) }),
+    update: async (args: unknown) => {
+      stored.taskUpdates.push(args);
+      return {};
+    },
+  },
+  run: {
+    create: async ({ data }: { data: unknown }) => ({ id: 'run1', ...(data as object) }),
+    update: async (args: unknown) => {
+      stored.runUpdates.push(args);
+      return {};
+    },
+  },
   step: {
     create: async ({ data }: { data: unknown }) => {
       stored.steps.push(data);
@@ -49,6 +70,12 @@ beforeAll(async () => {
   upstream = createServer((req, res) => {
     res.writeHead(200, { 'content-type': 'text/event-stream' });
     res.write(encodeSse({ event: 'step', data: { runId: 'run1', seq: 0, type: 'think', payload: { text: '想' }, ts: 1 } }));
+    if (upstreamMode === 'error') {
+      // 上游中途报错：控制器应把本次 run 记为 failed。
+      res.write(encodeSse({ event: 'error', data: { message: 'boom' } }));
+      res.end();
+      return;
+    }
     res.write(encodeSse({ event: 'step', data: { runId: 'run1', seq: 1, type: 'tool_call', payload: { tool: 'web.search' }, ts: 2 } }));
     res.write(encodeSse({ event: 'usage', data: { input: 1, output: 1 } }));
     res.write(encodeSse({ event: 'done', data: { runId: 'run1' } }));
@@ -57,7 +84,8 @@ beforeAll(async () => {
   await new Promise<void>((r) => upstream.listen(0, r));
   const addr = upstream.address();
   if (!addr || typeof addr === 'string') throw new Error('no port');
-  process.env.AGENT_RUNTIME_URL = `http://127.0.0.1:${addr.port}`;
+  runtimeUrl = `http://127.0.0.1:${addr.port}`;
+  process.env.AGENT_RUNTIME_URL = runtimeUrl;
 
   const moduleRef = await Test.createTestingModule({
     controllers: [SessionsController, TasksController],
@@ -79,6 +107,11 @@ beforeEach(() => {
   // 断言 toHaveLength(2) 会随执行顺序变成假阳性。
   stored.steps.length = 0;
   stored.messages.length = 0;
+  stored.runUpdates.length = 0;
+  stored.taskUpdates.length = 0;
+  // 恢复上游行为与地址，避免用例间互相污染。
+  upstreamMode = 'ok';
+  process.env.AGENT_RUNTIME_URL = runtimeUrl;
 });
 
 afterAll(async () => {
@@ -109,6 +142,70 @@ describe('TasksController', () => {
     expect(text).toContain('event: done');
     // usage 透传但不落库
     expect(stored.steps).toHaveLength(2);
+  });
+
+  it('流结束后把 assistant 消息（拼接的 think 文本）落库', async () => {
+    const token = signToken({ sub: 'u1', tenantId: 't1' });
+    const res = await fetch(`${baseUrl}/api/sessions/s1/tasks`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+      body: JSON.stringify({ goal: '查竞品' }),
+    });
+    await res.text();
+    const assistant = stored.messages.find((m) => (m as { role?: string }).role === 'assistant');
+    expect(assistant).toMatchObject({ role: 'assistant', content: '想' });
+  });
+
+  it('上游发 error 事件时 run/task 落 failed', async () => {
+    upstreamMode = 'error';
+    const token = signToken({ sub: 'u1', tenantId: 't1' });
+    const res = await fetch(`${baseUrl}/api/sessions/s1/tasks`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+      body: JSON.stringify({ goal: 'g' }),
+    });
+    await res.text();
+    expect(stored.runUpdates.at(-1)).toMatchObject({ data: { status: 'failed' } });
+    expect(stored.taskUpdates.at(-1)).toMatchObject({ data: { status: 'failed' } });
+  });
+
+  it('上游不可达时返回 502 且 run/task 落 failed', async () => {
+    // 取一个刚关闭的空闲端口，连接必被拒绝 → fetch 抛错 → 传输层失败分支。
+    const deadPort = await new Promise<number>((resolve) => {
+      const probe = createServer();
+      probe.listen(0, '127.0.0.1', () => {
+        const addr = probe.address();
+        const port = typeof addr === 'object' && addr ? addr.port : 0;
+        probe.close(() => resolve(port));
+      });
+    });
+    process.env.AGENT_RUNTIME_URL = `http://127.0.0.1:${deadPort}`;
+
+    const token = signToken({ sub: 'u1', tenantId: 't1' });
+    const res = await fetch(`${baseUrl}/api/sessions/s1/tasks`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+      body: JSON.stringify({ goal: 'g' }),
+    });
+    expect(res.status).toBe(502);
+    expect(await res.json()).toEqual({ error: 'upstream_unreachable' });
+    expect(stored.runUpdates.at(-1)).toMatchObject({ data: { status: 'failed' } });
+    expect(stored.taskUpdates.at(-1)).toMatchObject({ data: { status: 'failed' } });
+  });
+
+  it('goal 非字符串或为空时返回 400，且不建 task/run', async () => {
+    const token = signToken({ sub: 'u1', tenantId: 't1' });
+    for (const payload of [{ goal: 123 }, { goal: '' }, {}]) {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/sessions/s1/tasks',
+        headers: { authorization: `Bearer ${token}` },
+        payload,
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toEqual({ error: 'invalid_goal' });
+    }
+    expect(stored.messages).toHaveLength(0);
   });
 
   it('非本用户会话返回 404（hijack 必须晚于归属校验，否则请求挂起）', async () => {
