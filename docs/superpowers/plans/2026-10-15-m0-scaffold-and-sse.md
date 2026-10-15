@@ -61,6 +61,7 @@ packages:
 ```json
 {
   "$schema": "https://turbo.build/schema.json",
+  "globalPassThroughEnv": ["PORT", "AGENT_RUNTIME_URL", "NEXT_PUBLIC_BFF_URL"],
   "tasks": {
     "build": { "dependsOn": ["^build"], "outputs": ["dist/**", ".next/**"] },
     "test": { "dependsOn": ["^build"] },
@@ -68,6 +69,8 @@ packages:
   }
 }
 ```
+
+> Turbo 2 默认 `envMode: "strict"`：未在 `globalPassThroughEnv` 中声明的环境变量会被**静默过滤**，任务进程收不到。故显式声明后续任务会用到（且靠环境变量而非硬编码默认值传入）的三个变量。
 
 - [ ] **Step 4: 创建 `tsconfig.base.json`**
 
