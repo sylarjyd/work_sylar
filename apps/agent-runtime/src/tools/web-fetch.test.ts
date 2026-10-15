@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { htmlToText, createWebFetchTool } from './web-fetch';
 
 describe('htmlToText', () => {
@@ -10,6 +10,10 @@ describe('htmlToText', () => {
     expect(text).not.toContain('<h1>');
     expect(text).not.toContain('x=1');
   });
+
+  it('先解 &lt;/&gt; 再解 &amp;，&amp;lt; 不被误当成 <', () => {
+    expect(htmlToText('<p>&amp;lt;</p>')).toBe('&lt;');
+  });
 });
 
 describe('createWebFetchTool', () => {
@@ -17,5 +21,32 @@ describe('createWebFetchTool', () => {
     const tool = createWebFetchTool();
     expect(tool.name).toBe('web.fetch');
     expect(JSON.stringify(tool.parameters)).toContain('url');
+  });
+
+  it('非法 URL 直接拒绝，不发起请求', async () => {
+    const fetcher = vi.fn(async () => new Response('x')) as unknown as typeof fetch;
+    const tool = createWebFetchTool(fetcher);
+    await expect(tool.execute({ url: 'ftp://x' })).rejects.toThrow('invalid_url');
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it('非 2xx 响应抛出契约错误', async () => {
+    const fetcher = (async () => new Response('nope', { status: 500 })) as unknown as typeof fetch;
+    const tool = createWebFetchTool(fetcher);
+    await expect(tool.execute({ url: 'https://e.com' })).rejects.toThrow('fetch_http_500');
+  });
+
+  it('成功抓取超长内容时截断到上限，并回显 url', async () => {
+    const fetcher = (async () =>
+      new Response(`<html><body>${'a'.repeat(9000)}</body></html>`)) as unknown as typeof fetch;
+    const tool = createWebFetchTool(fetcher);
+    const out = (await tool.execute({ url: 'https://e.com/p' })) as {
+      url: string;
+      text: string;
+      truncated: boolean;
+    };
+    expect(out.url).toBe('https://e.com/p');
+    expect(out.text.length).toBe(8000);
+    expect(out.truncated).toBe(true);
   });
 });

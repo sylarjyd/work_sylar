@@ -1,5 +1,7 @@
 import type { Tool } from './types';
 
+const FETCH_TIMEOUT_MS = 15_000;
+
 export interface SearchResult {
   title: string;
   url: string;
@@ -40,9 +42,15 @@ function tavilyProvider(apiKey: string): SearchProvider {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ api_key: apiKey, query, max_results: 5 }),
+        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
       });
       if (!res.ok) throw new Error(`tavily_http_${res.status}`);
-      const data = (await res.json()) as { results?: SearchResult[] };
+      let data: { results?: SearchResult[] };
+      try {
+        data = (await res.json()) as { results?: SearchResult[] };
+      } catch {
+        throw new Error('tavily_bad_json');
+      }
       return (data.results ?? []).map((r) => ({
         title: r.title,
         url: r.url,
@@ -58,13 +66,19 @@ function duckDuckGoProvider(): SearchProvider {
       // 免 key 的 instant answer 接口：够 M1 演示用，质量不如 Tavily。
       const res = await fetch(
         `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1`,
+        { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) },
       );
       if (!res.ok) throw new Error(`ddg_http_${res.status}`);
-      const data = (await res.json()) as {
+      let data: {
         AbstractText?: string;
         AbstractURL?: string;
         RelatedTopics?: { Text?: string; FirstURL?: string }[];
       };
+      try {
+        data = (await res.json()) as typeof data;
+      } catch {
+        throw new Error('ddg_bad_json');
+      }
       const results: SearchResult[] = [];
       if (data.AbstractText && data.AbstractURL) {
         results.push({ title: query, url: data.AbstractURL, snippet: data.AbstractText });

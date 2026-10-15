@@ -22,8 +22,13 @@ describe('createWebSearchTool', () => {
 });
 
 describe('createSearchProvider', () => {
-  it('有 TAVILY_API_KEY 与否都返回带 search 的 provider（不触发网络）', () => {
-    expect(typeof createSearchProvider({ TAVILY_API_KEY: 'k' }).search).toBe('function');
-    expect(typeof createSearchProvider({}).search).toBe('function');
+  it('有无 TAVILY_API_KEY 都返回可挂载为工具的 provider（不触发网络）', () => {
+    for (const env of [{ TAVILY_API_KEY: 'k' }, {}] as NodeJS.ProcessEnv[]) {
+      const provider = createSearchProvider(env);
+      expect(typeof provider.search).toBe('function');
+      const tool = createWebSearchTool(provider);
+      expect(tool.name).toBe('web.search');
+      expect(typeof tool.execute).toBe('function');
+    }
   });
 });
