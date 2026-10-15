@@ -311,7 +311,7 @@ git commit -m "feat(shared): 协议类型与 SSE 编解码"
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "build": "tsc -p tsconfig.json",
+    "build": "tsup src/server.ts --format esm --clean",
     "start": "node dist/server.js",
     "test": "vitest run"
   },
@@ -320,22 +320,27 @@ git commit -m "feat(shared): 协议类型与 SSE 编解码"
   },
   "devDependencies": {
     "tsx": "^4.19.2",
+    "tsup": "^8.3.5",
     "typescript": "^5.6.3",
     "vitest": "^2.1.8"
   }
 }
 ```
 
+> 用 **tsup**（而非裸 `tsc`）构建：`tsconfig.base.json` 是 `module: ESNext` + `moduleResolution: Bundler`，若用 `tsc` 直接产出 ESM，相对导入不带 `.js` 扩展名，`node dist/server.js` 会 `ERR_MODULE_NOT_FOUND`。tsup 会打包解析这些导入，规避该问题（`shared` 包同理）。
+
 - [ ] **Step 2: 创建 `apps/agent-runtime/tsconfig.json`**
 
 ```json
 {
   "extends": "../../tsconfig.base.json",
-  "compilerOptions": { "outDir": "dist", "rootDir": "src" },
+  "compilerOptions": { "noEmit": true },
   "include": ["src"],
   "exclude": ["src/**/*.test.ts"]
 }
 ```
+
+> 构建交给 tsup（见 Step 1），此 tsconfig 仅用于编辑器/类型检查，故 `noEmit`。
 
 - [ ] **Step 3: 写失败测试 `apps/agent-runtime/src/fake-agent.test.ts`**
 
