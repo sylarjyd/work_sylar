@@ -144,7 +144,11 @@ git commit -m "chore: 初始化 monorepo 工作区脚手架"
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
-    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" }
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
   },
   "scripts": {
     "build": "tsup src/index.ts --format esm --dts --clean",
@@ -172,7 +176,7 @@ git commit -m "chore: 初始化 monorepo 工作区脚手架"
 
 ```ts
 import { describe, it, expect } from 'vitest';
-import { encodeSse, decodeSseFrames } from './protocol';
+import { encodeSse, decodeSseFrames, parseSseFrame } from './protocol';
 
 describe('encodeSse', () => {
   it('编码为合法的 SSE 帧', () => {
@@ -182,7 +186,35 @@ describe('encodeSse', () => {
   });
 });
 
+describe('parseSseFrame', () => {
+  it('空帧返回 null', () => {
+    expect(parseSseFrame('')).toBeNull();
+    expect(parseSseFrame('   ')).toBeNull();
+  });
+
+  it('缺少 event 行返回 null', () => {
+    expect(parseSseFrame('data: 1')).toBeNull();
+  });
+
+  it('缺少 data 行返回 null', () => {
+    expect(parseSseFrame('event: step')).toBeNull();
+  });
+
+  it('事件名非法返回 null', () => {
+    expect(parseSseFrame('event: bogus\ndata: 1')).toBeNull();
+  });
+
+  it('data 为非法 JSON 返回 null 而不抛异常', () => {
+    expect(parseSseFrame('event: error\ndata: not-json')).toBeNull();
+    expect(parseSseFrame('event: error\ndata:')).toBeNull();
+  });
+});
+
 describe('decodeSseFrames', () => {
+  it('空字符串返回空数组', () => {
+    expect(decodeSseFrames('')).toEqual([]);
+  });
+
   it('解析一个完整帧', () => {
     const out = decodeSseFrames(encodeSse({ event: 'done', data: { runId: 'r1' } }));
     expect(out).toEqual([{ event: 'done', data: { runId: 'r1' } }]);
@@ -242,7 +274,7 @@ export function encodeSse<T>(msg: SseMessage<T>): string {
   return `event: ${msg.event}\ndata: ${JSON.stringify(msg.data)}\n\n`;
 }
 
-/** 解析单个完整帧；空帧或不合法帧返回 null。 */
+/** 解析单个完整帧；空帧、缺字段、事件名非法或 data 非法 JSON 时一律返回 null（不抛异常）。 */
 export function parseSseFrame(frame: string): SseMessage | null {
   if (frame.trim() === '') return null;
   let event: string | undefined;
@@ -251,8 +283,13 @@ export function parseSseFrame(frame: string): SseMessage | null {
     if (line.startsWith('event:')) event = line.slice('event:'.length).trim();
     else if (line.startsWith('data:')) dataLine = line.slice('data:'.length).trim();
   }
-  if (!event || dataLine === undefined) return null;
-  return { event: event as SseEventName, data: JSON.parse(dataLine) };
+  if (!event || !dataLine) return null;
+  if (!(SSE_EVENT_NAMES as readonly string[]).includes(event)) return null;
+  try {
+    return { event: event as SseEventName, data: JSON.parse(dataLine) };
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -279,7 +316,7 @@ export * from './protocol';
 - [ ] **Step 7: 运行测试，确认通过**
 
 Run: `pnpm --filter @ai-office/shared test`
-Expected: PASS（3 个用例）。
+Expected: PASS（10 个用例：encodeSse 1 + parseSseFrame 5 + decodeSseFrames 4）。
 
 - [ ] **Step 8: 构建并验证产物**
 
