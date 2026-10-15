@@ -36,12 +36,15 @@ packages:
 {
   "name": "ai-office",
   "private": true,
-  "packageManager": "pnpm@9.12.0",
+  "packageManager": "pnpm@10.19.0",
   "engines": { "node": ">=22" },
   "scripts": {
     "dev": "turbo run dev --parallel",
     "build": "turbo run build",
     "test": "turbo run test"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild", "@swc/core", "sharp", "unrs-resolver"]
   },
   "devDependencies": {
     "turbo": "^2.3.3",
@@ -50,6 +53,8 @@ packages:
   }
 }
 ```
+
+> `packageManager` 与 `pnpm.onlyBuiltDependencies` 需匹配本机 **pnpm 10.x**：pnpm 10 默认不运行依赖的构建脚本，若不显式放行 `esbuild`/`@swc/core` 等，`vitest` 与 `next` 会安装后无法运行。
 
 - [ ] **Step 3: 创建 `turbo.json`**
 
