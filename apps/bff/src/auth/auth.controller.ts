@@ -1,4 +1,4 @@
-import { Body, Controller, Post } from '@nestjs/common';
+import { Body, Controller, HttpCode, Post } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import type { AuthResponse, LoginRequest, RegisterRequest } from '@ai-office/shared';
 
@@ -12,6 +12,7 @@ export class AuthController {
   }
 
   @Post('login')
+  @HttpCode(200)
   login(@Body() body: LoginRequest): Promise<AuthResponse> {
     return this.auth.login(body);
   }

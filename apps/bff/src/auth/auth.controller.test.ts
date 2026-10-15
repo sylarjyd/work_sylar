@@ -91,8 +91,7 @@ describe('AuthController', () => {
       url: '/api/auth/login',
       payload: { email: 'a@b.com', password: 'pw123456' },
     });
-    // Nest 的 @Post 默认返回 201（controller 未显式 @HttpCode(200)），这里断言实际行为。
-    expect(res.statusCode).toBe(201);
+    expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.payload);
     expect(body.token).toBeTruthy();
     expect(body.user.email).toBe('a@b.com');
