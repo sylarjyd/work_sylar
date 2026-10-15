@@ -1,7 +1,9 @@
 import 'reflect-metadata';
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { Test } from '@nestjs/testing';
+import { BaseExceptionFilter } from '@nestjs/core';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
+import type { ArgumentsHost } from '@nestjs/common';
 import { createServer, type Server } from 'node:http';
 import { encodeSse } from '@ai-office/shared';
 import { TasksController } from './tasks.controller';
@@ -17,6 +19,10 @@ let baseUrl: string;
 let runtimeUrl: string;
 // 上游行为开关：正常流 / 中途发 error 事件。
 let upstreamMode: 'ok' | 'error' = 'ok';
+// 落库故障注入开关：用于验证控制器在写库失败时的落 failed / 不挂起行为。
+// 这两个开关必须能被各用例独立置位，否则「修复被回退」时用例依旧会通过。
+let failStepCreate = false;
+let failRunUpdate = false;
 
 const stored: {
   steps: unknown[];
@@ -26,6 +32,19 @@ const stored: {
 } = { steps: [], messages: [], runUpdates: [], taskUpdates: [] };
 
 const session = { id: 's1', tenantId: 't1', userId: 'u1', title: 'x', createdAt: new Date() };
+
+// 逃逸到 Nest 异常处理器的异常会被登记在这里。
+// 存在的意义：Nest 的 BaseExceptionFilter 在 reply 已 hijack 时会兜底
+// 调用 reply.raw.end()，因此「客户端是否挂起」无法区分 safeFinish 守卫是否在位；
+// 真正能判别的信号是「落库异常有没有冒泡出控制器」。守卫在位 → 不冒泡；守卫被删
+// → 异常冒泡到此数组，对应用例随即失败。
+const escapedErrors: unknown[] = [];
+class RecordingExceptionFilter extends BaseExceptionFilter {
+  catch(exception: unknown, host: ArgumentsHost): void {
+    escapedErrors.push(exception);
+    super.catch(exception, host);
+  }
+}
 
 const fakePrisma = {
   session: {
@@ -52,12 +71,14 @@ const fakePrisma = {
   run: {
     create: async ({ data }: { data: unknown }) => ({ id: 'run1', ...(data as object) }),
     update: async (args: unknown) => {
+      if (failRunUpdate) throw new Error('injected run.update failure');
       stored.runUpdates.push(args);
       return {};
     },
   },
   step: {
     create: async ({ data }: { data: unknown }) => {
+      if (failStepCreate) throw new Error('injected step.create failure');
       stored.steps.push(data);
       return data;
     },
@@ -96,6 +117,8 @@ beforeAll(async () => {
     ],
   }).compile();
   app = moduleRef.createNestApplication<NestFastifyApplication>(new FastifyAdapter());
+  // 记录逃逸异常（行为与内置 BaseExceptionFilter 一致，仅多一次登记）。
+  app.useGlobalFilters(new RecordingExceptionFilter(app.getHttpAdapter()));
   await app.init();
   await app.getHttpAdapter().getInstance().ready();
   await app.listen(0, '127.0.0.1');
@@ -109,8 +132,11 @@ beforeEach(() => {
   stored.messages.length = 0;
   stored.runUpdates.length = 0;
   stored.taskUpdates.length = 0;
-  // 恢复上游行为与地址，避免用例间互相污染。
+  // 恢复上游行为、注入开关与地址，避免用例间互相污染。
   upstreamMode = 'ok';
+  failStepCreate = false;
+  failRunUpdate = false;
+  escapedErrors.length = 0;
   process.env.AGENT_RUNTIME_URL = runtimeUrl;
 });
 
@@ -219,5 +245,49 @@ describe('TasksController', () => {
       body: JSON.stringify({ goal: 'g' }),
     });
     expect(res.status).toBe(404);
+  });
+
+  it('落库 step 抛错时把 run 记为 failed（非真空：删掉循环 catch 会记成 done）', async () => {
+    // 让循环里的 recordStep 落库失败：读/解析/落库任一环抛错都必须把本次 run
+    // 记为 failed。若控制器循环外没有 try/catch，控制流会带着初始的 'done'
+    // 进 finally，run.update 便落成 'done'——本用例随即失败。
+    failStepCreate = true;
+    const token = signToken({ sub: 'u1', tenantId: 't1' });
+    const res = await fetch(`${baseUrl}/api/sessions/s1/tasks`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+      body: JSON.stringify({ goal: 'g' }),
+    });
+    await res.text();
+    expect(stored.runUpdates.at(-1)).toMatchObject({ data: { status: 'failed' } });
+  });
+
+  it('finish 落库失败也不挂起客户端（非真空：去掉 safeFinish 守卫会抛回 Nest）', async () => {
+    // 让收尾的 run.update 抛错：safeFinish 必须吞掉异常，保证 reply.raw.end()
+    // 无条件执行、响应照常终止。
+    // 判别点不在「客户端是否挂起」：Nest 的 BaseExceptionFilter 在 reply 已 hijack
+    // 时会兜底 end 掉响应，所以即便守卫被删，fetch 也照样会返回。真正的判别信号是
+    // 落库异常有没有冒泡出控制器——守卫被回退成直接 await tasks.finish() 时，异常
+    // 会逃逸到 Nest 异常处理器，被 RecordingExceptionFilter 记下，末尾断言随即失败。
+    // AbortController 作兜底超时，防止任何意外挂起阻塞整个套件。
+    failRunUpdate = true;
+    const token = signToken({ sub: 'u1', tenantId: 't1' });
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 3000);
+    try {
+      const res = await fetch(`${baseUrl}/api/sessions/s1/tasks`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+        body: JSON.stringify({ goal: 'g' }),
+        signal: controller.signal,
+      });
+      const text = await res.text();
+      // 响应体照常送达（含 step/done）说明请求已正常终止，没有挂起。
+      expect(text).toContain('event: step');
+      expect(text).toContain('event: done');
+    } finally {
+      clearTimeout(timer);
+    }
+    expect(escapedErrors).toHaveLength(0);
   });
 });

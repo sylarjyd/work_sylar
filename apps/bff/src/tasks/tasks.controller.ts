@@ -44,13 +44,16 @@ export class TasksController {
     reply.hijack();
 
     // 客户端中断/套接字异常：停止拉流，且 socket error 无监听会崩进程，必须挂空处理器。
+    // reader 提前声明：close 一触发就主动 cancel 上游读取。否则若客户端在
+    // await reader.read() 期间断开，只能等上游把剩余数据发完才会 cancel，白白占住连接。
     let clientGone = false;
-    reply.raw.on('error', () => {
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    const onClientGone = (): void => {
       clientGone = true;
-    });
-    reply.raw.on('close', () => {
-      clientGone = true;
-    });
+      reader?.cancel().catch(() => undefined);
+    };
+    reply.raw.on('error', onClientGone);
+    reply.raw.on('close', onClientGone);
 
     let upstream: Response;
     try {
@@ -84,7 +87,7 @@ export class TasksController {
 
     const parse = createSseParser();
     const decoder = new TextDecoder();
-    const reader = upstream.body.getReader();
+    reader = upstream.body.getReader();
     const thinkTexts: string[] = [];
     let status: 'done' | 'failed' = 'done';
 
