@@ -11,11 +11,6 @@ export interface AgentEvent {
   ts: number;
 }
 
-export interface PromptRequest {
-  goal: string;
-  sessionId?: string;
-}
-
 export interface SseMessage<T = unknown> {
   event: SseEventName;
   data: T;
@@ -54,4 +49,25 @@ export function decodeSseFrames(text: string): SseMessage[] {
   return segments
     .map(parseSseFrame)
     .filter((m): m is SseMessage => m !== null);
+}
+
+/**
+ * 有状态的 SSE 解析器：维护缓冲区，跨网络分片逐个产出完整事件。
+ * 原为 web 独有；BFF 需要在转发时同步解析以落库，故上移共用。
+ */
+export function createSseParser(): (chunk: string) => SseMessage[] {
+  let buffer = '';
+  return function parse(chunk: string): SseMessage[] {
+    buffer += chunk;
+    const events: SseMessage[] = [];
+    for (;;) {
+      const sep = buffer.indexOf('\n\n');
+      if (sep === -1) break;
+      const frame = buffer.slice(0, sep);
+      buffer = buffer.slice(sep + 2);
+      const msg = parseSseFrame(frame);
+      if (msg) events.push(msg);
+    }
+    return events;
+  };
 }
