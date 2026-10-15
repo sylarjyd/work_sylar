@@ -4,11 +4,13 @@ import { Test } from '@nestjs/testing';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
 import { createServer, type Server } from 'node:http';
 import { AppModule } from '../app.module';
+import { CORS_OPTIONS } from '../cors';
 import { encodeSse, decodeSseFrames } from '@ai-office/shared';
 
 let upstream: Server;
 let upstreamUrl: string;
 let app: NestFastifyApplication;
+let baseUrl: string;
 
 beforeAll(async () => {
   // 假的 agent-runtime：立刻返回两个 step + done
@@ -27,8 +29,15 @@ beforeAll(async () => {
 
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
   app = moduleRef.createNestApplication<NestFastifyApplication>(new FastifyAdapter());
+  // 与 main.ts 保持一致：漏掉 enableCors 会让下面的 CORS 用例失去意义。
+  app.enableCors(CORS_OPTIONS);
   await app.init();
   await app.getHttpAdapter().getInstance().ready();
+
+  // 真实监听一个端口：app.inject() 直接调路由处理器、不经过 HTTP/中间件栈，
+  // 因此"响应头缺失"这类问题只有走真实 socket 才能暴露。
+  await app.listen(0, '127.0.0.1');
+  baseUrl = await app.getUrl();
 });
 
 afterAll(async () => {
@@ -93,5 +102,19 @@ describe('StreamController', () => {
       process.env.AGENT_RUNTIME_URL = upstreamUrl;
       await new Promise<void>((r) => failing.close(() => r()));
     }
+  });
+
+  it('真实 HTTP 下响应带 CORS 头，事件流可被浏览器端读取', async () => {
+    const res = await fetch(`${baseUrl}/api/stream`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: 'http://localhost:3000' },
+      body: JSON.stringify({ goal: '写周报' }),
+    });
+    // 控制器为了自己写裸 socket 而 hijack 了回复，若不同步 Fastify 已累积的
+    // 响应头，CORS 头就会只存在于中间件内部、永远到不了浏览器。
+    expect(res.headers.get('access-control-allow-origin')).toBe('http://localhost:3000');
+    expect(res.headers.get('content-type')).toContain('text/event-stream');
+    const messages = decodeSseFrames(await res.text());
+    expect(messages.map((m) => m.event)).toEqual(['step', 'step', 'done']);
   });
 });

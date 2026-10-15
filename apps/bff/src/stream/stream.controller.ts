@@ -1,9 +1,27 @@
 import { Body, Controller, Post, Res } from '@nestjs/common';
 import type { FastifyReply } from 'fastify';
+import type { OutgoingHttpHeaders } from 'node:http';
 import type { PromptRequest } from '@ai-office/shared';
 
 @Controller('api/stream')
 export class StreamController {
+  /**
+   * hijack 之后 Fastify 不再参与发送，中间件写进 reply 的响应头（CORS 等）也不会
+   * 自动落到 socket 上。这里把已累积的回复头取出、与本次响应的头合并后显式写入。
+   */
+  private writeHead(
+    reply: FastifyReply,
+    status: number,
+    headers: OutgoingHttpHeaders,
+  ): void {
+    const accumulated: OutgoingHttpHeaders = {};
+    for (const [key, value] of Object.entries(reply.getHeaders())) {
+      // getHeaders() 的值可能为 undefined，直接传给 writeHead 类型不通过。
+      if (value !== undefined) accumulated[key] = value;
+    }
+    reply.raw.writeHead(status, { ...accumulated, ...headers });
+  }
+
   @Post()
   async stream(@Body() body: PromptRequest, @Res() reply: FastifyReply): Promise<void> {
     // 接管回复：本方法直接写 reply.raw，必须 hijack，否则 Nest/Fastify 会再自动发一次响应。
@@ -22,7 +40,7 @@ export class StreamController {
       });
     } catch {
       // 传输层失败（连接被拒、DNS 失败等）：向上游不可达，回 502 而不是未捕获的 500。
-      reply.raw.writeHead(502, { 'content-type': 'application/json' });
+      this.writeHead(reply, 502, { 'content-type': 'application/json' });
       reply.raw.end(JSON.stringify({ error: 'upstream_unreachable' }));
       return;
     }
@@ -30,13 +48,13 @@ export class StreamController {
     if (!upstream.ok) {
       // 上游非 2xx：原样转发真实状态码与响应体，不能伪装成 200 text/event-stream。
       const contentType = upstream.headers.get('content-type') ?? 'application/json';
-      reply.raw.writeHead(upstream.status, { 'content-type': contentType });
+      this.writeHead(reply, upstream.status, { 'content-type': contentType });
       const body = await upstream.text();
       reply.raw.end(body);
       return;
     }
 
-    reply.raw.writeHead(200, {
+    this.writeHead(reply, 200, {
       'content-type': 'text/event-stream',
       'cache-control': 'no-cache',
       connection: 'keep-alive',
