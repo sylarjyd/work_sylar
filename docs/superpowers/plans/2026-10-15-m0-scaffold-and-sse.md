@@ -353,12 +353,14 @@ git commit -m "feat(shared): 协议类型与 SSE 编解码"
     "dev": "tsx watch src/server.ts",
     "build": "tsup src/server.ts --format esm --clean",
     "start": "node dist/server.js",
-    "test": "vitest run"
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
     "@ai-office/shared": "workspace:*"
   },
   "devDependencies": {
+    "@types/node": "^22.9.0",
     "tsx": "^4.19.2",
     "tsup": "^8.3.5",
     "typescript": "^5.6.3",
@@ -368,6 +370,8 @@ git commit -m "feat(shared): 协议类型与 SSE 编解码"
 ```
 
 > 用 **tsup**（而非裸 `tsc`）构建：`tsconfig.base.json` 是 `module: ESNext` + `moduleResolution: Bundler`，若用 `tsc` 直接产出 ESM，相对导入不带 `.js` 扩展名，`node dist/server.js` 会 `ERR_MODULE_NOT_FOUND`。tsup 会打包解析这些导入，规避该问题（`shared` 包同理）。
+>
+> 必须装 `@types/node`：`tsconfig.json` 是"仅用于类型检查"的（`noEmit`），但 tsup/vitest 都只剥离类型不检查，缺了 `@types/node` 会让 `strict` 形同虚设（`node:http`/`process` 全部报错、`req`/`res` 退化为隐式 `any`）。加 `typecheck` 脚本暴露这一检查。
 
 - [ ] **Step 2: 创建 `apps/agent-runtime/tsconfig.json`**
 
@@ -498,6 +502,22 @@ describe('agent-runtime server', () => {
       'done',
     ]);
   });
+
+  it('POST /prompt 收到非法 JSON 时返回 400', async () => {
+    const res = await fetch(`${baseUrl}/prompt`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: 'not json',
+    });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'invalid json' });
+  });
+
+  it('未知路由返回 404', async () => {
+    const res = await fetch(`${baseUrl}/unknown`);
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ error: 'not found' });
+  });
 });
 ```
 
@@ -511,6 +531,8 @@ Expected: FAIL —— `createRuntimeServer is not a function`。
 ```ts
 import { createServer, type Server } from 'node:http';
 import { randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
+import { resolve } from 'node:path';
 import { encodeSse } from '@ai-office/shared';
 import { runFakeAgent } from './fake-agent';
 
@@ -563,8 +585,8 @@ export function createRuntimeServer(): Server {
   });
 }
 
-const isEntry = process.argv[1]?.endsWith('server.ts') ||
-  process.argv[1]?.endsWith('server.js');
+const isEntry = !!process.argv[1] &&
+  resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 
 if (isEntry) {
   const port = Number(process.env.PORT ?? 4001);
@@ -574,10 +596,13 @@ if (isEntry) {
 }
 ```
 
-- [ ] **Step 10: 运行测试，确认通过**
+- [ ] **Step 10: 运行测试与类型检查，确认通过**
 
 Run: `pnpm --filter @ai-office/agent-runtime test`
-Expected: PASS（3 个用例）。
+Expected: PASS（5 个用例 —— fake-agent 1 + server 4）。
+
+Run: `pnpm --filter @ai-office/agent-runtime typecheck`
+Expected: 退出码 0，无类型错误。
 
 - [ ] **Step 11: Commit**
 
