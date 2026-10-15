@@ -96,10 +96,66 @@ describe('OpenAICompatGateway', () => {
       {
         id: 'c1',
         type: 'function',
-        function: { name: 'web.search', arguments: '{"query":"竞品"}' },
+        function: { name: 'web_search', arguments: '{"query":"竞品"}' },
       },
     ]);
     expect(body.messages[1].tool_call_id).toBe('c1');
+  });
+
+  it('发给 provider 的 tools[].function.name 转成下划线（wire 安全），不出现点号', async () => {
+    const gw = new OpenAICompatGateway({ baseUrl, apiKey: 'k', model: 'deepseek-chat' });
+    await gw.chat({
+      messages: [{ role: 'user', content: 'hi' }],
+      tools: [
+        { name: 'web.search', description: 's', parameters: { type: 'object' } },
+        { name: 'web.fetch', description: 'f', parameters: { type: 'object' } },
+      ],
+    });
+
+    const body = lastBody() as { tools: { function: { name: string } }[] };
+    expect(body.tools.map((t) => t.function.name)).toEqual(['web_search', 'web_fetch']);
+  });
+
+  it('provider 回传的 wire 名 web_search 被映射回逻辑名 web.search', async () => {
+    const stub = await startStubServer(() => ({
+      status: 200,
+      json: {
+        choices: [
+          {
+            message: {
+              content: '',
+              tool_calls: [
+                { id: 'c9', function: { name: 'web_search', arguments: '{"query":"x"}' } },
+              ],
+            },
+          },
+        ],
+      },
+    }));
+    try {
+      const gw = new OpenAICompatGateway({
+        baseUrl: stub.baseUrl,
+        apiKey: 'k',
+        model: 'deepseek-chat',
+      });
+      const res = await gw.chat({
+        messages: [{ role: 'user', content: 'hi' }],
+        tools: [{ name: 'web.search', description: 's', parameters: { type: 'object' } }],
+      });
+      expect(res.toolCalls[0].name).toBe('web.search');
+    } finally {
+      await new Promise<void>((r) => stub.server.close(() => r()));
+    }
+  });
+
+  it('provider 回传未知（幻觉）名字时按原样透传，不误映射', async () => {
+    const gw = new OpenAICompatGateway({ baseUrl, apiKey: 'k', model: 'deepseek-chat' });
+    // 桩固定返回 web.search；此处仅声明 web.fetch，故不在反向表内，应原样透传。
+    const res = await gw.chat({
+      messages: [{ role: 'user', content: 'hi' }],
+      tools: [{ name: 'web.fetch', description: 'f', parameters: { type: 'object' } }],
+    });
+    expect(res.toolCalls[0].name).toBe('web.search');
   });
 
   it('非 2xx 响应以 model_http_<status> 抛错', async () => {
