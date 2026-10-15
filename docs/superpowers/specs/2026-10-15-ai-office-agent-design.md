@@ -44,7 +44,7 @@ WorkBuddy 实际技术栈（含第三方逆向分析，可信度中等）：Elec
 | 层 | WorkBuddy | 本项目 v1 选型 |
 |---|---|---|
 | UI | Electron + React/Monaco | **Next.js (React, App Router)** 网页端 |
-| 应用服务 | App-Server (daemon) | **NestJS** BFF：账号/计费/会话/文件 |
+| 应用服务 | App-Server (daemon) | **NestJS(Fastify adapter)** BFF：账号/计费/会话/文件 |
 | Agent 运行时 | CLI sidecar (OpenAI Agents SDK + MCP) | **独立 Node/TS 服务**：Agent Loop / 工具 / 沙箱 / MCP Host |
 | 通信 | ACP JSON-RPC + REST + SSE | **JSON-RPC + REST + SSE 流式** |
 | 沙箱 | Rust TSbx | **isolated-vm**（v1），可升级为容器 |
@@ -177,6 +177,11 @@ prompt → 规划(plan) → 模型调用(流式) → 工具调用 → 执行工�
 - **测试策略**：Agent Loop 单元测试（工具打桩）· BFF↔运行时 **JSON-RPC 契约测试** · 端到端用例（下达目标→产出文件）· 沙箱逃逸安全测试。
 - **私有化/信创预留**：模型网关可换国产模型、无强托管依赖、可容器化私有部署（v1 不做，架构不挡）。
 - **认证默认**：邮箱/手机号 + OTP，JWT；预留 OAuth（微信/企微）。
+- **并发与扩展策略**：本系统负载为 **I/O 密集型**（等模型 API / 数据库 / 对象存储），Node 事件循环模型天然适配，单实例可承载数千并发连接与 SSE 流。真瓶颈不在框架，而在模型 API 限流、DB 连接、CPU 密集操作（沙箱跑码、文档解析/生成）。因此：
+  1. **NestJS 接 Fastify adapter**（较默认 Express 更快）；
+  2. 无状态多实例 + 负载均衡，Redis 共享会话/队列，**横向扩展**；
+  3. **CPU 密集的活隔离到 Agent 运行时 / 沙箱 worker 进程或容器**，主 BFF 进程不碰重计算。
+  > 若未来出现极致吞吐需求，正解是用 Go/Java 重写**热点服务**，而非更换整个框架——但在 1–2 人节奏下会牺牲开发速度，暂不采用。
 
 ## 8. 里程碑分期
 
