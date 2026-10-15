@@ -1,11 +1,23 @@
 import { createServer, type Server } from 'node:http';
-import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 import { encodeSse } from '@ai-office/shared';
-import { runFakeAgent } from './fake-agent';
+import type { RunRequest } from '@ai-office/shared';
+import { runAgent } from './agent-loop';
+import { createGateway } from './model/create-gateway';
+import type { ModelGateway } from './model/types';
+import { createTools } from './tools/registry';
+import type { Tool } from './tools/types';
 
-export function createRuntimeServer(): Server {
+export interface RuntimeDeps {
+  gateway?: ModelGateway;
+  tools?: Tool[];
+}
+
+export function createRuntimeServer(deps: RuntimeDeps = {}): Server {
+  const gateway = deps.gateway ?? createGateway();
+  const tools = deps.tools ?? createTools();
+
   return createServer((req, res) => {
     if (req.method === 'GET' && req.url === '/health') {
       res.writeHead(200, { 'content-type': 'application/json' });
@@ -13,20 +25,19 @@ export function createRuntimeServer(): Server {
       return;
     }
 
-    if (req.method === 'POST' && req.url === '/prompt') {
+    if (req.method === 'POST' && req.url === '/runs') {
       let body = '';
       req.on('data', (chunk) => (body += chunk));
       req.on('end', () => {
-        let goal = '';
+        let runReq: RunRequest;
         try {
-          goal = (JSON.parse(body || '{}') as { goal?: string }).goal ?? '';
+          runReq = JSON.parse(body || '{}') as RunRequest;
         } catch {
           res.writeHead(400, { 'content-type': 'application/json' });
           res.end(JSON.stringify({ error: 'invalid json' }));
           return;
         }
 
-        const runId = randomUUID();
         res.writeHead(200, {
           'content-type': 'text/event-stream',
           'cache-control': 'no-cache',
@@ -35,10 +46,14 @@ export function createRuntimeServer(): Server {
 
         void (async () => {
           try {
-            for await (const ev of runFakeAgent(goal, runId)) {
+            for await (const ev of runAgent(runReq, {
+              gateway,
+              tools,
+              onUsage: (u) => res.write(encodeSse({ event: 'usage', data: u })),
+            })) {
               res.write(encodeSse({ event: 'step', data: ev }));
             }
-            res.write(encodeSse({ event: 'done', data: { runId } }));
+            res.write(encodeSse({ event: 'done', data: { runId: runReq.runId } }));
           } catch (err) {
             res.write(encodeSse({ event: 'error', data: { message: String(err) } }));
           } finally {
