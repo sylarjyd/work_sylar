@@ -2,6 +2,7 @@
   "$schema": "https://turbo.build/schema.json",
   "globalPassThroughEnv": [
     "PORT",
+    "AGENT_RUNTIME_PORT",
     "AGENT_RUNTIME_URL",
     "NEXT_PUBLIC_BFF_URL",
     "DATABASE_URL",

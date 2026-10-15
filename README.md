@@ -29,6 +29,6 @@ pnpm --filter @ai-office/bff db:push    # 同步表结构
 ## 包结构
 
 - `packages/shared` —— 协议类型与 SSE 编解码
-- `apps/agent-runtime` —— Agent 运行时（M0 为模拟循环）
+- `apps/agent-runtime` —— Agent 运行时（真模型 Agent Loop + web.search / web.fetch）
 - `apps/bff` —— NestJS(Fastify) 应用服务
 - `apps/web` —— Next.js 网页端

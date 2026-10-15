@@ -1,8 +1,12 @@
 import 'reflect-metadata';
+import { loadRootEnv } from './load-env';
 import { NestFactory } from '@nestjs/core';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
 import { AppModule } from './app.module';
 import { CORS_OPTIONS } from './cors';
+
+// 必须在 NestFactory.create 之前：Prisma 连接串、JWT 密钥都在实例化服务时读取。
+loadRootEnv();
 
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create<NestFastifyApplication>(

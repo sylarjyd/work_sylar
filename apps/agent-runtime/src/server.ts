@@ -8,6 +8,7 @@ import { createGateway } from './model/create-gateway';
 import type { ModelGateway } from './model/types';
 import { createTools } from './tools/registry';
 import type { Tool } from './tools/types';
+import { loadRootEnv } from './load-env';
 
 export interface RuntimeDeps {
   gateway?: ModelGateway;
@@ -73,7 +74,9 @@ const isEntry = !!process.argv[1] &&
   resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 
 if (isEntry) {
-  const port = Number(process.env.PORT ?? 4001);
+  loadRootEnv();
+  // 独立端口变量：与 bff 的 PORT 分开，避免根 .env 里 PORT=4000 把 runtime 也顶到 4000。
+  const port = Number(process.env.AGENT_RUNTIME_PORT ?? 4001);
   createRuntimeServer().listen(port, () => {
     console.log(`agent-runtime listening on http://localhost:${port}`);
   });
