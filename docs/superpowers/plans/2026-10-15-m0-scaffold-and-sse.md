@@ -61,6 +61,7 @@ packages:
 ```json
 {
   "$schema": "https://turbo.build/schema.json",
+  "globalPassThroughEnv": ["PORT", "AGENT_RUNTIME_URL", "NEXT_PUBLIC_BFF_URL"],
   "tasks": {
     "build": { "dependsOn": ["^build"], "outputs": ["dist/**", ".next/**"] },
     "test": { "dependsOn": ["^build"] },
@@ -68,6 +69,8 @@ packages:
   }
 }
 ```
+
+> Turbo 2 默认 `envMode: "strict"`：未在 `globalPassThroughEnv` 中声明的环境变量会被**静默过滤**，任务进程收不到。故显式声明后续任务会用到（且靠环境变量而非硬编码默认值传入）的三个变量。
 
 - [ ] **Step 4: 创建 `tsconfig.base.json`**
 
@@ -141,7 +144,11 @@ git commit -m "chore: 初始化 monorepo 工作区脚手架"
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
-    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" }
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
   },
   "scripts": {
     "build": "tsup src/index.ts --format esm --dts --clean",
@@ -169,7 +176,7 @@ git commit -m "chore: 初始化 monorepo 工作区脚手架"
 
 ```ts
 import { describe, it, expect } from 'vitest';
-import { encodeSse, decodeSseFrames } from './protocol';
+import { encodeSse, decodeSseFrames, parseSseFrame } from './protocol';
 
 describe('encodeSse', () => {
   it('编码为合法的 SSE 帧', () => {
@@ -179,7 +186,35 @@ describe('encodeSse', () => {
   });
 });
 
+describe('parseSseFrame', () => {
+  it('空帧返回 null', () => {
+    expect(parseSseFrame('')).toBeNull();
+    expect(parseSseFrame('   ')).toBeNull();
+  });
+
+  it('缺少 event 行返回 null', () => {
+    expect(parseSseFrame('data: 1')).toBeNull();
+  });
+
+  it('缺少 data 行返回 null', () => {
+    expect(parseSseFrame('event: step')).toBeNull();
+  });
+
+  it('事件名非法返回 null', () => {
+    expect(parseSseFrame('event: bogus\ndata: 1')).toBeNull();
+  });
+
+  it('data 为非法 JSON 返回 null 而不抛异常', () => {
+    expect(parseSseFrame('event: error\ndata: not-json')).toBeNull();
+    expect(parseSseFrame('event: error\ndata:')).toBeNull();
+  });
+});
+
 describe('decodeSseFrames', () => {
+  it('空字符串返回空数组', () => {
+    expect(decodeSseFrames('')).toEqual([]);
+  });
+
   it('解析一个完整帧', () => {
     const out = decodeSseFrames(encodeSse({ event: 'done', data: { runId: 'r1' } }));
     expect(out).toEqual([{ event: 'done', data: { runId: 'r1' } }]);
@@ -239,7 +274,7 @@ export function encodeSse<T>(msg: SseMessage<T>): string {
   return `event: ${msg.event}\ndata: ${JSON.stringify(msg.data)}\n\n`;
 }
 
-/** 解析单个完整帧；空帧或不合法帧返回 null。 */
+/** 解析单个完整帧；空帧、缺字段、事件名非法或 data 非法 JSON 时一律返回 null（不抛异常）。 */
 export function parseSseFrame(frame: string): SseMessage | null {
   if (frame.trim() === '') return null;
   let event: string | undefined;
@@ -248,8 +283,13 @@ export function parseSseFrame(frame: string): SseMessage | null {
     if (line.startsWith('event:')) event = line.slice('event:'.length).trim();
     else if (line.startsWith('data:')) dataLine = line.slice('data:'.length).trim();
   }
-  if (!event || dataLine === undefined) return null;
-  return { event: event as SseEventName, data: JSON.parse(dataLine) };
+  if (!event || !dataLine) return null;
+  if (!(SSE_EVENT_NAMES as readonly string[]).includes(event)) return null;
+  try {
+    return { event: event as SseEventName, data: JSON.parse(dataLine) };
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -276,7 +316,7 @@ export * from './protocol';
 - [ ] **Step 7: 运行测试，确认通过**
 
 Run: `pnpm --filter @ai-office/shared test`
-Expected: PASS（3 个用例）。
+Expected: PASS（10 个用例：encodeSse 1 + parseSseFrame 5 + decodeSseFrames 4）。
 
 - [ ] **Step 8: 构建并验证产物**
 
@@ -311,31 +351,40 @@ git commit -m "feat(shared): 协议类型与 SSE 编解码"
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "build": "tsc -p tsconfig.json",
+    "build": "tsup src/server.ts --format esm --clean",
     "start": "node dist/server.js",
-    "test": "vitest run"
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
     "@ai-office/shared": "workspace:*"
   },
   "devDependencies": {
+    "@types/node": "^22.9.0",
     "tsx": "^4.19.2",
+    "tsup": "^8.3.5",
     "typescript": "^5.6.3",
     "vitest": "^2.1.8"
   }
 }
 ```
 
+> 用 **tsup**（而非裸 `tsc`）构建：`tsconfig.base.json` 是 `module: ESNext` + `moduleResolution: Bundler`，若用 `tsc` 直接产出 ESM，相对导入不带 `.js` 扩展名，`node dist/server.js` 会 `ERR_MODULE_NOT_FOUND`。tsup 会打包解析这些导入，规避该问题（`shared` 包同理）。
+>
+> 必须装 `@types/node`：`tsconfig.json` 是"仅用于类型检查"的（`noEmit`），但 tsup/vitest 都只剥离类型不检查，缺了 `@types/node` 会让 `strict` 形同虚设（`node:http`/`process` 全部报错、`req`/`res` 退化为隐式 `any`）。加 `typecheck` 脚本暴露这一检查。
+
 - [ ] **Step 2: 创建 `apps/agent-runtime/tsconfig.json`**
 
 ```json
 {
   "extends": "../../tsconfig.base.json",
-  "compilerOptions": { "outDir": "dist", "rootDir": "src" },
+  "compilerOptions": { "noEmit": true },
   "include": ["src"],
   "exclude": ["src/**/*.test.ts"]
 }
 ```
+
+> 构建交给 tsup（见 Step 1），此 tsconfig 仅用于编辑器/类型检查，故 `noEmit`。
 
 - [ ] **Step 3: 写失败测试 `apps/agent-runtime/src/fake-agent.test.ts`**
 
@@ -453,6 +502,22 @@ describe('agent-runtime server', () => {
       'done',
     ]);
   });
+
+  it('POST /prompt 收到非法 JSON 时返回 400', async () => {
+    const res = await fetch(`${baseUrl}/prompt`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: 'not json',
+    });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'invalid json' });
+  });
+
+  it('未知路由返回 404', async () => {
+    const res = await fetch(`${baseUrl}/unknown`);
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ error: 'not found' });
+  });
 });
 ```
 
@@ -466,6 +531,8 @@ Expected: FAIL —— `createRuntimeServer is not a function`。
 ```ts
 import { createServer, type Server } from 'node:http';
 import { randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
+import { resolve } from 'node:path';
 import { encodeSse } from '@ai-office/shared';
 import { runFakeAgent } from './fake-agent';
 
@@ -518,8 +585,8 @@ export function createRuntimeServer(): Server {
   });
 }
 
-const isEntry = process.argv[1]?.endsWith('server.ts') ||
-  process.argv[1]?.endsWith('server.js');
+const isEntry = !!process.argv[1] &&
+  resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 
 if (isEntry) {
   const port = Number(process.env.PORT ?? 4001);
@@ -529,10 +596,13 @@ if (isEntry) {
 }
 ```
 
-- [ ] **Step 10: 运行测试，确认通过**
+- [ ] **Step 10: 运行测试与类型检查，确认通过**
 
 Run: `pnpm --filter @ai-office/agent-runtime test`
-Expected: PASS（3 个用例）。
+Expected: PASS（5 个用例 —— fake-agent 1 + server 4）。
+
+Run: `pnpm --filter @ai-office/agent-runtime typecheck`
+Expected: 退出码 0，无类型错误。
 
 - [ ] **Step 11: Commit**
 
@@ -570,6 +640,7 @@ git commit -m "feat(agent-runtime): 模拟 Agent Loop 与 SSE 服务"
     "@nestjs/common": "^10.4.6",
     "@nestjs/core": "^10.4.6",
     "@nestjs/platform-fastify": "^10.4.6",
+    "fastify": "^4.28.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
     "@ai-office/shared": "workspace:*"
@@ -577,11 +648,16 @@ git commit -m "feat(agent-runtime): 模拟 Agent Loop 与 SSE 服务"
   "devDependencies": {
     "@nestjs/cli": "^10.4.7",
     "@nestjs/testing": "^10.4.6",
+    "@types/node": "^22.9.0",
     "typescript": "^5.6.3",
     "vitest": "^2.1.8"
   }
 }
 ```
+
+> 两个易踩的坑，必须照做：
+> - **`fastify` 必须显式声明**：`stream.controller.ts` 直接从 `'fastify'` 导入 `FastifyReply`，而 `@nestjs/platform-fastify` 并不 re-export 该类型。pnpm 的 `node_modules` 是隔离的（无 hoist），未声明的传递依赖在 `tsc` 解析时会 `Cannot find module 'fastify'`。
+> - **`@types/node` 必须装**：bff 用到 `process.env`、`Buffer`、`node:http`，缺了它 `nest build`（tsc）直接报错。
 
 - [ ] **Step 2: 创建 `apps/bff/tsconfig.json`**
 
@@ -614,6 +690,7 @@ git commit -m "feat(agent-runtime): 模拟 Agent Loop 与 SSE 服务"
 - [ ] **Step 4: 写失败测试 `apps/bff/src/stream/stream.controller.test.ts`**
 
 ```ts
+import 'reflect-metadata';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { Test } from '@nestjs/testing';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
@@ -677,13 +754,14 @@ import { Body, Controller, Post, Res } from '@nestjs/common';
 import type { FastifyReply } from 'fastify';
 import type { PromptRequest } from '@ai-office/shared';
 
-const RUNTIME_URL = process.env.AGENT_RUNTIME_URL ?? 'http://localhost:4001';
-
 @Controller('api/stream')
 export class StreamController {
   @Post()
   async stream(@Body() body: PromptRequest, @Res() reply: FastifyReply): Promise<void> {
-    const upstream = await fetch(`${RUNTIME_URL}/prompt`, {
+    // 在请求时读取 env（而非模块加载时）：测试会在 beforeAll 里设置
+    // AGENT_RUNTIME_URL，而 ESM 静态 import 早于 beforeAll 执行，模块级读取会拿到旧值。
+    const runtimeUrl = process.env.AGENT_RUNTIME_URL ?? 'http://localhost:4001';
+    const upstream = await fetch(`${runtimeUrl}/prompt`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ goal: body.goal }),
@@ -713,6 +791,8 @@ export class StreamController {
   }
 }
 ```
+
+> 直接写 `reply.raw` 会绕过 Fastify 的响应生命周期。M0 下这样可用；若 Fastify 报 "Reply was already sent" 之类的告警，在 `writeHead` 前加 `reply.hijack()` 接管原始 socket。
 
 - [ ] **Step 7: 写实现 `apps/bff/src/app.module.ts`**
 
