@@ -1,5 +1,5 @@
 import 'reflect-metadata';
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { Test } from '@nestjs/testing';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
 import * as argon2 from 'argon2';
@@ -20,6 +20,12 @@ const fakePrisma = {
   },
 } as unknown as PrismaService;
 
+/** 直接往假库塞一个已注册用户，避免用注册接口为其它用例铺状态。 */
+async function seedUser(email: string, password: string): Promise<void> {
+  const passwordHash = await argon2.hash(password);
+  users.set(email, { id: `u${users.size + 1}`, tenantId: `t${users.size + 1}`, email, passwordHash });
+}
+
 let app: NestFastifyApplication;
 
 beforeAll(async () => {
@@ -31,6 +37,11 @@ beforeAll(async () => {
   app = moduleRef.createNestApplication<NestFastifyApplication>(new FastifyAdapter());
   await app.init();
   await app.getHttpAdapter().getInstance().ready();
+});
+
+// 每个用例都从空库开始，各自显式铺自己需要的状态，用例之间不再互相依赖。
+beforeEach(() => {
+  users.clear();
 });
 
 afterAll(async () => {
@@ -54,6 +65,7 @@ describe('AuthController', () => {
   });
 
   it('重复邮箱注册返回 409', async () => {
+    await seedUser('a@b.com', 'pw123456');
     const res = await app.inject({
       method: 'POST',
       url: '/api/auth/register',
@@ -63,11 +75,26 @@ describe('AuthController', () => {
   });
 
   it('密码错误登录返回 401', async () => {
+    await seedUser('a@b.com', 'pw123456');
     const res = await app.inject({
       method: 'POST',
       url: '/api/auth/login',
       payload: { email: 'a@b.com', password: 'wrong' },
     });
     expect(res.statusCode).toBe(401);
+  });
+
+  it('凭据正确时登录返回 token 与用户信息', async () => {
+    await seedUser('a@b.com', 'pw123456');
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      payload: { email: 'a@b.com', password: 'pw123456' },
+    });
+    // Nest 的 @Post 默认返回 201（controller 未显式 @HttpCode(200)），这里断言实际行为。
+    expect(res.statusCode).toBe(201);
+    const body = JSON.parse(res.payload);
+    expect(body.token).toBeTruthy();
+    expect(body.user.email).toBe('a@b.com');
   });
 });
