@@ -640,6 +640,7 @@ git commit -m "feat(agent-runtime): 模拟 Agent Loop 与 SSE 服务"
     "@nestjs/common": "^10.4.6",
     "@nestjs/core": "^10.4.6",
     "@nestjs/platform-fastify": "^10.4.6",
+    "fastify": "^4.28.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
     "@ai-office/shared": "workspace:*"
@@ -647,11 +648,16 @@ git commit -m "feat(agent-runtime): 模拟 Agent Loop 与 SSE 服务"
   "devDependencies": {
     "@nestjs/cli": "^10.4.7",
     "@nestjs/testing": "^10.4.6",
+    "@types/node": "^22.9.0",
     "typescript": "^5.6.3",
     "vitest": "^2.1.8"
   }
 }
 ```
+
+> 两个易踩的坑，必须照做：
+> - **`fastify` 必须显式声明**：`stream.controller.ts` 直接从 `'fastify'` 导入 `FastifyReply`，而 `@nestjs/platform-fastify` 并不 re-export 该类型。pnpm 的 `node_modules` 是隔离的（无 hoist），未声明的传递依赖在 `tsc` 解析时会 `Cannot find module 'fastify'`。
+> - **`@types/node` 必须装**：bff 用到 `process.env`、`Buffer`、`node:http`，缺了它 `nest build`（tsc）直接报错。
 
 - [ ] **Step 2: 创建 `apps/bff/tsconfig.json`**
 
@@ -684,6 +690,7 @@ git commit -m "feat(agent-runtime): 模拟 Agent Loop 与 SSE 服务"
 - [ ] **Step 4: 写失败测试 `apps/bff/src/stream/stream.controller.test.ts`**
 
 ```ts
+import 'reflect-metadata';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { Test } from '@nestjs/testing';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
@@ -747,13 +754,14 @@ import { Body, Controller, Post, Res } from '@nestjs/common';
 import type { FastifyReply } from 'fastify';
 import type { PromptRequest } from '@ai-office/shared';
 
-const RUNTIME_URL = process.env.AGENT_RUNTIME_URL ?? 'http://localhost:4001';
-
 @Controller('api/stream')
 export class StreamController {
   @Post()
   async stream(@Body() body: PromptRequest, @Res() reply: FastifyReply): Promise<void> {
-    const upstream = await fetch(`${RUNTIME_URL}/prompt`, {
+    // 在请求时读取 env（而非模块加载时）：测试会在 beforeAll 里设置
+    // AGENT_RUNTIME_URL，而 ESM 静态 import 早于 beforeAll 执行，模块级读取会拿到旧值。
+    const runtimeUrl = process.env.AGENT_RUNTIME_URL ?? 'http://localhost:4001';
+    const upstream = await fetch(`${runtimeUrl}/prompt`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ goal: body.goal }),
@@ -783,6 +791,8 @@ export class StreamController {
   }
 }
 ```
+
+> 直接写 `reply.raw` 会绕过 Fastify 的响应生命周期。M0 下这样可用；若 Fastify 报 "Reply was already sent" 之类的告警，在 `writeHead` 前加 `reply.hijack()` 接管原始 socket。
 
 - [ ] **Step 7: 写实现 `apps/bff/src/app.module.ts`**
 
