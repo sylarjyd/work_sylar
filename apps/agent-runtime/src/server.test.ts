@@ -40,4 +40,20 @@ describe('agent-runtime server', () => {
       'done',
     ]);
   });
+
+  it('POST /prompt 非法 JSON 返回 400', async () => {
+    const res = await fetch(`${baseUrl}/prompt`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: 'not json',
+    });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'invalid json' });
+  });
+
+  it('GET /unknown 返回 404', async () => {
+    const res = await fetch(`${baseUrl}/unknown`);
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ error: 'not found' });
+  });
 });

@@ -1,5 +1,7 @@
 import { createServer, type Server } from 'node:http';
 import { randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
+import { resolve } from 'node:path';
 import { encodeSse } from '@ai-office/shared';
 import { runFakeAgent } from './fake-agent';
 
@@ -52,8 +54,8 @@ export function createRuntimeServer(): Server {
   });
 }
 
-const isEntry = process.argv[1]?.endsWith('server.ts') ||
-  process.argv[1]?.endsWith('server.js');
+const isEntry = !!process.argv[1] &&
+  resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 
 if (isEntry) {
   const port = Number(process.env.PORT ?? 4001);
