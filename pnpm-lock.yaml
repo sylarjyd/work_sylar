@@ -51,9 +51,6 @@ importers:
       '@nestjs/core':
         specifier: ^10.4.6
         version: 10.4.22(@nestjs/common@10.4.22(reflect-metadata@0.2.2)(rxjs@7.8.2))(reflect-metadata@0.2.2)(rxjs@7.8.2)
-      '@nestjs/jwt':
-        specifier: ^12.0.3
-        version: 12.0.3(@nestjs/common@10.4.22(reflect-metadata@0.2.2)(rxjs@7.8.2))
       '@nestjs/platform-fastify':
         specifier: ^10.4.6
         version: 10.4.22(@nestjs/common@10.4.22(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@10.4.22(@nestjs/common@10.4.22(reflect-metadata@0.2.2)(rxjs@7.8.2))(reflect-metadata@0.2.2)(rxjs@7.8.2))
@@ -901,11 +898,6 @@ packages:
         optional: true
       '@nestjs/websockets':
         optional: true
-
-  '@nestjs/jwt@12.0.3':
-    resolution: {integrity: sha512-Gr/lpj1pu5Lfn8b+6WeZZzj4J+Ggm1d4ImgrYLhiWahpJHoc/hhfQ9h9AAVVQ9vM+VskPrlngMu0RZwBIRsx3g==}
-    peerDependencies:
-      '@nestjs/common': ^8.0.0 || ^9.0.0 || ^10.0.0 || ^11.0.0 || ^12.0.0
 
   '@nestjs/platform-fastify@10.4.22':
     resolution: {integrity: sha512-Y/8wX43806NIAAIx7nWY3A7kSiZc5ivPfIl4RIgo4goxuwVOjAwgytBtPhgtyP/O1nrighbMXtgHh2e/kWnHGA==}
@@ -3642,12 +3634,6 @@ snapshots:
       uid: 2.0.2
     transitivePeerDependencies:
       - encoding
-
-  '@nestjs/jwt@12.0.3(@nestjs/common@10.4.22(reflect-metadata@0.2.2)(rxjs@7.8.2))':
-    dependencies:
-      '@nestjs/common': 10.4.22(reflect-metadata@0.2.2)(rxjs@7.8.2)
-      '@types/jsonwebtoken': 9.0.10
-      jsonwebtoken: 9.0.3
 
   '@nestjs/platform-fastify@10.4.22(@nestjs/common@10.4.22(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@10.4.22(@nestjs/common@10.4.22(reflect-metadata@0.2.2)(rxjs@7.8.2))(reflect-metadata@0.2.2)(rxjs@7.8.2))':
     dependencies:
