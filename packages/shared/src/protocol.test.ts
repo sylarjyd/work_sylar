@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { encodeSse, decodeSseFrames } from './protocol';
+import { encodeSse, decodeSseFrames, parseSseFrame } from './protocol';
 
 describe('encodeSse', () => {
   it('编码为合法的 SSE 帧', () => {
@@ -9,7 +9,35 @@ describe('encodeSse', () => {
   });
 });
 
+describe('parseSseFrame', () => {
+  it('空帧返回 null', () => {
+    expect(parseSseFrame('')).toBeNull();
+    expect(parseSseFrame('   ')).toBeNull();
+  });
+
+  it('缺少 event 行返回 null', () => {
+    expect(parseSseFrame('data: 1')).toBeNull();
+  });
+
+  it('缺少 data 行返回 null', () => {
+    expect(parseSseFrame('event: step')).toBeNull();
+  });
+
+  it('事件名非法返回 null', () => {
+    expect(parseSseFrame('event: bogus\ndata: 1')).toBeNull();
+  });
+
+  it('data 为非法 JSON 返回 null 而不抛异常', () => {
+    expect(parseSseFrame('event: error\ndata: not-json')).toBeNull();
+    expect(parseSseFrame('event: error\ndata:')).toBeNull();
+  });
+});
+
 describe('decodeSseFrames', () => {
+  it('空字符串返回空数组', () => {
+    expect(decodeSseFrames('')).toEqual([]);
+  });
+
   it('解析一个完整帧', () => {
     const out = decodeSseFrames(encodeSse({ event: 'done', data: { runId: 'r1' } }));
     expect(out).toEqual([{ event: 'done', data: { runId: 'r1' } }]);

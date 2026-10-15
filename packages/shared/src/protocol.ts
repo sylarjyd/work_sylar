@@ -26,7 +26,7 @@ export function encodeSse<T>(msg: SseMessage<T>): string {
   return `event: ${msg.event}\ndata: ${JSON.stringify(msg.data)}\n\n`;
 }
 
-/** 解析单个完整帧；空帧或不合法帧返回 null。 */
+/** 解析单个完整帧；空帧、缺字段、事件名非法或 data 非法 JSON 时一律返回 null（不抛异常）。 */
 export function parseSseFrame(frame: string): SseMessage | null {
   if (frame.trim() === '') return null;
   let event: string | undefined;
@@ -35,8 +35,13 @@ export function parseSseFrame(frame: string): SseMessage | null {
     if (line.startsWith('event:')) event = line.slice('event:'.length).trim();
     else if (line.startsWith('data:')) dataLine = line.slice('data:'.length).trim();
   }
-  if (!event || dataLine === undefined) return null;
-  return { event: event as SseEventName, data: JSON.parse(dataLine) };
+  if (!event || !dataLine) return null;
+  if (!(SSE_EVENT_NAMES as readonly string[]).includes(event)) return null;
+  try {
+    return { event: event as SseEventName, data: JSON.parse(dataLine) };
+  } catch {
+    return null;
+  }
 }
 
 /**
