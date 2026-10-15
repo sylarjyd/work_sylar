@@ -1,3 +1,17 @@
 packages:
   - "apps/*"
   - "packages/*"
+
+# pnpm 10 默认不运行依赖的构建脚本。不显式放行 esbuild/@swc/core 等，
+# vitest 与 next 装完也无法运行。
+# 注意：该设置必须放在 pnpm-workspace.yaml，放在 package.json 的 "pnpm"
+# 字段里 pnpm 10.19 不再读取（只会打印告警并静默忽略）。
+#
+# 只列真正需要构建的包。安装时会提示 "Ignored build scripts: @nestjs/core"，
+# 这是预期的：其 postinstall 仅为 `opencollective || exit 0`（捐赠横幅，且
+# 失败也不影响安装），放行它只会徒增噪声，不要为消除提示而加进来。
+onlyBuiltDependencies:
+  - esbuild
+  - "@swc/core"
+  - sharp
+  - unrs-resolver
