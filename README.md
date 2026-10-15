@@ -20,6 +20,10 @@ pnpm --filter @ai-office/bff db:up      # 起 Postgres
 pnpm --filter @ai-office/bff db:push    # 同步表结构
 ```
 
+> 网络化部署提醒：agent-runtime 的 `/runs` 无内置鉴权，默认仅绑 `127.0.0.1`。
+> 若要对外暴露，必须设 `AGENT_RUNTIME_HOST=0.0.0.0` 并同时配 `AGENT_RUNTIME_TOKEN`
+> （BFF 会自动携带同一 token 发起请求）。
+
 ## M1 已具备
 
 - 账号：邮箱+密码注册登录，JWT 鉴权
