@@ -82,4 +82,40 @@ describe('runtime server', () => {
     const res = await fetch(`${baseUrl}/nope`);
     expect(res.status).toBe(404);
   });
+
+  it('网关抛错时 SSE 只吐 error 事件、不含 done', async () => {
+    const boomGateway: ModelGateway = {
+      async chat() {
+        throw new Error('boom');
+      },
+    };
+    // 独立的 server，避免污染共享的 server/baseUrl。
+    const errServer = createRuntimeServer({ gateway: boomGateway, tools: [echo] });
+    await new Promise<void>((r) => errServer.listen(0, r));
+    const addr = errServer.address();
+    if (!addr || typeof addr === 'string') throw new Error('no port');
+    const errBaseUrl = `http://127.0.0.1:${addr.port}`;
+    try {
+      const res = await fetch(`${errBaseUrl}/runs`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          runId: 'r1',
+          sessionId: 's1',
+          goal: 'g',
+          messages: [{ role: 'user', content: 'g' }],
+        }),
+      });
+      expect(res.status).toBe(200);
+      expect(res.headers.get('content-type')).toContain('text/event-stream');
+      const messages = decodeSseFrames(await res.text());
+      // server.ts 的 catch 只写 error（第 57-58 行），finally 直接 end（第 59-61 行），
+      // 错误路径不写 done —— 故真实序列只有 ['error']。
+      expect(messages.map((m) => m.event)).toEqual(['error']);
+      const err = messages.find((m) => m.event === 'error');
+      expect((err?.data as { message: string }).message).toContain('boom');
+    } finally {
+      await new Promise<void>((r) => errServer.close(() => r()));
+    }
+  });
 });

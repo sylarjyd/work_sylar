@@ -75,6 +75,39 @@ describe('runAgent', () => {
     };
     const events = await collect(runAgent(req, { gateway, tools: [echoTool], maxRounds: 2 }));
     expect(events.filter((e) => e.type === 'tool_call')).toHaveLength(2);
+    // 2 轮 × [think, tool_call, tool_result] = 6 个事件，且以 tool_result 收尾，
+    // 说明是被轮次上限截停、而不是因“无 tool_call”提前 break。
+    expect(events).toHaveLength(6);
+    expect(events[events.length - 1].type).toBe('tool_result');
+  });
+
+  it('工具返回 undefined 不中断运行', async () => {
+    let round = 0;
+    const gateway: ModelGateway = {
+      async chat() {
+        round++;
+        if (round === 1) {
+          return {
+            content: '搜一下',
+            toolCalls: [{ id: 'c1', name: 'web.search', args: { query: 'x' } }],
+            usage: { input: 0, output: 0 },
+          };
+        }
+        return { content: '收尾', toolCalls: [], usage: { input: 0, output: 0 } };
+      },
+    };
+    const undefinedTool: Tool = {
+      name: 'web.search',
+      description: 'd',
+      parameters: {},
+      async execute() {
+        return undefined;
+      },
+    };
+    // 若 JSON.stringify(undefined) 未被守护，这里会抛 TypeError 使生成器中断。
+    const events = await collect(runAgent(req, { gateway, tools: [undefinedTool] }));
+    const toolResult = events.find((e) => e.type === 'tool_result');
+    expect(toolResult?.payload.ok).toBe(true);
   });
 
   it('工具报错不中断循环，记为失败结果', async () => {

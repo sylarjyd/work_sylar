@@ -33,6 +33,8 @@ export async function* runAgent(req: RunRequest, deps: RunDeps): AsyncGenerator<
     ts: Date.now(),
   });
 
+  // 注：M1 下耗尽 maxRounds 会静默结束（客户端只看到 done），
+  // “轮次耗尽”这一信号留待后续里程碑；此处不新增事件、不改变输出契约。
   for (let round = 0; round < maxRounds; round++) {
     const resp = await deps.gateway.chat({ messages, tools: schemas });
     usage = { input: usage.input + resp.usage.input, output: usage.output + resp.usage.output };
@@ -65,7 +67,7 @@ export async function* runAgent(req: RunRequest, deps: RunDeps): AsyncGenerator<
       // 工具结果回填进对话，供下一轮模型使用（截断防上下文爆炸）。
       messages.push({
         role: 'tool',
-        content: JSON.stringify(result).slice(0, 4000),
+        content: (JSON.stringify(result) ?? 'null').slice(0, 4000),
         toolCallId: call.id,
       });
     }
@@ -75,6 +77,6 @@ export async function* runAgent(req: RunRequest, deps: RunDeps): AsyncGenerator<
 }
 
 function preview(value: unknown): unknown {
-  const s = JSON.stringify(value);
+  const s = JSON.stringify(value) ?? 'null';
   return s.length > 500 ? { truncated: true, text: s.slice(0, 500) } : value;
 }
