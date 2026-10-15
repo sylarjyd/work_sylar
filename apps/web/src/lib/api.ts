@@ -19,7 +19,7 @@ export function clearToken(): void {
 
 async function authFetch(path: string, init: RequestInit = {}): Promise<Response> {
   const token = getToken();
-  return fetch(`${BFF_URL}${path}`, {
+  const res = await fetch(`${BFF_URL}${path}`, {
     ...init,
     headers: {
       'content-type': 'application/json',
@@ -27,6 +27,29 @@ async function authFetch(path: string, init: RequestInit = {}): Promise<Response
       ...(init.headers ?? {}),
     },
   });
+  // 401 通常意味着 token 已失效：就地清掉，抛出可识别的错误，交由调用方决定跳转登录页。
+  if (res.status === 401) {
+    clearToken();
+    throw new Error('unauthorized');
+  }
+  return res;
+}
+
+/** authFetch 在 401 时抛出的错误，页面据此统一处理「重新登录」。 */
+export function isUnauthorized(err: unknown): boolean {
+  return err instanceof Error && err.message === 'unauthorized';
+}
+
+/** 把认证接口的错误码映射为对用户友好的文案，避免把内部 code 直接显示出来。 */
+export function authErrorMessage(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err);
+  const map: Record<string, string> = {
+    login_failed_400: '请输入邮箱和密码',
+    login_failed_401: '邮箱或密码错误',
+    register_failed_400: '请输入合法的邮箱和密码',
+    register_failed_409: '该邮箱已被注册',
+  };
+  return map[msg] ?? '操作失败，请稍后重试';
 }
 
 export async function register(email: string, password: string): Promise<AuthResponse> {

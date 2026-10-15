@@ -4,7 +4,14 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import type { AgentEvent, SessionSummary } from '@ai-office/shared';
 import { createSseParser } from '../lib/sse-parser';
-import { clearToken, createSession, getToken, listSessions, streamTask } from '../lib/api';
+import {
+  clearToken,
+  createSession,
+  getToken,
+  isUnauthorized,
+  listSessions,
+  streamTask,
+} from '../lib/api';
 import { renderStep } from '../lib/render-step';
 
 export default function Home() {
@@ -30,23 +37,36 @@ export default function Home() {
       setSessions(list);
       if (list.length) setSessionId(list[0].id);
     } catch (err) {
+      if (isUnauthorized(err)) {
+        router.push('/login');
+        return;
+      }
       setError(String(err));
     }
   }
 
-  async function newSession() {
+  async function newSession(): Promise<SessionSummary> {
     const s = await createSession();
     setSessions((prev) => [s, ...prev]);
     setSessionId(s.id);
+    return s;
   }
 
   async function run() {
-    if (!sessionId) await newSession();
     setEvents([]);
     setRunning(true);
     setError('');
     try {
-      const res = await streamTask(sessionId, goal);
+      // sessionId 为 state，newSession 的 setSessionId 不会同步更新本次渲染闭包里的值，
+      // 故必须用 newSession 返回的 id 直接发起请求，否则会 POST 到空 id 的会话。
+      let sid = sessionId;
+      if (!sid) sid = (await newSession()).id;
+      const res = await streamTask(sid, goal);
+      if (!res.ok) {
+        // 错误响应通常带 JSON body 但没有 SSE 帧；不在此拦截就会静默结束、既不报错也无事件。
+        const detail = await res.text().catch(() => '');
+        throw new Error(`stream_failed_${res.status}${detail ? `: ${detail}` : ''}`);
+      }
       if (!res.body) throw new Error('no body');
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
@@ -56,10 +76,17 @@ export default function Home() {
         if (done) break;
         for (const m of parse(decoder.decode(value, { stream: true }))) {
           if (m.event === 'step') setEvents((prev) => [...prev, m.data as AgentEvent]);
-          if (m.event === 'error') setError(JSON.stringify(m.data));
+          if (m.event === 'error') {
+            const d = m.data as { message?: unknown } | null;
+            setError(d && typeof d.message === 'string' ? d.message : JSON.stringify(m.data));
+          }
         }
       }
     } catch (err) {
+      if (isUnauthorized(err)) {
+        router.push('/login');
+        return;
+      }
       setError(String(err));
     } finally {
       setRunning(false);

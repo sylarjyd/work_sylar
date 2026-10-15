@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { login, register } from '../../lib/api';
+import { authErrorMessage, login, register } from '../../lib/api';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -19,7 +19,7 @@ export default function LoginPage() {
       else await register(email, password);
       router.push('/');
     } catch (err) {
-      setError(String(err));
+      setError(authErrorMessage(err));
     }
   }
 
@@ -27,7 +27,13 @@ export default function LoginPage() {
     <main>
       <h1>{mode === 'login' ? '登录' : '注册'}</h1>
       <form onSubmit={submit} style={{ display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 320 }}>
-        <input placeholder="邮箱" value={email} onChange={(e) => setEmail(e.target.value)} style={{ padding: 8 }} />
+        <input
+          placeholder="邮箱"
+          type="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          style={{ padding: 8 }}
+        />
         <input
           placeholder="密码"
           type="password"

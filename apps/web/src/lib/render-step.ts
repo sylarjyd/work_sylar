@@ -11,5 +11,8 @@ export function renderStep(ev: AgentEvent): string {
       return `工具 ${String(ev.payload.tool)} ${ev.payload.ok ? '成功' : '失败'}`;
     case 'artifact':
       return `产出：${JSON.stringify(ev.payload)}`;
+    default:
+      // 前向兼容：StepType 未来新增类型时，未知事件渲染为空串而非 undefined。
+      return '';
   }
 }
