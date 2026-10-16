@@ -167,4 +167,66 @@ describe('runAgent', () => {
     await collect(runAgent(req, { gateway, tools: [spyTool] }));
     expect(seen).toEqual({ tenantId: 't1', sessionId: 's1', runId: 'r1' });
   });
+
+  it('工具结果含 artifact 时额外产出一条 artifact step', async () => {
+    let round = 0;
+    const gateway: ModelGateway = {
+      async chat() {
+        round++;
+        if (round === 1) {
+          return {
+            content: '生成',
+            toolCalls: [{ id: 'c1', name: 'doc.pptx', args: { filename: 'a.pptx' } }],
+            usage: { input: 0, output: 0 },
+          };
+        }
+        return { content: '完成', toolCalls: [], usage: { input: 0, output: 0 } };
+      },
+    };
+    const docTool: Tool = {
+      name: 'doc.pptx',
+      description: 'd',
+      parameters: {},
+      async execute() {
+        return { artifact: { kind: 'pptx', filename: 'a.pptx', storageKey: 'k', size: 3 } };
+      },
+    };
+    const events = await collect(runAgent(req, { gateway, tools: [docTool] }));
+    expect(events.map((e) => e.type)).toEqual([
+      'think',
+      'tool_call',
+      'tool_result',
+      'artifact',
+      'think',
+    ]);
+    const art = events.find((e) => e.type === 'artifact');
+    expect(art?.payload).toMatchObject({ kind: 'pptx', filename: 'a.pptx', storageKey: 'k', size: 3 });
+  });
+
+  it('工具失败时即使结果里有 artifact 也不产出 artifact step', async () => {
+    let round = 0;
+    const gateway: ModelGateway = {
+      async chat() {
+        round++;
+        if (round === 1) {
+          return {
+            content: '生成',
+            toolCalls: [{ id: 'c1', name: 'doc.pptx', args: {} }],
+            usage: { input: 0, output: 0 },
+          };
+        }
+        return { content: '收尾', toolCalls: [], usage: { input: 0, output: 0 } };
+      },
+    };
+    const badTool: Tool = {
+      name: 'doc.pptx',
+      description: 'd',
+      parameters: {},
+      async execute() {
+        throw new Error('upload_failed');
+      },
+    };
+    const events = await collect(runAgent(req, { gateway, tools: [badTool] }));
+    expect(events.some((e) => e.type === 'artifact')).toBe(false);
+  });
 });

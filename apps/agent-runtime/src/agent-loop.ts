@@ -69,6 +69,11 @@ export async function* runAgent(req: RunRequest, deps: RunDeps): AsyncGenerator<
         result = { error: String(err) };
       }
       yield step('tool_result', { tool: call.name, ok, preview: preview(result) });
+      // 工具产出物：除 tool_result 外再补一条 artifact step，供 BFF 落库、web 成果区即时渲染。
+      const artifact = ok ? extractArtifact(result) : undefined;
+      if (artifact) {
+        yield step('artifact', artifact);
+      }
       // 工具结果回填进对话，供下一轮模型使用（截断防上下文爆炸）。
       messages.push({
         role: 'tool',
@@ -84,4 +89,12 @@ export async function* runAgent(req: RunRequest, deps: RunDeps): AsyncGenerator<
 function preview(value: unknown): unknown {
   const s = JSON.stringify(value) ?? 'null';
   return s.length > 500 ? { truncated: true, text: s.slice(0, 500) } : value;
+}
+
+/** 工具返回 `{ artifact: ArtifactRef }` 时取出该引用；结构不符则视为无产物。 */
+function extractArtifact(result: unknown): Record<string, unknown> | undefined {
+  if (result === null || typeof result !== 'object') return undefined;
+  const ref = (result as { artifact?: unknown }).artifact;
+  if (ref === null || typeof ref !== 'object') return undefined;
+  return ref as Record<string, unknown>;
 }
