@@ -33,6 +33,8 @@ export interface LoginRequest {
 export interface AuthUser {
   id: string;
   email: string;
+  /** 角色：v1 单人部署恒为 'admin'；多租户真实角色属后续。 */
+  role: string;
 }
 
 export interface AuthResponse {
@@ -126,4 +128,28 @@ export interface KbSearchHit {
   seq: number;
   score: number;
   text: string;
+}
+
+// ---------------------------------------------------------------------------
+// M4b 连接器 / MCP
+// ---------------------------------------------------------------------------
+
+/** 连接器对外 DTO（**不含 env**）；toolCount/lastValidatedAt 为上次校验快照。 */
+export interface ConnectorDto {
+  id: string;
+  name: string;
+  command: string;
+  args: string[];
+  enabled: boolean;
+  toolCount: number;
+  lastValidatedAt: string | null;
+  createdAt: string;
+}
+
+/** MCP 工具摘要（`tools/list` 的投影）。 */
+export interface McpToolInfo {
+  name: string;
+  description: string;
+  /** MCP 工具的入参 JSON-Schema，直接用作 `Tool.parameters`。 */
+  inputSchema: Record<string, unknown>;
 }
