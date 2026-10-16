@@ -78,3 +78,23 @@ export interface ArtifactDto {
   version: number;
   createdAt: string;
 }
+
+// ---------------------------------------------------------------------------
+// M3 工具权限与确认
+// ---------------------------------------------------------------------------
+
+/** 工具权限等级：safe 直接执行；confirm 需用户确认；blocked 一律拒绝。 */
+export type ToolPermission = 'safe' | 'confirm' | 'blocked';
+
+/** `confirm_request` step 的 payload：用户需据此决定是否放行。 */
+export interface ConfirmRequest {
+  confirmId: string;
+  tool: string;
+  args: Record<string, unknown>;
+}
+
+/** BFF 确认端点的请求体。 */
+export interface ConfirmDecision {
+  confirmId: string;
+  approved: boolean;
+}

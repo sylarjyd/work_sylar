@@ -1,7 +1,7 @@
 export const SSE_EVENT_NAMES = ['step', 'usage', 'done', 'error'] as const;
 export type SseEventName = (typeof SSE_EVENT_NAMES)[number];
 
-export type StepType = 'think' | 'tool_call' | 'tool_result' | 'artifact';
+export type StepType = 'think' | 'tool_call' | 'tool_result' | 'artifact' | 'confirm_request';
 
 export interface AgentEvent {
   runId: string;
