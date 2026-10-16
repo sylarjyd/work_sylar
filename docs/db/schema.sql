@@ -22,6 +22,9 @@
 -- 可选：更老版本 Postgres 若缺 gen_random_uuid()
 -- CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
+-- M4a 知识库：pgvector 扩展（镜像 pgvector/pgvector:pg16 自带）。
+CREATE EXTENSION IF NOT EXISTS vector;
+
 -- -----------------------------------------------------------------------------
 -- Tenant（租户 / 组织）
 -- -----------------------------------------------------------------------------
@@ -190,6 +193,47 @@ ALTER TABLE "Artifact"
     ADD CONSTRAINT "Artifact_runId_fkey"
     FOREIGN KEY ("runId") REFERENCES "Run" ("id")
     ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- -----------------------------------------------------------------------------
+-- KbDoc / KbChunk（M4a 知识库；向量维度固定 1024，须与 EMBEDDING_DIM 一致）
+-- -----------------------------------------------------------------------------
+CREATE TABLE "KbDoc" (
+    "id"         TEXT         NOT NULL DEFAULT gen_random_uuid(),
+    "tenantId"   TEXT         NOT NULL,
+    "userId"     TEXT         NOT NULL,
+    "filename"   TEXT         NOT NULL,
+    "mime"       TEXT         NOT NULL,
+    "size"       INTEGER      NOT NULL,
+    "storageKey" TEXT         NOT NULL,
+    "status"     TEXT         NOT NULL DEFAULT 'pending',  -- pending | ready | failed
+    "chunkCount" INTEGER      NOT NULL DEFAULT 0,
+    "error"      TEXT,
+    "createdAt"  TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT "KbDoc_pkey" PRIMARY KEY ("id")
+);
+
+CREATE INDEX "KbDoc_tenantId_userId_idx" ON "KbDoc" ("tenantId", "userId");
+
+CREATE TABLE "KbChunk" (
+    "id"        TEXT         NOT NULL DEFAULT gen_random_uuid(),
+    "docId"     TEXT         NOT NULL,
+    "tenantId"  TEXT         NOT NULL,
+    "userId"    TEXT         NOT NULL,
+    "seq"       INTEGER      NOT NULL,
+    "text"      TEXT         NOT NULL,
+    "vector"    vector(1024) NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT "KbChunk_pkey" PRIMARY KEY ("id")
+);
+
+CREATE INDEX "KbChunk_docId_idx" ON "KbChunk" ("docId");
+CREATE INDEX "KbChunk_tenantId_userId_idx" ON "KbChunk" ("tenantId", "userId");
+CREATE INDEX "kb_chunk_vec_idx" ON "KbChunk" USING hnsw ("vector" vector_cosine_ops);
+
+ALTER TABLE "KbChunk"
+    ADD CONSTRAINT "KbChunk_docId_fkey"
+    FOREIGN KEY ("docId") REFERENCES "KbDoc" ("id")
+    ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- =============================================================================
 -- 可选：生产加固（不在 Prisma schema 中，按需单独应用；应用后需同步维护）

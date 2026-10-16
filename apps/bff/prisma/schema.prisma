@@ -113,3 +113,36 @@ model Artifact {
   @@index([sessionId])
   @@index([tenantId])
 }
+
+model KbDoc {
+  id         String    @id @default(uuid())
+  tenantId   String
+  userId     String
+  filename   String
+  mime       String
+  size       Int
+  storageKey String
+  status     String    @default("pending") // pending | ready | failed
+  chunkCount Int       @default(0)
+  error      String?
+  createdAt  DateTime  @default(now())
+  chunks     KbChunk[]
+
+  @@index([tenantId, userId])
+}
+
+model KbChunk {
+  id        String                      @id @default(uuid())
+  docId     String
+  tenantId  String
+  userId    String
+  seq       Int
+  text      String
+  // pgvector 列：Prisma 无法原生建模；写入/向量查询走 $executeRaw / $queryRaw（见 §4.3）。
+  vector    Unsupported("vector(1024)")
+  createdAt DateTime                    @default(now())
+  doc       KbDoc                       @relation(fields: [docId], references: [id], onDelete: Cascade)
+
+  @@index([docId])
+  @@index([tenantId, userId])
+}
