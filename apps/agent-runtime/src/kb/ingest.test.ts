@@ -34,4 +34,16 @@ describe('ingest', () => {
       ingest({ data: Buffer.from('x'), filename: 'a.exe' }, { embed: fakeEmbed }),
     ).rejects.toThrow('unsupported_type');
   });
+
+  it('嵌入返回行数不足时抛 embed_count_mismatch', async () => {
+    const partial: EmbeddingGateway = {
+      dim: 3,
+      async embed(texts) {
+        return texts.slice(0, texts.length - 1).map((t) => [t.length, 0, 0]);
+      },
+    };
+    await expect(
+      ingest({ data: Buffer.from('甲'.repeat(2000), 'utf8'), filename: 'a.txt' }, { embed: partial }),
+    ).rejects.toThrow('embed_count_mismatch');
+  });
 });

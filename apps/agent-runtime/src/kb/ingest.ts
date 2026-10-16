@@ -28,5 +28,6 @@ export async function ingest(
   const pieces = chunkText(text, opts.chunkSize ?? 800, opts.chunkOverlap ?? 150);
   if (pieces.length === 0) throw new Error('empty_document');
   const vectors = await deps.embed.embed(pieces);
+  if (vectors.length !== pieces.length) throw new Error('embed_count_mismatch');
   return pieces.map((t, i) => ({ seq: i, text: t, vector: vectors[i] }));
 }
