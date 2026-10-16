@@ -8,8 +8,18 @@ class FakeTransport implements McpTransport {
   connected = false;
   closed = false;
   pings = 0;
-  constructor(private readonly behavior: { connectFails?: boolean; pingFails?: () => boolean }) {}
-  async connect() { if (this.behavior.connectFails) throw new Error('spawn_failed'); this.connected = true; }
+  constructor(
+    private readonly behavior: {
+      connectFails?: boolean;
+      pingFails?: () => boolean;
+      connectGate?: Promise<void>;
+    },
+  ) {}
+  async connect() {
+    if (this.behavior.connectGate) await this.behavior.connectGate;
+    if (this.behavior.connectFails) throw new Error('spawn_failed');
+    this.connected = true;
+  }
   async listTools() { return [{ name: 'echo', description: 'd', inputSchema: {} }]; }
   async callTool(_n: string, args: Record<string, unknown>) { return { text: `echo:${args.text}`, isError: false }; }
   async ping() { this.pings++; if (this.behavior.pingFails?.()) throw new Error('dead'); }
@@ -72,6 +82,34 @@ describe('McpHost', () => {
     const { host, made } = makeHost();
     await host.ensure(cfg);
     await host.closeAll();
+    expect(made[0].closed).toBe(true);
+  });
+
+  it('并发 ensure 只建一个连接（in-flight 去重）', async () => {
+    const { host, made } = makeHost();
+    const [a, b] = await Promise.all([host.ensure(cfg), host.ensure(cfg)]);
+    expect(a).toEqual(b);
+    expect(made).toHaveLength(1);
+    await host.closeAll();
+  });
+
+  it('closeAll 期间未完成的 spawn 不复活：回收连接并抛 mcp_host_closed', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const made: FakeTransport[] = [];
+    const host = new McpHost({
+      heartbeatMs: 1000, backoffBaseMs: 100, backoffMaxMs: 400,
+      initTimeoutMs: 5000, callTimeoutMs: 5000,
+      transportFactory: () => {
+        const t = new FakeTransport({ connectGate: gate });
+        made.push(t);
+        return t;
+      },
+    });
+    const p = host.ensure(cfg);
+    await host.closeAll();
+    release();
+    await expect(p).rejects.toThrow('mcp_host_closed');
     expect(made[0].closed).toBe(true);
   });
 });
