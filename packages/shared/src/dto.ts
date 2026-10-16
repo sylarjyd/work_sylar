@@ -14,6 +14,8 @@ export interface RunRequest {
   sessionId: string;
   /** 产物存储 Key 需按租户隔离；BFF 从 JWT 取出后透传给 runtime。 */
   tenantId: string;
+  /** 知识库按 tenant_id + user_id 隔离；BFF 从 JWT 的 sub 透传。 */
+  userId: string;
   goal: string;
   messages: ChatMessage[];
 }

@@ -3,6 +3,7 @@ import type { ToolPermission } from '@ai-office/shared';
 /** 单次运行的上下文：工具拼存储 Key 等运行态信息从 here 取，避免工具集在启动期固化单次运行数据。 */
 export interface RunContext {
   tenantId: string;
+  userId: string;
   sessionId: string;
   runId: string;
 }

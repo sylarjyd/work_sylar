@@ -19,6 +19,8 @@ let upstream: Server;
 let app: NestFastifyApplication;
 let baseUrl: string;
 let runtimeUrl: string;
+// 上游收到的最近一次 /runs 请求体原文，供断言 BFF 透传的字段（如 userId）。
+let lastRunsBody = '';
 // 上游行为开关：正常流 / 中途发 error 事件。
 let upstreamMode: 'ok' | 'error' = 'ok';
 // 落库故障注入开关：用于验证控制器在写库失败时的落 failed / 不挂起行为。
@@ -99,19 +101,25 @@ beforeAll(async () => {
   process.env.JWT_SECRET = 'test-secret';
 
   upstream = createServer((req, res) => {
-    res.writeHead(200, { 'content-type': 'text/event-stream' });
-    res.write(encodeSse({ event: 'step', data: { runId: 'run1', seq: 0, type: 'think', payload: { text: '想' }, ts: 1 } }));
-    if (upstreamMode === 'error') {
-      // 上游中途报错：控制器应把本次 run 记为 failed。
-      res.write(encodeSse({ event: 'error', data: { message: 'boom' } }));
+    // 读出请求体：供断言 BFF 把 userId 透传到 /runs（其余用例不读该变量）。
+    let reqBody = '';
+    req.on('data', (chunk) => (reqBody += chunk));
+    req.on('end', () => {
+      lastRunsBody = reqBody;
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.write(encodeSse({ event: 'step', data: { runId: 'run1', seq: 0, type: 'think', payload: { text: '想' }, ts: 1 } }));
+      if (upstreamMode === 'error') {
+        // 上游中途报错：控制器应把本次 run 记为 failed。
+        res.write(encodeSse({ event: 'error', data: { message: 'boom' } }));
+        res.end();
+        return;
+      }
+      res.write(encodeSse({ event: 'step', data: { runId: 'run1', seq: 1, type: 'tool_call', payload: { tool: 'web.search' }, ts: 2 } }));
+      res.write(encodeSse({ event: 'step', data: { runId: 'run1', seq: 2, type: 'artifact', payload: { kind: 'pptx', filename: 'a.pptx', storageKey: 'artifacts/t1/run1/x-a.pptx', size: 3 }, ts: 3 } }));
+      res.write(encodeSse({ event: 'usage', data: { input: 1, output: 1 } }));
+      res.write(encodeSse({ event: 'done', data: { runId: 'run1' } }));
       res.end();
-      return;
-    }
-    res.write(encodeSse({ event: 'step', data: { runId: 'run1', seq: 1, type: 'tool_call', payload: { tool: 'web.search' }, ts: 2 } }));
-    res.write(encodeSse({ event: 'step', data: { runId: 'run1', seq: 2, type: 'artifact', payload: { kind: 'pptx', filename: 'a.pptx', storageKey: 'artifacts/t1/run1/x-a.pptx', size: 3 }, ts: 3 } }));
-    res.write(encodeSse({ event: 'usage', data: { input: 1, output: 1 } }));
-    res.write(encodeSse({ event: 'done', data: { runId: 'run1' } }));
-    res.end();
+    });
   });
   await new Promise<void>((r) => upstream.listen(0, r));
   const addr = upstream.address();
@@ -151,6 +159,7 @@ beforeEach(() => {
   failStepCreate = false;
   failRunUpdate = false;
   escapedErrors.length = 0;
+  lastRunsBody = '';
   process.env.AGENT_RUNTIME_URL = runtimeUrl;
 });
 
@@ -182,6 +191,18 @@ describe('TasksController', () => {
     expect(text).toContain('event: done');
     // usage 透传但不落库
     expect(stored.steps).toHaveLength(3);
+  });
+
+  it('把 JWT 的 sub 作为 userId 透传给 runtime', async () => {
+    const token = signToken({ sub: 'u1', tenantId: 't1' });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/sessions/s1/tasks',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { goal: '查一下' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(lastRunsBody).userId).toBe('u1');
   });
 
   it('SSE 里的 artifact step 触发产物落库', async () => {

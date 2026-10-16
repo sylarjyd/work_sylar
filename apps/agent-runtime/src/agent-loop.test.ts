@@ -27,6 +27,7 @@ const req: RunRequest = {
   runId: 'r1',
   sessionId: 's1',
   tenantId: 't1',
+  userId: 'u1',
   goal: '查竞品',
   messages: [{ role: 'user', content: '查竞品' }],
 };
@@ -170,7 +171,7 @@ describe('runAgent', () => {
       },
     };
     await collect(runAgent(req, { gateway, tools: [spyTool] }));
-    expect(seen).toEqual({ tenantId: 't1', sessionId: 's1', runId: 'r1' });
+    expect(seen).toEqual({ tenantId: 't1', userId: 'u1', sessionId: 's1', runId: 'r1' });
   });
 
   it('工具结果含 artifact 时额外产出一条 artifact step', async () => {

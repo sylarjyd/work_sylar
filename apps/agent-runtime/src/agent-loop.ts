@@ -32,6 +32,7 @@ export async function* runAgent(req: RunRequest, deps: RunDeps): AsyncGenerator<
   const messages: ModelMessage[] = [...req.messages];
   const ctx: RunContext = {
     tenantId: req.tenantId,
+    userId: req.userId,
     sessionId: req.sessionId,
     runId: req.runId,
   };

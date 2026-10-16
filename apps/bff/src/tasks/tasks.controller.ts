@@ -39,7 +39,7 @@ export class TasksController {
 
     // 先做归属校验与建 task/run（可能抛 NotFoundException）。
     // 必须早于 hijack：一旦 hijack，Nest 的异常过滤器无法再写响应，请求会挂起。
-    const { taskId, runId, tenantId, messages } = await this.tasks.prepare(
+    const { taskId, runId, tenantId, userId, messages } = await this.tasks.prepare(
       sessionId,
       user.tenantId,
       user.sub,
@@ -70,7 +70,7 @@ export class TasksController {
           // 配了共享密钥才带；不配时与未开启鉴权的 runtime 保持兼容。
           ...(runtimeToken ? { 'x-agent-runtime-token': runtimeToken } : {}),
         },
-        body: JSON.stringify({ runId, sessionId, tenantId, goal, messages }),
+        body: JSON.stringify({ runId, sessionId, tenantId, userId, goal, messages }),
       });
     } catch {
       // 传输层失败：上游不可达，回 502 而不是未捕获的 500。
