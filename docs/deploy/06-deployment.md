@@ -95,6 +95,12 @@ flowchart LR
 | `KB_CHUNK_SIZE` | `800` | 按文档类型与模型上下文调优 |
 | `KB_CHUNK_OVERLAP` | `150` | 按切分效果调优 |
 | `KB_MAX_FILE_BYTES` | `10485760` | 按业务与存储配额调整 |
+| `CONNECTOR_ENC_KEY` | 空 | **必须设置**（32 字节 hex）；MCP Server 的 env 加解密密钥，缺失时 BFF 启动失败 |
+| `ADMIN_EMAILS` | 空 | 平台管理员邮箱白名单（逗号分隔，大小写不敏感）；仅这些邮箱注册为 `admin`，其余为 `member` |
+| `MCP_HEARTBEAT_MS` | `30000` | MCP 子进程心跳间隔 |
+| `MCP_BACKOFF_BASE_MS` / `MCP_BACKOFF_MAX_MS` | `1000` / `30000` | MCP 子进程崩溃退避重拉 |
+| `MCP_INIT_TIMEOUT_MS` | `10000` | MCP `initialize` / 校验握手超时 |
+| `MCP_CALL_TIMEOUT_MS` | `30000` | MCP 单次工具调用超时 |
 
 > `JWT_SECRET` 未设置时 BFF 会抛错（fail-fast）；`AGENT_RUNTIME_TOKEN` 未设置时 runtime 仅靠绑本机限制可达面——生产两者都必须设置。
 
@@ -157,6 +163,17 @@ pnpm --filter @ai-office/bff exec prisma migrate deploy
 2. **启用扩展**：启动后须执行 `CREATE EXTENSION IF NOT EXISTS vector`（`prisma db push` 与 `docs/db/schema.sql` 均已包含；若手工建库须自行执行）。
 3. **维度一致**：环境变量 `EMBEDDING_DIM` 必须等于 `KbChunk.vector` 列维度（当前 `vector(1024)`），二者不一致会导致写入/检索报错。
 4. **内部端点鉴权**：`POST /internal/kb/search` 默认失败关闭——设了 `INTERNAL_TOKEN` 则校验共享密钥；未设则仅放行回环来源（`127.0.0.1`/`::1`）。runtime 与 bff 不同机部署时**必设**该变量，否则 runtime 请求将被 403 拒绝。
+
+### 5.4 连接器 / MCP
+
+- **密钥必设**：`CONNECTOR_ENC_KEY` 缺失时 BFF 启动即失败；轮换密钥会使既有连接器 env 无法解密，须同时重填。
+- **子进程环境隔离**：runtime spawn MCP Server 时**不注入**本服务 `process.env`，仅传 SDK 白名单（`PATH`/`HOME` 等）+ 连接器自身 `env`，避免泄露 `DEEPSEEK_API_KEY`/`JWT_SECRET`。
+- **权限**：连接器增删改仅租户管理员；`/connectors` 页对非管理员只读。管理员由 `ADMIN_EMAILS` 白名单在注册时决定（`role`），须结合下述残余风险使用。
+- **内网地址**：runtime 需能访问 `BFF_INTERNAL_URL`（默认 `http://localhost:4000`）拉连接器；跨机部署必设 `INTERNAL_TOKEN`。
+- **隔离**：v1 不做命令白名单 / 沙箱，生产需按信任边界评估是否上容器隔离。
+- **提示注入信任边界**：MCP Server 的工具描述与调用结果会进入模型上下文且未做净化；`permission:'confirm'`（工具调用前需人工确认）是主要缓解手段。仅接入可信的 MCP Server。
+- **注册与角色残余风险**：`ADMIN_EMAILS` 判定发生在注册时，v1 无邮箱验证——白名单邮箱可被他人抢注为 `admin`。生产建议引入邮箱验证或邀请制；邮箱以原样存储（未统一小写）。
+- **存量库注意**：`User.role` 列默认值已由 `admin` 改为 `member`。用旧版 `docs/db/schema.sql` 建库的实例须留意：既有默认值与新库不一致，同时既有用户的历史 `role` 不会自动变更，需按需手工校正。
 
 ---
 

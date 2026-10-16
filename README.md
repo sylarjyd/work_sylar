@@ -54,6 +54,10 @@ pnpm --filter @ai-office/bff db:push    # 同步表结构
 
 - 知识库 RAG：上传文档→检索问答→来源引用（pgvector 向量检索；runtime 解析+嵌入，bff 独占库）
 
+## M4b 已具备
+
+- 连接器 / MCP：接入外部 MCP Server（stdio），自动发现其工具并纳入 Agent 工具箱；`/connectors` 页由管理员新增/启停/删除（凭证加密入库），工具调用沿用 M3 确认卡片
+
 ## 包结构
 
 - `packages/shared` —— 协议类型与 SSE 编解码
