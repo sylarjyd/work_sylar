@@ -60,7 +60,7 @@ export async function parseDocument(input: ParseInput, deps: ParseDeps = {}): Pr
   }
 }
 
-/** 逐表逐行抽文本，单元格以制表符连接；公式取 result，富文本取 text。 */
+/** 逐表逐行抽文本：单元格以制表符连接、行以换行连接；日期转 ISO，富文本拼接，超链接取 text，公式取 result。 */
 export async function parseXlsx(data: Buffer): Promise<string> {
   const wb = new ExcelJS.Workbook();
   // exceljs 的 d.ts 把入参声明为自带的 `Buffer`（空接口 extends ArrayBuffer），
@@ -78,10 +78,18 @@ export async function parseXlsx(data: Buffer): Promise<string> {
 
 function cellText(v: unknown): string {
   if (v === null || v === undefined) return '';
+  if (v instanceof Date) return v.toISOString();
   if (typeof v !== 'object') return String(v);
-  const o = v as { text?: unknown; result?: unknown };
+  const o = v as {
+    text?: unknown;
+    result?: unknown;
+    error?: unknown;
+    richText?: { text?: unknown }[];
+  };
+  if (Array.isArray(o.richText)) return o.richText.map((r) => String(r.text ?? '')).join('');
   if (o.text !== undefined) return String(o.text);
   if (o.result !== undefined) return String(o.result ?? '');
+  if (o.error !== undefined) return String(o.error);
   return '';
 }
 

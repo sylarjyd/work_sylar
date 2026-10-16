@@ -23,6 +23,11 @@ describe('parseDocument', () => {
     expect(out).toBe('你好\n世界');
   });
 
+  it('txt 去掉 UTF-8 BOM', async () => {
+    const out = await parseDocument({ data: Buffer.from('\uFEFFhi', 'utf8'), filename: 'a.txt' });
+    expect(out).toBe('hi');
+  });
+
   it('csv 按文本返回', async () => {
     const out = await parseDocument({ data: Buffer.from('a,b\n1,2', 'utf8'), filename: 'a.csv' });
     expect(out).toContain('a,b');
@@ -46,6 +51,28 @@ describe('parseDocument', () => {
     const out = await parseXlsx(Buffer.from(data as ArrayBuffer));
     expect(out).toContain('季度');
     expect(out).toContain('100');
+  });
+
+  it('xlsx 抽出行文本（含富文本单元格）', async () => {
+    const ExcelJS = (await import('exceljs')).default;
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('s');
+    ws.addRow(['备注']);
+    ws.addRow([{ richText: [{ text: '甲' }, { text: '乙' }] }]);
+    const data = await wb.xlsx.writeBuffer();
+    const out = await parseXlsx(Buffer.from(data as ArrayBuffer));
+    expect(out).toContain('甲乙');
+  });
+
+  it('xlsx 抽出行文本（含日期单元格，转 ISO）', async () => {
+    const ExcelJS = (await import('exceljs')).default;
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('s');
+    ws.addRow(['时间']);
+    ws.addRow([new Date('2026-01-02T03:04:05.000Z')]);
+    const data = await wb.xlsx.writeBuffer();
+    const out = await parseXlsx(Buffer.from(data as ArrayBuffer));
+    expect(out).toContain('2026-01-02T03:04:05.000Z');
   });
 
   it('pdf 走可注入抽取器（离线可测）', async () => {
