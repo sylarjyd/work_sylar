@@ -90,18 +90,19 @@ run 开始（tenantId 已知）
 
 ```
 Connector: id(uuid) tenant_id name command args(json) env_encrypted(text)
-           enabled(bool) created_by created_at updated_at
+           enabled(bool) tool_count(int) last_validated_at(timestamp?)
+           created_by created_at updated_at
            unique(tenant_id, name)
 ```
 
 - `env_encrypted` = `base64(IV ‖ authTag ‖ ciphertext)`，AES-256-GCM（§6.5）；读时解密，**永不回传前端**（`ConnectorDto` 不含 env）。
 - `args` 用 Prisma `Json`（`string[]`）；`command`、`name` 常规列。
 - 归属 `tenant_id`；CRUD 一律按租户过滤（沿用 M1 行级隔离）。`created_by` 为 JWT `sub`。
-- `User` 增 `role String @default("admin")`：v1 单人部署「当前用户即管理员」；`AdminGuard` 校验 `req.user.role === 'admin'`（角色随 JWT 签发携带）。多租户真实角色体系属后续（§11）。
+- `User` 增 `role String @default("admin")`：v1 单人部署「当前用户即管理员」；`AdminGuard` 由 JWT `sub` **查库**取 `role` 并校验 `=== 'admin'`（不入 JWT，改角色无需重发 token）。多租户真实角色体系属后续（§11）。
 
 ### 4.2 不落库的数据
 
-- **工具清单不落 DB**：runtime 从活子进程 `tools/list` 拿、缓存于进程内存。避免 DB 与真实子进程状态不一致。
+- **工具清单不落 DB**：runtime 从活子进程 `tools/list` 拿、缓存于进程内存。DB 只存**工具数**（`tool_count`）与**上次校验时间**（`last_validated_at`）两个快照，供列表展示；真实可用性以运行期调用为准（v1 不做实时状态徽标，见 §11）。
 - **审计不落 DB**：走结构化 logger（§7、§11）。
 
 ## 5. 接口契约
@@ -115,7 +116,7 @@ Connector: id(uuid) tenant_id name command args(json) env_encrypted(text)
 | PATCH | `/api/connectors/:id` | `{ enabled?, name?, command?, args?, env? }` | `200 { connector }`；**改 `command`/`args`/`env` 时重新校验**；跨租户 `404` |
 | DELETE | `/api/connectors/:id` | — | `204`；跨租户 `404`（不泄露存在性） |
 
-> `ConnectorDto` 不含 `env`；`env` 仅在写入时接收，读取一律不回传。
+> `ConnectorDto` = `{ id, name, command, args, enabled, toolCount, lastValidatedAt, createdAt }`，**不含 `env`**；`env` 仅在写入时接收，读取一律不回传。`toolCount` / `lastValidatedAt` 是上次校验的快照，非实时。
 
 ### 5.2 BFF 内部（`x-internal-token`，复用 M4a 校验）
 
@@ -146,7 +147,7 @@ interface McpTransport {
 
 ### 6.2 stdio-transport.ts
 - 封装官方 SDK `Client` + `StdioClientTransport`。
-- spawn 时 env = **`process.env` 合并连接器 `env`**（保证 `PATH`/`npx` 等基础环境可用，连接器 env 覆盖同名键）。
+- spawn 时 env = **SDK `getDefaultEnvironment()`（安全白名单：`PATH`/`HOME` 等）合并连接器 `env`**——**不注入完整 `process.env`**，避免把 `DEEPSEEK_API_KEY`/`JWT_SECRET` 等本服务密钥泄露给第三方 MCP 进程；连接器 `env` 覆盖同名键。
 - `connect()` 内做 `initialize`，超时上限 `MCP_INIT_TIMEOUT_MS`。
 
 ### 6.3 host.ts（`McpHost`）
@@ -188,7 +189,7 @@ interface McpTransport {
 ## 8. Web UI
 
 - **`/connectors` 页**：
-  - 列表：`name` · `command` · `enabled` 开关 · 工具数 · 状态徽标（`ready`/`error`）· 删除按钮。
+  - 列表：`name` · `command` · `enabled` 开关 · 工具数 · 最近校验时间 · 删除按钮。
   - 新增/编辑表单：`name` / `command` / `args`（按行或空格分割）/ `env`（键值对，值用密码框）；提交后同步等待校验结果，失败展示 `reason`。
   - 删除二次确认。
   - **非管理员**：只读（隐藏新增/编辑/删除入口）。
