@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { htmlToText, createWebFetchTool, isBlockedIp } from './web-fetch';
 
 /** 单测替身：把任意主机名解析成公网地址，避免真实 DNS 查询。 */
-const publicResolve = async () => '93.184.216.34';
+const publicResolve = async () => ['93.184.216.34'];
 
 describe('htmlToText', () => {
   it('剥离标签、脚本与多余空白', () => {
@@ -20,8 +20,25 @@ describe('htmlToText', () => {
 });
 
 describe('isBlockedIp', () => {
-  it('拦截环回/私网/链路本地/云元数据', () => {
-    for (const ip of ['127.0.0.1', '10.0.0.1', '172.16.0.1', '192.168.1.1', '169.254.169.254', '::1', 'fe80::1', 'fd00::1']) {
+  it('拦截环回/私网/链路本地/云元数据/保留段', () => {
+    for (const ip of [
+      '127.0.0.1',
+      '10.0.0.1',
+      '172.16.0.1',
+      '192.168.1.1',
+      '169.254.169.254',
+      '100.64.0.1',
+      '198.18.0.1',
+      '192.0.0.1',
+      '198.51.100.1',
+      '203.0.113.1',
+      '224.0.0.1',
+      '::1',
+      'fe80::1',
+      'fec0::1',
+      'fd00::1',
+      'ff02::1',
+    ]) {
       expect(isBlockedIp(ip), ip).toBe(true);
     }
   });
@@ -49,8 +66,15 @@ describe('createWebFetchTool', () => {
 
   it('主机解析到内网地址时拒绝，不发起请求', async () => {
     const fetcher = vi.fn(async () => new Response('x')) as unknown as typeof fetch;
-    const tool = createWebFetchTool(fetcher, async () => '169.254.169.254');
+    const tool = createWebFetchTool(fetcher, async () => ['169.254.169.254']);
     await expect(tool.execute({ url: 'https://metadata.example/' })).rejects.toThrow('blocked_host');
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it('多地址里只要含一条内网地址即拒绝', async () => {
+    const fetcher = vi.fn(async () => new Response('x')) as unknown as typeof fetch;
+    const tool = createWebFetchTool(fetcher, async () => ['93.184.216.34', '10.0.0.5']);
+    await expect(tool.execute({ url: 'https://mixed.example/' })).rejects.toThrow('blocked_host');
     expect(fetcher).not.toHaveBeenCalled();
   });
 
