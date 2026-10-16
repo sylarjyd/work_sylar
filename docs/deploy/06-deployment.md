@@ -81,6 +81,10 @@ flowchart LR
 | `S3_ENDPOINT` | `http://127.0.0.1:9000` | 云 S3 端点或内网 MinIO |
 | `S3_ACCESS_KEY` / `S3_SECRET_KEY` | `minioadmin` | **强凭证**，密管注入 |
 | `S3_BUCKET` | `artifacts` | 按需 |
+| `CONFIRM_TIMEOUT_MS` | `120000` | 确认等待上限，到点按拒绝兑现 |
+| `CODE_EXEC_TIMEOUT_MS` | `5000` | 沙箱单次执行墙钟上限 |
+| `CODE_EXEC_MAX_OLD_SPACE_MB` | `128` | 沙箱子进程堆上限 |
+| `CODE_EXEC_MAX_OUTPUT_BYTES` | `65536` | 沙箱 stdout 累计截断阈值 |
 | `NEXT_PUBLIC_BFF_URL` | `http://localhost:4000` | **构建期**注入（Next.js 公开变量），生产为对外 BFF 地址 |
 
 > `JWT_SECRET` 未设置时 BFF 会抛错（fail-fast）；`AGENT_RUNTIME_TOKEN` 未设置时 runtime 仅靠绑本机限制可达面——生产两者都必须设置。
@@ -247,6 +251,7 @@ server {
 - [ ] 加请求限流与租户配额（P7）。
 - [ ] 日志脱敏（不记录令牌、密码、密钥）。
 - [ ] 为 BFF 增加 `/health` 并配置探针。
+- [ ] `code.exec` 沙箱为「受限计算」而非强隔离：无 fs/网络/子进程已被 harness + Node 权限模型收口；若需更强隔离（防进程内 V8 漏洞），升级为容器沙箱。
 
 ---
 

@@ -42,6 +42,12 @@ pnpm --filter @ai-office/bff db:push    # 同步表结构
 - 成果区：产出物元数据落库（Postgres），文件存对象存储（MinIO/S3），工作台按会话列表并可下载
 - 下载鉴权：仅本租户本人可取，越权与未登录分别返回 404 / 401
 
+## M3 已具备
+
+- 工具权限：工具契约引入 `safe` / `confirm` / `blocked` 三级，`Tool.permission` 必填
+- 确认卡片：`confirm` 级工具（`code.exec`）在工作台下发内联卡片，用户允许/拒绝后 loop 继续
+- 代码沙箱：`code.exec` 在「子进程 + Node `--permission` + 受限 harness」中执行，无文件/网络/子进程，含超时与输出上限
+
 ## 包结构
 
 - `packages/shared` —— 协议类型与 SSE 编解码

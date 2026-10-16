@@ -147,7 +147,7 @@ CREATE TABLE "Step" (
     "id"      TEXT         NOT NULL DEFAULT gen_random_uuid(),
     "runId"   TEXT         NOT NULL,
     "seq"     INTEGER      NOT NULL,
-    "type"    TEXT         NOT NULL,  -- think | tool_call | tool_result | artifact
+    "type"    TEXT         NOT NULL,  -- think | tool_call | tool_result | artifact | confirm_request
     "payload" JSONB        NOT NULL,
     "ts"      TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT "Step_pkey" PRIMARY KEY ("id")
@@ -207,7 +207,7 @@ ALTER TABLE "Artifact"
 --    ALTER TABLE "Artifact" ADD CONSTRAINT "Artifact_size_check"
 --        CHECK ("size" >= 0);
 --    ALTER TABLE "Step" ADD CONSTRAINT "Step_type_check"
---        CHECK ("type" IN ('think', 'tool_call', 'tool_result', 'artifact'));
+--        CHECK ("type" IN ('think', 'tool_call', 'tool_result', 'artifact', 'confirm_request'));
 --    ALTER TABLE "Run"  ADD CONSTRAINT "Run_status_check"
 --        CHECK ("status" IN ('running', 'done', 'failed'));
 --    ALTER TABLE "Task" ADD CONSTRAINT "Task_status_check"
