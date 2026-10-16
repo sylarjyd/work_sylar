@@ -48,6 +48,20 @@ describe('renderStep', () => {
     expect(out).toContain('来源');
   });
 
+  it('kb.retrieve 来源 score 非数字时不抛错且仍展示文档引用', () => {
+    let out = '';
+    expect(() => {
+      out = renderStep(
+        ev('tool_result', {
+          tool: 'kb.retrieve',
+          ok: true,
+          display: { sources: [{ docName: 'a.txt', seq: 1, score: 'oops' }] },
+        }),
+      );
+    }).not.toThrow();
+    expect(out).toContain('a.txt#1');
+  });
+
   it('kb.retrieve 无命中时提示无匹配', () => {
     const out = renderStep(ev('tool_result', { tool: 'kb.retrieve', ok: true, display: { sources: [] } }));
     expect(out).toContain('无匹配');

@@ -17,7 +17,7 @@ export function renderStep(ev: AgentEvent): string {
           score: number;
         }[];
         if (sources.length === 0) return '工具 kb.retrieve 成功（知识库无匹配内容）';
-        const list = sources.map((s) => `${s.docName}#${s.seq}（${s.score.toFixed(2)}）`).join('、');
+        const list = sources.map((s) => `${s.docName}#${s.seq}（${Number(s.score).toFixed(2)}）`).join('、');
         return `工具 kb.retrieve 成功 · 来源 ${sources.length} 条：${list}`;
       }
       return `工具 ${tool} ${ev.payload.ok ? '成功' : '失败'}`;

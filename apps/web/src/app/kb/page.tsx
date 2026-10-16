@@ -46,7 +46,7 @@ export default function KbPage() {
     setError('');
     try {
       const doc = await uploadKbDoc(file);
-      setDocs((prev) => [doc, ...prev]);
+      setDocs((prev) => [doc, ...prev.filter((d) => d.id !== doc.id)]);
       if (fileRef.current) fileRef.current.value = '';
     } catch (err) {
       if (isUnauthorized(err)) {
