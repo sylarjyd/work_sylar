@@ -479,4 +479,60 @@ describe('POST /connectors/validate', () => {
       await new Promise<void>((r) => server.close(() => r()));
     }
   });
+
+  it('缺少 token 时回 401', async () => {
+    const prev = process.env.AGENT_RUNTIME_TOKEN;
+    process.env.AGENT_RUNTIME_TOKEN = 'secret';
+    const server = createRuntimeServer({
+      gateway: stubGateway,
+      tools: [],
+      validateConnector: async () => [],
+    });
+    const base = await listen(server);
+    try {
+      const res = await fetch(`${base}/connectors/validate`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ command: 'node' }),
+      });
+      expect(res.status).toBe(401);
+      expect(await res.json()).toEqual({ error: 'unauthorized' });
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()));
+      if (prev === undefined) delete process.env.AGENT_RUNTIME_TOKEN;
+      else process.env.AGENT_RUNTIME_TOKEN = prev;
+    }
+  });
+
+  it('非法 JSON 回 400 invalid json', async () => {
+    const server = createRuntimeServer({ gateway: stubGateway, tools: [], validateConnector: async () => [] });
+    const base = await listen(server);
+    try {
+      const res = await fetch(`${base}/connectors/validate`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: 'not-json',
+      });
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ ok: false, error: 'invalid json' });
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  });
+
+  it('缺少 command 回 400 missing_command（对象命令也算缺失）', async () => {
+    const server = createRuntimeServer({ gateway: stubGateway, tools: [], validateConnector: async () => [] });
+    const base = await listen(server);
+    try {
+      const res = await fetch(`${base}/connectors/validate`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ command: { evil: true } }),
+      });
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ ok: false, error: 'missing_command' });
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  });
 });

@@ -212,8 +212,11 @@ export function createRuntimeServer(deps: RuntimeDeps = {}): Server {
             res.end(JSON.stringify({ ok: false, error: 'invalid json' }));
             return;
           }
-          const command = String(payload.command ?? '');
-          const args = Array.isArray(payload.args) ? payload.args.map(String) : [];
+          const command = typeof payload.command === 'string' ? payload.command : '';
+          const args =
+            Array.isArray(payload.args) && payload.args.every((a) => typeof a === 'string')
+              ? payload.args
+              : [];
           const env = isStringRecord(payload.env) ? payload.env : {};
           if (!command) {
             res.writeHead(400, { 'content-type': 'application/json' });
