@@ -14,12 +14,16 @@ import { createStorage, type Storage } from './storage/s3';
 import { createEmbeddingGateway } from './embedding/create-embedding-gateway';
 import type { EmbeddingGateway } from './embedding/types';
 import { ingest } from './kb/ingest';
+import { validateConnector as defaultValidateConnector } from './mcp/validate';
+import type { McpToolInfo } from '@ai-office/shared';
 
 export interface RuntimeDeps {
   gateway?: ModelGateway;
   tools?: Tool[];
   storage?: Storage;
   embedding?: EmbeddingGateway;
+  /** 校验连接器的实现；测试可注入桩。 */
+  validateConnector?: typeof defaultValidateConnector;
 }
 
 export function createRuntimeServer(deps: RuntimeDeps = {}): Server {
@@ -27,6 +31,7 @@ export function createRuntimeServer(deps: RuntimeDeps = {}): Server {
   const storage = deps.storage ?? createStorage();
   const tools = deps.tools ?? createTools(process.env, storage);
   const embedding = deps.embedding ?? createEmbeddingGateway();
+  const validateConn = deps.validateConnector ?? defaultValidateConnector;
   // runtime 单实例持有一份确认闸门；连接 close 时按 runId 取消挂起。
   const confirm = new ConfirmBroker();
   const confirmTimeoutMs = Number(process.env.CONFIRM_TIMEOUT_MS ?? 120000);
@@ -185,6 +190,53 @@ export function createRuntimeServer(deps: RuntimeDeps = {}): Server {
       return;
     }
 
+    if (req.method === 'POST' && req.url === '/connectors/validate') {
+      if (!authorized(req)) {
+        res.writeHead(401, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: 'unauthorized' }));
+        return;
+      }
+      let body = '';
+      req.on('data', (chunk) => (body += chunk));
+      req.on('end', () => {
+        void (async () => {
+          let payload: { command?: unknown; args?: unknown; env?: unknown };
+          try {
+            const parsed: unknown = JSON.parse(body || '{}');
+            if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+              throw new Error('not_object');
+            }
+            payload = parsed as typeof payload;
+          } catch {
+            res.writeHead(400, { 'content-type': 'application/json' });
+            res.end(JSON.stringify({ ok: false, error: 'invalid json' }));
+            return;
+          }
+          const command = String(payload.command ?? '');
+          const args = Array.isArray(payload.args) ? payload.args.map(String) : [];
+          const env = isStringRecord(payload.env) ? payload.env : {};
+          if (!command) {
+            res.writeHead(400, { 'content-type': 'application/json' });
+            res.end(JSON.stringify({ ok: false, error: 'missing_command' }));
+            return;
+          }
+          try {
+            const tools: McpToolInfo[] = await validateConn(
+              { command, args, env },
+              { initTimeoutMs: Number(process.env.MCP_INIT_TIMEOUT_MS ?? 10000) },
+            );
+            res.writeHead(200, { 'content-type': 'application/json' });
+            res.end(JSON.stringify({ ok: true, tools }));
+          } catch (err) {
+            // 校验失败是预期内业务结果，回 200 + ok:false，由 BFF 映射为 400。
+            res.writeHead(200, { 'content-type': 'application/json' });
+            res.end(JSON.stringify({ ok: false, error: (err as Error).message }));
+          }
+        })();
+      });
+      return;
+    }
+
     res.writeHead(404, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ error: 'not found' }));
   });
@@ -209,4 +261,13 @@ if (isEntry) {
   createRuntimeServer({ storage }).listen(port, host, () => {
     console.log(`agent-runtime listening on http://${host}:${port}`);
   });
+}
+
+function isStringRecord(v: unknown): v is Record<string, string> {
+  return (
+    typeof v === 'object' &&
+    v !== null &&
+    !Array.isArray(v) &&
+    Object.values(v as Record<string, unknown>).every((x) => typeof x === 'string')
+  );
 }

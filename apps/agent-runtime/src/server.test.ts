@@ -427,3 +427,56 @@ describe('runtime 摄取端点', () => {
     expect((await res.json()).ok).toBe(false);
   });
 });
+
+describe('POST /connectors/validate', () => {
+  const stubGateway: ModelGateway = {
+    async chat() { return { content: '', toolCalls: [], usage: { input: 0, output: 0 } }; },
+  };
+
+  async function listen(server: Server): Promise<string> {
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
+    const addr = server.address();
+    if (!addr || typeof addr === 'string') throw new Error('no port');
+    return `http://127.0.0.1:${addr.port}`;
+  }
+
+  it('通过：回 { ok:true, tools }', async () => {
+    const server = createRuntimeServer({
+      gateway: stubGateway,
+      tools: [],
+      validateConnector: async () => [{ name: 'echo', description: 'd', inputSchema: { type: 'object' } }],
+    });
+    const base = await listen(server);
+    try {
+      const res = await fetch(`${base}/connectors/validate`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ command: 'node', args: ['s.mjs'], env: {} }),
+      });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({ ok: true, tools: [{ name: 'echo' }] });
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  });
+
+  it('失败：回 { ok:false, error }', async () => {
+    const server = createRuntimeServer({
+      gateway: stubGateway,
+      tools: [],
+      validateConnector: async () => { throw new Error('spawn_failed'); },
+    });
+    const base = await listen(server);
+    try {
+      const res = await fetch(`${base}/connectors/validate`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ command: 'nope' }),
+      });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ ok: false, error: 'spawn_failed' });
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  });
+});
