@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../db/prisma.service';
 import { SessionsService } from '../sessions/sessions.service';
@@ -62,5 +62,14 @@ export class TasksService {
         data: { sessionId, role: 'assistant', content: assistantText, seq: count },
       });
     }
+  }
+
+  /** 校验 run 归属（run → task → session 逐级收敛到 tenant/user）：非本租户本人一律 404，不泄露存在性。 */
+  async assertRunOwned(runId: string, tenantId: string, userId: string): Promise<void> {
+    const run = await this.prisma.run.findFirst({
+      where: { id: runId, task: { session: { tenantId, userId } } },
+      select: { id: true },
+    });
+    if (!run) throw new NotFoundException('run_not_found');
   }
 }

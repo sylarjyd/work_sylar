@@ -1,0 +1,152 @@
+import 'reflect-metadata';
+import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { Test } from '@nestjs/testing';
+import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
+import { createServer, type Server } from 'node:http';
+import { RunsController } from './runs.controller';
+import { TasksService } from '../tasks/tasks.service';
+import { SessionsService } from '../sessions/sessions.service';
+import { PrismaService } from '../db/prisma.service';
+import { signToken } from '../auth/jwt';
+
+let app: NestFastifyApplication;
+let upstream: Server;
+let runtimeUrl: string;
+let upstreamStatus = 200;
+let upstreamBody = JSON.stringify({ ok: true, matched: true });
+
+// 归属：仅 r1 属 t1/u1；嵌套关系过滤由假库按 where 结构模拟。
+const ownedRun = { id: 'r1' };
+const fakePrisma = {
+  run: {
+    findFirst: async ({
+      where,
+    }: {
+      where: { id: string; task?: { session?: { tenantId?: string; userId?: string } } };
+    }) => {
+      const s = where.task?.session;
+      return where.id === ownedRun.id && s?.tenantId === 't1' && s?.userId === 'u1'
+        ? { id: 'r1' }
+        : null;
+    },
+  },
+} as unknown as PrismaService;
+
+beforeAll(async () => {
+  process.env.JWT_SECRET = 'test-secret';
+
+  upstream = createServer((_req, res) => {
+    res.writeHead(upstreamStatus, { 'content-type': 'application/json' });
+    res.end(upstreamBody);
+  });
+  await new Promise<void>((r) => upstream.listen(0, r));
+  const addr = upstream.address();
+  if (!addr || typeof addr === 'string') throw new Error('no port');
+  runtimeUrl = `http://127.0.0.1:${addr.port}`;
+  process.env.AGENT_RUNTIME_URL = runtimeUrl;
+
+  const moduleRef = await Test.createTestingModule({
+    controllers: [RunsController],
+    providers: [
+      TasksService,
+      SessionsService,
+      { provide: PrismaService, useValue: fakePrisma },
+    ],
+  }).compile();
+  app = moduleRef.createNestApplication<NestFastifyApplication>(new FastifyAdapter());
+  await app.init();
+  await app.getHttpAdapter().getInstance().ready();
+});
+
+beforeEach(() => {
+  upstreamStatus = 200;
+  upstreamBody = JSON.stringify({ ok: true, matched: true });
+  delete process.env.AGENT_RUNTIME_TOKEN;
+  process.env.AGENT_RUNTIME_URL = runtimeUrl;
+});
+
+afterAll(async () => {
+  await app.close();
+  await new Promise<void>((r) => upstream.close(() => r()));
+});
+
+const token = () => signToken({ sub: 'u1', tenantId: 't1' });
+const auth = () => ({ authorization: `Bearer ${token()}` });
+
+describe('RunsController', () => {
+  it('未鉴权返回 401', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/runs/r1/confirm',
+      payload: { confirmId: 'c1', approved: true },
+    });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('非本用户的 run 返回 404', async () => {
+    const other = signToken({ sub: 'u2', tenantId: 't2' });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/runs/r1/confirm',
+      headers: { authorization: `Bearer ${other}` },
+      payload: { confirmId: 'c1', approved: true },
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('body 非法返回 400（不转发上游）', async () => {
+    for (const payload of [{}, { confirmId: '', approved: true }, { confirmId: 'c1', approved: 'x' }]) {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/runs/r1/confirm',
+        headers: auth(),
+        payload,
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toEqual({ error: 'invalid_decision' });
+    }
+  });
+
+  it('合法请求转发上游并回传其 200 结果', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/runs/r1/confirm',
+      headers: auth(),
+      payload: { confirmId: 'c1', approved: true },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true, matched: true });
+  });
+
+  it('上游非 2xx 时透传其状态码', async () => {
+    upstreamStatus = 500;
+    upstreamBody = JSON.stringify({ error: 'boom' });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/runs/r1/confirm',
+      headers: auth(),
+      payload: { confirmId: 'c1', approved: true },
+    });
+    expect(res.statusCode).toBe(500);
+  });
+
+  it('上游不可达返回 502', async () => {
+    const deadPort = await new Promise<number>((resolve) => {
+      const probe = createServer();
+      probe.listen(0, '127.0.0.1', () => {
+        const a = probe.address();
+        const port = typeof a === 'object' && a ? a.port : 0;
+        probe.close(() => resolve(port));
+      });
+    });
+    process.env.AGENT_RUNTIME_URL = `http://127.0.0.1:${deadPort}`;
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/runs/r1/confirm',
+      headers: auth(),
+      payload: { confirmId: 'c1', approved: true },
+    });
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toEqual({ error: 'upstream_unreachable' });
+  });
+});
