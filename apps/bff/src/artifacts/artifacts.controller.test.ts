@@ -129,5 +129,8 @@ describe('contentDisposition', () => {
     expect(h).not.toMatch(/[\r\n]/);
     expect(h).toContain('attachment;');
     expect(h).toContain("filename*=UTF-8''");
+    const fallback = h.match(/filename="([^"]*)"/);
+    expect(fallback).not.toBeNull();
+    expect(fallback![1]).not.toMatch(/[\\"]/);
   });
 });
