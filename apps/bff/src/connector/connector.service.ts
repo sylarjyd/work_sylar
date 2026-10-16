@@ -54,20 +54,25 @@ export class ConnectorService {
     const args = input.args ?? [];
     const env = input.env ?? {};
     const tools = await this.validateRuntime(input.command, args, env);
-    const row = await this.prisma.connector.create({
-      data: {
-        tenantId,
-        name: input.name,
-        command: input.command,
-        args,
-        envEncrypted: encrypt(JSON.stringify(env)),
-        enabled: true,
-        toolCount: tools.length,
-        lastValidatedAt: new Date(),
-        createdBy,
-      },
-    });
-    return toDto(row);
+    try {
+      const row = await this.prisma.connector.create({
+        data: {
+          tenantId,
+          name: input.name,
+          command: input.command,
+          args,
+          envEncrypted: encrypt(JSON.stringify(env)),
+          enabled: true,
+          toolCount: tools.length,
+          lastValidatedAt: new Date(),
+          createdBy,
+        },
+      });
+      return toDto(row);
+    } catch (e) {
+      if (isUniqueViolation(e)) throw new ConflictException('duplicate_name');
+      throw e;
+    }
   }
 
   async list(tenantId: string): Promise<ConnectorDto[]> {
@@ -81,6 +86,11 @@ export class ConnectorService {
   async update(id: string, tenantId: string, patch: ConnectorPatch): Promise<ConnectorDto> {
     const row = await this.prisma.connector.findFirst({ where: { id, tenantId } });
     if (!row) throw new NotFoundException('connector_not_found');
+
+    if (patch.name !== undefined && patch.name !== row.name) {
+      const dup = await this.prisma.connector.findFirst({ where: { tenantId, name: patch.name } });
+      if (dup) throw new ConflictException('duplicate_name');
+    }
 
     const data: Record<string, unknown> = {};
     if (patch.name !== undefined) data.name = patch.name;
@@ -102,8 +112,13 @@ export class ConnectorService {
       data.lastValidatedAt = new Date();
     }
 
-    const updated = await this.prisma.connector.update({ where: { id }, data });
-    return toDto(updated);
+    try {
+      const updated = await this.prisma.connector.update({ where: { id }, data });
+      return toDto(updated);
+    } catch (e) {
+      if (isUniqueViolation(e)) throw new ConflictException('duplicate_name');
+      throw e;
+    }
   }
 
   async remove(id: string, tenantId: string): Promise<void> {
@@ -151,10 +166,23 @@ export class ConnectorService {
       await res.body?.cancel().catch(() => undefined);
       throw new ValidateFailedError(`runtime_http_${res.status}`);
     }
-    const data = (await res.json()) as { ok: boolean; tools?: McpToolInfo[]; error?: string };
-    if (!data.ok) throw new ValidateFailedError(data.error ?? 'validate_failed');
+    let data: { ok: boolean; tools?: McpToolInfo[]; error?: string };
+    try {
+      data = (await res.json()) as { ok: boolean; tools?: McpToolInfo[]; error?: string };
+    } catch {
+      throw new ValidateFailedError('invalid_response');
+    }
+    if (!data.ok) {
+      // 不透传 runtime 原始错误：其内容可能回显 command/env，构成密钥泄露面，仅记服务端日志。
+      this.logger.warn(`连接器校验失败：${data.error ?? 'unknown'}`);
+      throw new ValidateFailedError('validate_failed');
+    }
     return data.tools ?? [];
   }
+}
+
+function isUniqueViolation(e: unknown): boolean {
+  return typeof e === 'object' && e !== null && (e as { code?: unknown }).code === 'P2002';
 }
 
 function readStringArray(v: unknown): string[] {

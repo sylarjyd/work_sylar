@@ -94,6 +94,15 @@ describe('ConnectorService.create', () => {
     );
     expect(rows).toHaveLength(0);
   });
+
+  it('runtime 校验失败不泄漏原始错误，message 为固定码', async () => {
+    runtimeOk = false;
+    const err = await makeService()
+      .create({ name: 'bad', command: 'nope' }, 't1', 'u1')
+      .catch((e) => e);
+    expect(err).toBeInstanceOf(ValidateFailedError);
+    expect(err.message).toBe('validate_failed');
+  });
 });
 
 describe('ConnectorService.list / remove / listEnabled', () => {
@@ -106,8 +115,10 @@ describe('ConnectorService.list / remove / listEnabled', () => {
     expect((out[0] as { env?: unknown }).env).toBeUndefined();
   });
 
-  it('remove 跨租户/不存在抛 NotFound', async () => {
-    await expect(makeService().remove('missing', 't1')).rejects.toBeInstanceOf(NotFoundException);
+  it('remove 跨租户抛 NotFound 且行仍在', async () => {
+    rows.push({ id: 'cX', tenantId: 't9', name: 'x', command: 'node', args: [], envEncrypted: encrypt('{}'), enabled: true, toolCount: 0, lastValidatedAt: null, createdAt: new Date() });
+    await expect(makeService().remove('cX', 't1')).rejects.toBeInstanceOf(NotFoundException);
+    expect(rows.some((r) => r.id === 'cX')).toBe(true);
   });
 
   it('listEnabled 返回解密 env 的启用连接器', async () => {
@@ -135,7 +146,17 @@ describe('ConnectorService.update', () => {
     expect(dto).toMatchObject({ enabled: false });
   });
 
-  it('跨租户 update 抛 NotFound', async () => {
-    await expect(makeService().update('c1', 'tX', { enabled: false })).rejects.toBeInstanceOf(NotFoundException);
+  it('改名撞重名抛 Conflict，不触发校验且原名不变', async () => {
+    rows.push({ id: 'c1', tenantId: 't1', name: 'a', command: 'node', args: [], envEncrypted: encrypt('{}'), enabled: true, toolCount: 0, lastValidatedAt: null, createdAt: new Date() });
+    rows.push({ id: 'c2', tenantId: 't1', name: 'b', command: 'node', args: [], envEncrypted: encrypt('{}'), enabled: true, toolCount: 0, lastValidatedAt: null, createdAt: new Date() });
+    await expect(makeService().update('c1', 't1', { name: 'b' })).rejects.toBeInstanceOf(ConflictException);
+    expect(runtimeCalls).toHaveLength(0);
+    expect(rows.find((r) => r.id === 'c1')!.name).toBe('a');
+  });
+
+  it('跨租户 update 抛 NotFound 且行仍在', async () => {
+    rows.push({ id: 'cX', tenantId: 't9', name: 'x', command: 'node', args: [], envEncrypted: encrypt('{}'), enabled: true, toolCount: 0, lastValidatedAt: null, createdAt: new Date() });
+    await expect(makeService().update('cX', 't1', { enabled: false })).rejects.toBeInstanceOf(NotFoundException);
+    expect(rows.some((r) => r.id === 'cX')).toBe(true);
   });
 });
