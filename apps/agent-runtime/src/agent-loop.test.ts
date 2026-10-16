@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { runAgent } from './agent-loop';
 import type { ModelGateway } from './model/types';
 import type { Tool } from './tools/types';
+import type { ConfirmGate } from './confirm/broker';
 import type { AgentEvent, RunRequest } from '@ai-office/shared';
 
 function collect(gen: AsyncGenerator<AgentEvent>): Promise<AgentEvent[]> {
@@ -264,4 +265,139 @@ describe('runAgent', () => {
     const events = await collect(runAgent(req, { gateway, tools: [weirdTool] }));
     expect(events.some((e) => e.type === 'artifact')).toBe(false);
   });
+
+  it('confirm 工具：先出 confirm_request，放行后执行并回填 approved', async () => {
+    let executed = false;
+    const tool: Tool = {
+      name: 'code.exec',
+      description: 'd',
+      parameters: {},
+      permission: 'confirm',
+      async execute() {
+        executed = true;
+        return { stdout: 'sandbox-ok' };
+      },
+    };
+    const gateway = oneShotGateway({ id: 'c1', name: 'code.exec', args: { code: '1+1' } });
+    const events = await collect(runAgent(req, { gateway, tools: [tool], confirm: stubGate(true) }));
+
+    expect(events.map((e) => e.type)).toEqual([
+      'think',
+      'tool_call',
+      'confirm_request',
+      'tool_result',
+      'think',
+    ]);
+    const cr = events.find((e) => e.type === 'confirm_request')!;
+    expect(typeof cr.payload.confirmId).toBe('string');
+    expect(cr.payload).toMatchObject({ tool: 'code.exec', args: { code: '1+1' } });
+    const tr = events.find((e) => e.type === 'tool_result')!;
+    expect(tr.payload).toMatchObject({ tool: 'code.exec', ok: true, approved: true });
+    expect(executed).toBe(true);
+  });
+
+  it('confirm 工具：拒绝则不执行，回填 denied', async () => {
+    let executed = false;
+    const tool: Tool = {
+      name: 'code.exec',
+      description: 'd',
+      parameters: {},
+      permission: 'confirm',
+      async execute() {
+        executed = true;
+        return { stdout: 'never' };
+      },
+    };
+    const gateway = oneShotGateway({ id: 'c1', name: 'code.exec', args: {} });
+    const events = await collect(runAgent(req, { gateway, tools: [tool], confirm: stubGate(false) }));
+
+    const tr = events.find((e) => e.type === 'tool_result')!;
+    expect(tr.payload).toMatchObject({ ok: false, denied: true, reason: 'user_denied' });
+    expect(executed).toBe(false);
+  });
+
+  it('confirm 工具：超时回填 reason=confirm_timeout', async () => {
+    const tool: Tool = {
+      name: 'code.exec',
+      description: 'd',
+      parameters: {},
+      permission: 'confirm',
+      async execute() {
+        return { stdout: 'never' };
+      },
+    };
+    const gateway = oneShotGateway({ id: 'c1', name: 'code.exec', args: {} });
+    const events = await collect(
+      runAgent(req, { gateway, tools: [tool], confirm: stubGate(false, 'confirm_timeout') }),
+    );
+    const tr = events.find((e) => e.type === 'tool_result')!;
+    expect(tr.payload).toMatchObject({ ok: false, denied: true, reason: 'confirm_timeout' });
+  });
+
+  it('confirm 工具：未注入闸门时 fail-safe 拒绝，不执行', async () => {
+    let executed = false;
+    const tool: Tool = {
+      name: 'code.exec',
+      description: 'd',
+      parameters: {},
+      permission: 'confirm',
+      async execute() {
+        executed = true;
+        return { stdout: 'never' };
+      },
+    };
+    const gateway = oneShotGateway({ id: 'c1', name: 'code.exec', args: {} });
+    // 不传 confirm：老调用方（如既有单测）不应被静默放行。
+    const events = await collect(runAgent(req, { gateway, tools: [tool] }));
+    const tr = events.find((e) => e.type === 'tool_result')!;
+    expect(tr.payload).toMatchObject({ ok: false, denied: true, reason: 'user_denied' });
+    expect(executed).toBe(false);
+  });
+
+  it('blocked 工具：不执行，回填 blocked', async () => {
+    let executed = false;
+    const tool: Tool = {
+      name: 'danger',
+      description: 'd',
+      parameters: {},
+      permission: 'blocked',
+      async execute() {
+        executed = true;
+        return {};
+      },
+    };
+    const gateway = oneShotGateway({ id: 'c1', name: 'danger', args: {} });
+    const events = await collect(runAgent(req, { gateway, tools: [tool] }));
+    const tr = events.find((e) => e.type === 'tool_result')!;
+    expect(tr.payload).toMatchObject({ ok: false, blocked: true });
+    expect(executed).toBe(false);
+  });
 });
+
+/** 第一轮发起一次工具调用、第二轮收尾的桩网关。 */
+function oneShotGateway(call: {
+  id: string;
+  name: string;
+  args: Record<string, unknown>;
+}): ModelGateway {
+  let round = 0;
+  return {
+    async chat() {
+      round++;
+      if (round === 1) {
+        return { content: '执行', toolCalls: [call], usage: { input: 0, output: 0 } };
+      }
+      return { content: '收尾', toolCalls: [], usage: { input: 0, output: 0 } };
+    },
+  };
+}
+
+/** 立即兑现的桩闸门，避免测试里真的挂起。 */
+function stubGate(approved: boolean, reason?: 'user_denied' | 'confirm_timeout'): ConfirmGate {
+  return {
+    request: async () =>
+      approved ? { approved: true } : { approved: false, reason: reason ?? 'user_denied' },
+    resolve: () => false,
+    cancel: () => {},
+  };
+}

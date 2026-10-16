@@ -1,5 +1,7 @@
+import { randomUUID } from 'node:crypto';
 import type { AgentEvent, RunRequest } from '@ai-office/shared';
 import type { ModelGateway, ModelMessage } from './model/types';
+import type { ConfirmGate } from './confirm/broker';
 import type { RunContext, Tool } from './tools/types';
 
 export interface RunDeps {
@@ -7,9 +9,14 @@ export interface RunDeps {
   tools: Tool[];
   maxRounds?: number;
   onUsage?: (usage: { input: number; output: number }) => void;
+  /** 确认闸门：confirm 级工具执行前挂起等待用户决策；未注入时按拒绝处理（fail-safe）。 */
+  confirm?: ConfirmGate;
+  /** 确认等待上限（毫秒）。 */
+  confirmTimeoutMs?: number;
 }
 
 const DEFAULT_MAX_ROUNDS = 8;
+const DEFAULT_CONFIRM_TIMEOUT_MS = 120000;
 
 /**
  * plan → act → observe 循环（上游 §5.1 的 M1 精简实现）。
@@ -61,14 +68,41 @@ export async function* runAgent(req: RunRequest, deps: RunDeps): AsyncGenerator<
       const tool = deps.tools.find((t) => t.name === call.name);
       let ok = true;
       let result: unknown;
+      const extra: Record<string, unknown> = {};
       try {
         if (!tool) throw new Error(`unknown_tool:${call.name}`);
-        result = await tool.execute(call.args, ctx);
+        if (tool.permission === 'blocked') {
+          ok = false;
+          extra.blocked = true;
+          result = { error: 'blocked' };
+        } else if (tool.permission === 'confirm') {
+          const confirmId = randomUUID();
+          // 不变式：confirm_request 必须在 await 之前 yield，否则卡片无法下发、BFF 无从落库。
+          yield step('confirm_request', { confirmId, tool: call.name, args: call.args });
+          const decision = deps.confirm
+            ? await deps.confirm.request(
+                req.runId,
+                confirmId,
+                deps.confirmTimeoutMs ?? DEFAULT_CONFIRM_TIMEOUT_MS,
+              )
+            : { approved: false, reason: 'user_denied' as const };
+          if (decision.approved) {
+            extra.approved = true;
+            result = await tool.execute(call.args, ctx);
+          } else {
+            ok = false;
+            extra.denied = true;
+            extra.reason = decision.reason ?? 'user_denied';
+            result = { denied: true, reason: extra.reason };
+          }
+        } else {
+          result = await tool.execute(call.args, ctx);
+        }
       } catch (err) {
         ok = false;
         result = { error: String(err) };
       }
-      yield step('tool_result', { tool: call.name, ok, preview: preview(result) });
+      yield step('tool_result', { tool: call.name, ok, preview: preview(result), ...extra });
       // 工具产出物：除 tool_result 外再补一条 artifact step，供 BFF 落库、web 成果区即时渲染。
       const artifact = ok ? extractArtifact(result) : undefined;
       if (artifact) {
