@@ -49,11 +49,21 @@ export class StdioMcpTransport implements McpTransport {
       args: this.cfg.args,
       env: buildChildEnv(this.cfg.env),
     });
-    await withTimeout(this.client.connect(transport), this.opts.initTimeoutMs, 'mcp_init');
+    try {
+      await withTimeout(this.client.connect(transport), this.opts.initTimeoutMs, 'mcp_init');
+    } catch (err) {
+      // 初始化失败（含超时）时 SDK 已 spawn 子进程，必须 close 回收，否则遗留孤儿子进程
+      await this.client.close().catch(() => {});
+      throw err;
+    }
   }
 
   async listTools(): Promise<McpToolInfo[]> {
-    const { tools } = await this.client.listTools();
+    const { tools } = await withTimeout(
+      this.client.listTools(),
+      this.opts.callTimeoutMs,
+      'mcp_list_tools',
+    );
     return tools.map((t) => ({
       name: t.name,
       description: t.description ?? '',
@@ -76,7 +86,7 @@ export class StdioMcpTransport implements McpTransport {
   }
 
   async ping(): Promise<void> {
-    await this.client.ping();
+    await withTimeout(this.client.ping(), this.opts.callTimeoutMs, 'mcp_ping');
   }
 
   async close(): Promise<void> {
