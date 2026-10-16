@@ -95,6 +95,14 @@ export class KbService {
    * 并把 doc 置 ready。任一步失败抛错，由调用方置 failed。
    */
   async ingest(target: IngestTarget): Promise<void> {
+    // 归属校验：切片与状态一律针对「属于该 tenant/user 的文档」写入，
+    // 杜绝调用方传入错配的 tenant/user 造成跨租户写入（与 remove 同款前置校验）。
+    const owned = await this.prisma.kbDoc.findFirst({
+      where: { id: target.id, tenantId: target.tenantId, userId: target.userId },
+      select: { id: true },
+    });
+    if (!owned) throw new NotFoundException('doc_not_found');
+
     const doFetch = this.cfg.fetchImpl ?? fetch;
     const base = this.cfg.runtimeUrl ?? process.env.AGENT_RUNTIME_URL ?? 'http://localhost:4001';
     const token = this.cfg.runtimeToken ?? process.env.AGENT_RUNTIME_TOKEN;
@@ -144,10 +152,13 @@ export class KbService {
     });
   }
 
-  /** 摄取失败收尾：置 failed + error（best-effort，落库失败不再抛）。 */
-  async markFailed(id: string, error: string): Promise<void> {
+  /** 摄取失败收尾：置 failed + error（best-effort，落库失败不再抛）；按 tenant/user 限定，避免越权改动他人文档。 */
+  async markFailed(id: string, tenantId: string, userId: string, error: string): Promise<void> {
     try {
-      await this.prisma.kbDoc.update({ where: { id }, data: { status: 'failed', error } });
+      await this.prisma.kbDoc.updateMany({
+        where: { id, tenantId, userId },
+        data: { status: 'failed', error },
+      });
     } catch (err) {
       this.logger.error(`kb doc ${id} 置 failed 失败: ${(err as Error).message}`);
     }

@@ -31,6 +31,7 @@ const fakePrisma = {
     findFirst: async ({ where }: { where: { id: string } }) =>
       docRows.find((r) => r.id === where.id) ?? null,
     update: async ({ data }: { data: Record<string, unknown> }) => ({ ...data }),
+    updateMany: async () => ({ count: 0 }),
     delete: async () => ({}),
   },
   kbChunk: {
@@ -128,6 +129,20 @@ describe('KbService.remove', () => {
 });
 
 describe('KbService.ingest', () => {
+  beforeEach(() => {
+    // 归属校验要求文档存在且属于该 tenant/user。
+    docRows = [{ id: 'd1', tenantId: 't1', userId: 'u1' }];
+  });
+
+  it('归属校验：非本人/不存在文档抛 NotFound，不调 runtime、不写切片', async () => {
+    docRows = [];
+    await expect(
+      makeService().ingest({ id: 'd1', tenantId: 't1', userId: 'u1', filename: 'a.txt', mime: 'text/plain', storageKey: 'k' }),
+    ).rejects.toBeInstanceOf(NotFoundException);
+    expect(runtimeCalls).toHaveLength(0);
+    expect(execCalls).toHaveLength(0);
+  });
+
   it('摄取成功：写入切片（向量字面量）并置 ready', async () => {
     runtimeBody = JSON.stringify({
       ok: true,

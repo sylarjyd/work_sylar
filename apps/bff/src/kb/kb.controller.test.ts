@@ -34,8 +34,10 @@ const fakePrisma = {
       return {};
     },
     update: async () => ({}),
+    updateMany: async () => ({ count: 0 }),
   },
   kbChunk: { deleteMany: async () => ({ count: 0 }) },
+  $transaction: async (cb: (tx: unknown) => Promise<unknown>) => cb(fakePrisma),
   $queryRaw: async () => [],
   $executeRaw: async () => 1,
 } as unknown as PrismaService;
@@ -51,7 +53,7 @@ beforeAll(async () => {
       {
         provide: KbService,
         useFactory: () =>
-          new KbService(fakePrisma, fakeStorage, {
+          new KbService(fakePrisma, {
             runtimeUrl: 'http://runtime',
             fetchImpl: (async () => new Response(JSON.stringify({ ok: true, chunks: [] }), { status: 200 })) as unknown as typeof fetch,
           }),
@@ -164,12 +166,31 @@ describe('InternalKbController', () => {
     }
   });
 
-  it('未配置 INTERNAL_TOKEN 时不校验（本地）', async () => {
+  it('未配置 INTERNAL_TOKEN 时仅放行回环来源（inject 即回环）', async () => {
     const res = await app.inject({
       method: 'POST',
       url: '/internal/kb/search',
       payload: { vector: [1], topK: 5, tenantId: 't1', userId: 'u1' },
     });
     expect(res.statusCode).toBe(200);
+  });
+
+  it('向量形状非法返回 400', async () => {
+    for (const vector of [[], 'x', [1, 'a'], [1, null]]) {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/internal/kb/search',
+        payload: { vector, topK: 5, tenantId: 't1', userId: 'u1' },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toEqual({ error: 'invalid_params' });
+    }
+  });
+
+  it('tenant/user 缺失或非字符串返回 400', async () => {
+    for (const payload of [{ vector: [1] }, { vector: [1], tenantId: 't1' }, { vector: [1], tenantId: 1, userId: 'u1' }]) {
+      const res = await app.inject({ method: 'POST', url: '/internal/kb/search', payload });
+      expect(res.statusCode).toBe(400);
+    }
   });
 });

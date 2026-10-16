@@ -16,6 +16,7 @@ import type { FastifyRequest, FastifyReply } from 'fastify';
 import type { MultipartFile } from '@fastify/multipart';
 import type { KbDocDto } from '@ai-office/shared';
 import { KbService } from './kb.service';
+import { sanitizeFilename } from './filename';
 import { KB_STORAGE, type KbStorage } from './storage';
 import { Inject } from '@nestjs/common';
 import { JwtGuard } from '../auth/jwt.guard';
@@ -72,7 +73,7 @@ export class KbController {
       return;
     }
     const mime = file.mimetype || 'application/octet-stream';
-    const storageKey = `kb/${user.tenantId}/${user.sub}/${randomUUID()}/${file.filename}`;
+    const storageKey = `kb/${user.tenantId}/${user.sub}/${randomUUID()}/${sanitizeFilename(file.filename)}`;
     await this.storage.putObject(storageKey, buffer, mime);
     const doc = await this.kb.create({
       tenantId: user.tenantId,
@@ -88,7 +89,7 @@ export class KbController {
       .catch(async (err: unknown) => {
         const msg = err instanceof Error ? err.message : String(err);
         this.logger.warn(`kb doc ${doc.id} 摄取失败: ${msg}`);
-        await this.kb.markFailed(doc.id, msg);
+        await this.kb.markFailed(doc.id, user.tenantId, user.sub, msg);
       });
     reply.status(202).send(doc);
   }

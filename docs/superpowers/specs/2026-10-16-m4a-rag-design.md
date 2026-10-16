@@ -174,13 +174,13 @@ KbChunk: id(uuid) doc_id tenant_id user_id seq text vector vector(1024) created_
 | `EMBEDDING_MODEL` | `BAAI/bge-large-zh-v1.5` | 需与 `EMBEDDING_DIM` 匹配 |
 | `EMBEDDING_DIM` | `1024` | 必须等于 `KbChunk.vector` 列维度 |
 | `BFF_INTERNAL_URL` | `http://localhost:4000` | runtime 调 BFF 检索的地址 |
-| `INTERNAL_TOKEN` | 空 | runtime→BFF 内部端点校验（空则不校验，仅限本地） |
+| `INTERNAL_TOKEN` | 空 | runtime→BFF 内部端点校验（空则仅放行回环来源，非本机部署必设） |
 | `KB_CHUNK_SIZE` / `KB_CHUNK_OVERLAP` | `800` / `150` | 切分参数 |
 
 **bff**
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `INTERNAL_TOKEN` | 空 | `/internal/kb/search` 校验（与 runtime 同值） |
+| `INTERNAL_TOKEN` | 空 | `/internal/kb/search` 校验（与 runtime 同值；空则仅放行回环来源） |
 | `KB_MAX_FILE_BYTES` | `10485760` | 上传大小上限 |
 | `AGENT_RUNTIME_URL` / `AGENT_RUNTIME_TOKEN` | 复用 M3 | 调 runtime `/kb/ingest` |
 

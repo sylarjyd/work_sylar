@@ -91,7 +91,7 @@ flowchart LR
 | `EMBEDDING_MODEL` | `BAAI/bge-large-zh-v1.5` | 按嵌入服务模型 |
 | `EMBEDDING_DIM` | `1024` | 须与 `KbChunk.vector` 列维度一致（当前 `vector(1024)`） |
 | `BFF_INTERNAL_URL` | `http://localhost:4000` | runtime 访问 BFF 内部端点的内网地址 |
-| `INTERNAL_TOKEN` | 空 | **必须设置**（强随机），非本机部署必设 |
+| `INTERNAL_TOKEN` | 空 | **非本机部署必设**（强随机）；空值仅放行回环来源 |
 | `KB_CHUNK_SIZE` | `800` | 按文档类型与模型上下文调优 |
 | `KB_CHUNK_OVERLAP` | `150` | 按切分效果调优 |
 | `KB_MAX_FILE_BYTES` | `10485760` | 按业务与存储配额调整 |
@@ -156,7 +156,7 @@ pnpm --filter @ai-office/bff exec prisma migrate deploy
 1. **镜像须带 pgvector**：本地 `db:up`/docker compose 已使用 `pgvector/pgvector:pg16`；生产 Postgres 必须是带 pgvector 扩展的镜像或安装该扩展的实例。
 2. **启用扩展**：启动后须执行 `CREATE EXTENSION IF NOT EXISTS vector`（`prisma db push` 与 `docs/db/schema.sql` 均已包含；若手工建库须自行执行）。
 3. **维度一致**：环境变量 `EMBEDDING_DIM` 必须等于 `KbChunk.vector` 列维度（当前 `vector(1024)`），二者不一致会导致写入/检索报错。
-4. **内部端点鉴权**：非本机部署时 `INTERNAL_TOKEN` **必设**——runtime 经该共享密钥调用 BFF 内部检索端点 `POST /internal/kb/search`；空值仅在本地开发允许（不校验）。
+4. **内部端点鉴权**：`POST /internal/kb/search` 默认失败关闭——设了 `INTERNAL_TOKEN` 则校验共享密钥；未设则仅放行回环来源（`127.0.0.1`/`::1`）。runtime 与 bff 不同机部署时**必设**该变量，否则 runtime 请求将被 403 拒绝。
 
 ---
 

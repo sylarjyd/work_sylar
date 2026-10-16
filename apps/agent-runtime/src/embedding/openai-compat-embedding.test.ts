@@ -31,11 +31,12 @@ afterAll(async () => {
 beforeEach(() => {
   status = 200;
   lastBody = undefined;
+  response = JSON.stringify({ data: [{ index: 1, embedding: [0, 1] }, { index: 0, embedding: [1, 0] }] });
 });
 
 describe('OpenAICompatEmbeddingGateway', () => {
   it('POST /embeddings，体含 model 与 input', async () => {
-    const gw = new OpenAICompatEmbeddingGateway({ baseUrl, apiKey: 'k', model: 'm', dim: 1024 });
+    const gw = new OpenAICompatEmbeddingGateway({ baseUrl, apiKey: 'k', model: 'm', dim: 2 });
     await gw.embed(['甲', '乙']);
     expect(lastBody).toEqual({ model: 'm', input: ['甲', '乙'] });
   });
@@ -50,5 +51,11 @@ describe('OpenAICompatEmbeddingGateway', () => {
     status = 500;
     const gw = new OpenAICompatEmbeddingGateway({ baseUrl, apiKey: 'k', model: 'm', dim: 1024 });
     await expect(gw.embed(['a'])).rejects.toThrow('embedding_http_500');
+  });
+
+  it('返回维度与 EMBEDDING_DIM 不符抛 embedding_dim_mismatch', async () => {
+    response = JSON.stringify({ data: [{ index: 0, embedding: [1, 0, 0] }] });
+    const gw = new OpenAICompatEmbeddingGateway({ baseUrl, apiKey: 'k', model: 'm', dim: 2 });
+    await expect(gw.embed(['a'])).rejects.toThrow('embedding_dim_mismatch');
   });
 });

@@ -7,6 +7,8 @@ export interface KbSearchParams {
   userId: string;
 }
 
+const SEARCH_TIMEOUT_MS = 15_000;
+
 export interface KbClientConfig {
   baseUrl: string;
   internalToken?: string;
@@ -23,7 +25,13 @@ export async function searchKb(cfg: KbClientConfig, params: KbSearchParams): Pro
       ...(cfg.internalToken ? { 'x-internal-token': cfg.internalToken } : {}),
     },
     body: JSON.stringify(params),
+    // 超时避免检索挂起拖住 agent loop；AbortError 由上层兜成 kb_search_unreachable。
+    signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS),
   });
-  if (!res.ok) throw new Error('kb_search_unreachable');
+  if (!res.ok) {
+    // 回收失败响应体，避免连接池套接字悬挂。
+    await res.body?.cancel().catch(() => undefined);
+    throw new Error('kb_search_unreachable');
+  }
   return (await res.json()) as KbSearchHit[];
 }
