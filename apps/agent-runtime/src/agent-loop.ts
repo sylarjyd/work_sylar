@@ -103,7 +103,13 @@ export async function* runAgent(req: RunRequest, deps: RunDeps): AsyncGenerator<
         ok = false;
         result = { error: String(err) };
       }
-      yield step('tool_result', { tool: call.name, ok, preview: preview(result), ...extra });
+      yield step('tool_result', {
+        tool: call.name,
+        ok,
+        preview: preview(result),
+        ...extra,
+        ...displayOf(result),
+      });
       // 工具产出物：除 tool_result 外再补一条 artifact step，供 BFF 落库、web 成果区即时渲染。
       const artifact = ok ? extractArtifact(result) : undefined;
       if (artifact) {
@@ -124,6 +130,13 @@ export async function* runAgent(req: RunRequest, deps: RunDeps): AsyncGenerator<
 function preview(value: unknown): unknown {
   const s = JSON.stringify(value) ?? 'null';
   return s.length > 500 ? { truncated: true, text: s.slice(0, 500) } : value;
+}
+
+/** 工具结果里的 `display` 字段原样透传（不做 500 字截断），供前端渲染结构化展示（如知识库来源）。 */
+function displayOf(result: unknown): { display?: unknown } {
+  if (result === null || typeof result !== 'object' || Array.isArray(result)) return {};
+  const d = (result as { display?: unknown }).display;
+  return d === undefined ? {} : { display: d };
 }
 
 /** 工具返回 `{ artifact: ArtifactRef }` 时取出该引用；结构不符则视为无产物。 */

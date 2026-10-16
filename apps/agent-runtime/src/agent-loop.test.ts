@@ -373,6 +373,50 @@ describe('runAgent', () => {
     expect(tr.payload).toMatchObject({ ok: false, blocked: true });
     expect(executed).toBe(false);
   });
+
+  it('工具结果含 display 时原样透传到 tool_result（超过 500 字也不截断）', async () => {
+    const big = 'x'.repeat(2000);
+    const tool: Tool = {
+      name: 'kb.retrieve',
+      description: 'd',
+      parameters: {},
+      permission: 'safe',
+      async execute() {
+        return {
+          ok: true,
+          tool: 'kb.retrieve',
+          text: big,
+          display: { sources: [{ docName: 'a', seq: 1, score: 0.9, snippet: big }] },
+        };
+      },
+    };
+    const gateway = oneShotGateway({ id: 'c1', name: 'kb.retrieve', args: { query: 'x' } });
+    const events = await collect(runAgent(req, { gateway, tools: [tool] }));
+    const tr = events.find((e) => e.type === 'tool_result')!;
+    // preview 被截断…
+    expect(tr.payload.preview).toMatchObject({ truncated: true });
+    // …但 display 完整保留。
+    expect((tr.payload.display as { sources: unknown[] }).sources).toHaveLength(1);
+    expect(
+      (tr.payload.display as { sources: { snippet: string }[] }).sources[0].snippet,
+    ).toHaveLength(2000);
+  });
+
+  it('工具结果无 display 字段时不注入 display', async () => {
+    const tool: Tool = {
+      name: 'web.search',
+      description: 'd',
+      parameters: {},
+      permission: 'safe',
+      async execute() {
+        return { results: [] };
+      },
+    };
+    const gateway = oneShotGateway({ id: 'c1', name: 'web.search', args: { query: 'x' } });
+    const events = await collect(runAgent(req, { gateway, tools: [tool] }));
+    const tr = events.find((e) => e.type === 'tool_result')!;
+    expect('display' in tr.payload).toBe(false);
+  });
 });
 
 /** 第一轮发起一次工具调用、第二轮收尾的桩网关。 */
