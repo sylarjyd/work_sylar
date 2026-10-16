@@ -15,6 +15,7 @@ let app: NestFastifyApplication;
 const created: Record<string, unknown>[] = [];
 const deleted: string[] = [];
 let searchBody: Record<string, unknown> | null = null;
+let lookupFail = false;
 
 const fakePrisma = {
   kbDoc: {
@@ -24,7 +25,10 @@ const fakePrisma = {
       return row;
     },
     findMany: async () => [],
-    findFirst: async ({ where }: { where: { id: string } }) => (where.id === 'd1' ? { id: 'd1' } : null),
+    findFirst: async ({ where }: { where: { id: string } }) => {
+      if (lookupFail) throw new Error('db down');
+      return where.id === 'd1' ? { id: 'd1' } : null;
+    },
     delete: async ({ where }: { where: { id: string } }) => {
       deleted.push(where.id);
       return {};
@@ -69,6 +73,7 @@ beforeEach(() => {
   created.length = 0;
   deleted.length = 0;
   searchBody = null;
+  lookupFail = false;
 });
 
 const token = () => signToken({ sub: 'u1', tenantId: 't1' });
@@ -123,6 +128,12 @@ describe('KbController', () => {
     const res = await app.inject({ method: 'DELETE', url: '/api/kb/docs/d1', headers: auth() });
     expect(res.statusCode).toBe(204);
     expect(deleted).toEqual(['d1']);
+  });
+
+  it('归属查询故障时原样抛出（500），不伪装成 404', async () => {
+    lookupFail = true;
+    const res = await app.inject({ method: 'DELETE', url: '/api/kb/docs/d1', headers: auth() });
+    expect(res.statusCode).toBe(500);
   });
 });
 

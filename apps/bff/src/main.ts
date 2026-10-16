@@ -17,8 +17,9 @@ async function bootstrap(): Promise<void> {
   app.enableCors(CORS_OPTIONS);
   // @fastify/multipart 的类型声明基于 fastify 4.29，与本仓 fastify 4.28 的
   // FastifyInstance 存在类型漂移（缺少 multipartErrors）；仅类型层面窄化，运行时行为不变。
+  const maxBytes = Number(process.env.KB_MAX_FILE_BYTES);
   await app.register(multipart as unknown as Parameters<typeof app.register>[0], {
-    limits: { fileSize: Number(process.env.KB_MAX_FILE_BYTES ?? 10485760) },
+    limits: { fileSize: Number.isFinite(maxBytes) ? maxBytes : 10485760 },
   });
   const port = Number(process.env.PORT ?? 4000);
   await app.listen(port, '0.0.0.0');

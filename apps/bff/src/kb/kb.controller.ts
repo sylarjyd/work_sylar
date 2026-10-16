@@ -5,6 +5,7 @@ import {
   Get,
   HttpCode,
   Logger,
+  NotFoundException,
   Param,
   Post,
   Req,
@@ -101,9 +102,12 @@ export class KbController {
   ): Promise<void> {
     try {
       await this.kb.remove(id, user.tenantId, user.sub);
-    } catch {
-      reply.status(404).send({ error: 'doc_not_found' });
-      return;
+    } catch (err) {
+      if (err instanceof NotFoundException) {
+        reply.status(404).send({ error: 'doc_not_found' });
+        return;
+      }
+      throw err;
     }
     reply.status(204).send();
   }
