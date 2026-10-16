@@ -42,8 +42,20 @@ export function createStorage(
     async ensureBucket() {
       try {
         await client.send(new HeadBucketCommand({ Bucket: bucket }));
-      } catch {
+        return;
+      } catch (err) {
+        // 只有「桶不存在」才补建；鉴权/网络等错误直接冒泡，避免用 CreateBucket 掩盖真实原因。
+        const e = err as { name?: string; $metadata?: { httpStatusCode?: number } };
+        const missing =
+          e.$metadata?.httpStatusCode === 404 || e.name === 'NotFound' || e.name === 'NoSuchBucket';
+        if (!missing) throw err;
+      }
+      try {
         await client.send(new CreateBucketCommand({ Bucket: bucket }));
+      } catch (err) {
+        // 并发启动时可能已被他人创建，视为幂等成功。
+        const name = (err as { name?: string }).name;
+        if (name !== 'BucketAlreadyOwnedByYou' && name !== 'BucketAlreadyExists') throw err;
       }
     },
     async putObject(key, body, contentType) {

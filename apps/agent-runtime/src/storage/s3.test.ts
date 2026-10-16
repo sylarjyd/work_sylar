@@ -3,13 +3,17 @@ import { Readable } from 'node:stream';
 import { PutObjectCommand, HeadBucketCommand, CreateBucketCommand, GetObjectCommand } from '@aws-sdk/client-s3';
 import { createStorage, createS3Client, DEFAULT_BUCKET, type S3Sender } from './s3';
 
-function fakeSender(opts: { headFails?: boolean } = {}) {
+function fakeSender(opts: { headError?: unknown; createError?: unknown } = {}) {
   const sent: unknown[] = [];
   const sender: S3Sender = {
     async send(command: unknown) {
       sent.push(command);
       if (command instanceof HeadBucketCommand) {
-        if (opts.headFails) throw new Error('NoSuchBucket');
+        if (opts.headError) throw opts.headError;
+        return {};
+      }
+      if (command instanceof CreateBucketCommand) {
+        if (opts.createError) throw opts.createError;
         return {};
       }
       if (command instanceof GetObjectCommand) {
@@ -55,14 +59,41 @@ describe('createStorage', () => {
   });
 
   it('ensureBucket 在 HeadBucket 成功时不建桶', async () => {
-    const { sender, sent } = fakeSender({ headFails: false });
+    const { sender, sent } = fakeSender();
     await createStorage({}, sender).ensureBucket();
     expect(sent.some((c) => c instanceof CreateBucketCommand)).toBe(false);
   });
 
   it('ensureBucket 在 HeadBucket 失败时补建桶', async () => {
-    const { sender, sent } = fakeSender({ headFails: true });
+    const notFound = Object.assign(new Error('NotFound'), {
+      name: 'NotFound',
+      $metadata: { httpStatusCode: 404 },
+    });
+    const { sender, sent } = fakeSender({ headError: notFound });
     await createStorage({}, sender).ensureBucket();
+    expect(sent.some((c) => c instanceof CreateBucketCommand)).toBe(true);
+  });
+
+  it('ensureBucket 遇到非 404 错误直接冒泡且不建桶', async () => {
+    const forbidden = Object.assign(new Error('Forbidden'), {
+      name: 'Forbidden',
+      $metadata: { httpStatusCode: 403 },
+    });
+    const { sender, sent } = fakeSender({ headError: forbidden });
+    await expect(createStorage({}, sender).ensureBucket()).rejects.toThrow('Forbidden');
+    expect(sent.some((c) => c instanceof CreateBucketCommand)).toBe(false);
+  });
+
+  it('ensureBucket 容忍并发创建（BucketAlreadyOwnedByYou）', async () => {
+    const notFound = Object.assign(new Error('NotFound'), {
+      name: 'NotFound',
+      $metadata: { httpStatusCode: 404 },
+    });
+    const alreadyOwned = Object.assign(new Error('BucketAlreadyOwnedByYou'), {
+      name: 'BucketAlreadyOwnedByYou',
+    });
+    const { sender, sent } = fakeSender({ headError: notFound, createError: alreadyOwned });
+    await expect(createStorage({}, sender).ensureBucket()).resolves.toBeUndefined();
     expect(sent.some((c) => c instanceof CreateBucketCommand)).toBe(true);
   });
 
