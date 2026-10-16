@@ -17,7 +17,7 @@ export class TasksService {
     tenantId: string,
     userId: string,
     goal: string,
-  ): Promise<{ taskId: string; runId: string; messages: ChatMessage[] }> {
+  ): Promise<{ taskId: string; runId: string; tenantId: string; messages: ChatMessage[] }> {
     await this.sessions.assertOwned(sessionId, tenantId, userId);
 
     const prior = await this.prisma.message.findMany({
@@ -38,7 +38,7 @@ export class TasksService {
       ...prior.map((m) => ({ role: m.role as ChatMessage['role'], content: m.content })),
       { role: 'user', content: goal },
     ];
-    return { taskId: task.id, runId: run.id, messages };
+    return { taskId: task.id, runId: run.id, tenantId, messages };
   }
 
   async recordStep(runId: string, ev: AgentEvent): Promise<void> {

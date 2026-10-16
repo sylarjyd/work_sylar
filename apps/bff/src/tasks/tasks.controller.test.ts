@@ -8,6 +8,8 @@ import { createServer, type Server } from 'node:http';
 import { encodeSse } from '@ai-office/shared';
 import { TasksController } from './tasks.controller';
 import { TasksService } from './tasks.service';
+import { ArtifactService } from '../artifacts/artifacts.service';
+import { ARTIFACT_STORAGE } from '../artifacts/storage';
 import { SessionsController } from '../sessions/sessions.controller';
 import { SessionsService } from '../sessions/sessions.service';
 import { PrismaService } from '../db/prisma.service';
@@ -29,7 +31,8 @@ const stored: {
   messages: unknown[];
   runUpdates: unknown[];
   taskUpdates: unknown[];
-} = { steps: [], messages: [], runUpdates: [], taskUpdates: [] };
+  artifacts: unknown[];
+} = { steps: [], messages: [], runUpdates: [], taskUpdates: [], artifacts: [] };
 
 const session = { id: 's1', tenantId: 't1', userId: 'u1', title: 'x', createdAt: new Date() };
 
@@ -83,6 +86,13 @@ const fakePrisma = {
       return data;
     },
   },
+  artifact: {
+    aggregate: async () => ({ _max: { version: null } }),
+    create: async ({ data }: { data: unknown }) => {
+      stored.artifacts.push(data);
+      return data;
+    },
+  },
 } as unknown as PrismaService;
 
 beforeAll(async () => {
@@ -98,6 +108,7 @@ beforeAll(async () => {
       return;
     }
     res.write(encodeSse({ event: 'step', data: { runId: 'run1', seq: 1, type: 'tool_call', payload: { tool: 'web.search' }, ts: 2 } }));
+    res.write(encodeSse({ event: 'step', data: { runId: 'run1', seq: 2, type: 'artifact', payload: { kind: 'pptx', filename: 'a.pptx', storageKey: 'k', size: 3 }, ts: 3 } }));
     res.write(encodeSse({ event: 'usage', data: { input: 1, output: 1 } }));
     res.write(encodeSse({ event: 'done', data: { runId: 'run1' } }));
     res.end();
@@ -113,7 +124,9 @@ beforeAll(async () => {
     providers: [
       SessionsService,
       TasksService,
+      ArtifactService,
       { provide: PrismaService, useValue: fakePrisma },
+      { provide: ARTIFACT_STORAGE, useValue: { getObjectStream: async () => { throw new Error('unused'); } } },
     ],
   }).compile();
   app = moduleRef.createNestApplication<NestFastifyApplication>(new FastifyAdapter());
@@ -132,6 +145,7 @@ beforeEach(() => {
   stored.messages.length = 0;
   stored.runUpdates.length = 0;
   stored.taskUpdates.length = 0;
+  stored.artifacts.length = 0;
   // 恢复上游行为、注入开关与地址，避免用例间互相污染。
   upstreamMode = 'ok';
   failStepCreate = false;
@@ -167,7 +181,19 @@ describe('TasksController', () => {
     expect(text).toContain('event: step');
     expect(text).toContain('event: done');
     // usage 透传但不落库
-    expect(stored.steps).toHaveLength(2);
+    expect(stored.steps).toHaveLength(3);
+  });
+
+  it('SSE 里的 artifact step 触发产物落库', async () => {
+    const token = signToken({ sub: 'u1', tenantId: 't1' });
+    const res = await fetch(`${baseUrl}/api/sessions/s1/tasks`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+      body: JSON.stringify({ goal: '生成 PPT' }),
+    });
+    await res.text();
+    expect(stored.artifacts).toHaveLength(1);
+    expect(stored.artifacts[0]).toMatchObject({ filename: 'a.pptx', kind: 'pptx' });
   });
 
   it('流结束后把 assistant 消息（拼接的 think 文本）落库', async () => {

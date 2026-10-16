@@ -1,7 +1,9 @@
 import { Body, Controller, Logger, Param, Post, Res, UseGuards } from '@nestjs/common';
 import type { FastifyReply } from 'fastify';
+import type { ArtifactRef } from '@ai-office/shared';
 import { createSseParser, type AgentEvent, type CreateTaskRequest } from '@ai-office/shared';
 import { TasksService } from './tasks.service';
+import { ArtifactService } from '../artifacts/artifacts.service';
 import { JwtGuard } from '../auth/jwt.guard';
 import { CurrentUser } from '../auth/current-user';
 import type { JwtPayload } from '../auth/jwt';
@@ -12,7 +14,10 @@ import { writeHead } from '../stream/sse-proxy';
 export class TasksController {
   private readonly logger = new Logger(TasksController.name);
 
-  constructor(private readonly tasks: TasksService) {}
+  constructor(
+    private readonly tasks: TasksService,
+    private readonly artifacts: ArtifactService,
+  ) {}
 
   @Post(':id/tasks')
   async run(
@@ -34,7 +39,7 @@ export class TasksController {
 
     // 先做归属校验与建 task/run（可能抛 NotFoundException）。
     // 必须早于 hijack：一旦 hijack，Nest 的异常过滤器无法再写响应，请求会挂起。
-    const { taskId, runId, messages } = await this.tasks.prepare(
+    const { taskId, runId, tenantId, messages } = await this.tasks.prepare(
       sessionId,
       user.tenantId,
       user.sub,
@@ -65,7 +70,7 @@ export class TasksController {
           // 配了共享密钥才带；不配时与未开启鉴权的 runtime 保持兼容。
           ...(runtimeToken ? { 'x-agent-runtime-token': runtimeToken } : {}),
         },
-        body: JSON.stringify({ runId, sessionId, goal, messages }),
+        body: JSON.stringify({ runId, sessionId, tenantId, goal, messages }),
       });
     } catch {
       // 传输层失败：上游不可达，回 502 而不是未捕获的 500。
@@ -112,6 +117,9 @@ export class TasksController {
             const ev = m.data as AgentEvent;
             if (ev.type === 'think') thinkTexts.push(String(ev.payload.text ?? ''));
             await this.tasks.recordStep(runId, ev);
+            if (ev.type === 'artifact') {
+              await this.safeRecordArtifact(runId, sessionId, tenantId, ev.payload);
+            }
           } else if (m.event === 'error') {
             status = 'failed';
           }
@@ -131,6 +139,20 @@ export class TasksController {
       } catch {
         // 客户端已断开时 end() 可能抛错，忽略。
       }
+    }
+  }
+
+  /** 产物落库失败只记日志，绝不中断 SSE 流（与 safeFinish 同样的容错姿态）。 */
+  private async safeRecordArtifact(
+    runId: string,
+    sessionId: string,
+    tenantId: string,
+    payload: Record<string, unknown>,
+  ): Promise<void> {
+    try {
+      await this.artifacts.record(runId, sessionId, tenantId, payload as unknown as ArtifactRef);
+    } catch (err) {
+      this.logger.error(`run ${runId} artifact 落库失败: ${(err as Error).message}`);
     }
   }
 
