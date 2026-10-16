@@ -37,4 +37,15 @@ describe('chunkText', () => {
     const chunks = chunkText('abcdefg'.repeat(50), 10, 999);
     expect(chunks.length).toBeGreaterThan(0);
   });
+
+  it('换行回退超过 overlap 时不漏字（全文覆盖）', () => {
+    const source = ['A'.repeat(70), 'B'.repeat(70), 'C'.repeat(70)].join('\n');
+    const chunks = chunkText(source, 100, 20);
+    const all = chunks.join('|');
+    // 相邻块存在 overlap，边界字符会被合理地重复，故断言「每个字符都未被丢弃」（≥），
+    // 而非精确计数。旧实现因换行回退超过 overlap 产生缝隙，B 仅剩 61、C 仅剩 52，此处会失败。
+    for (const [ch, n] of [['A', 70], ['B', 70], ['C', 70]] as const) {
+      expect(all.split(ch).length - 1).toBeGreaterThanOrEqual(n);
+    }
+  });
 });
