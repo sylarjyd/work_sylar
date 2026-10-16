@@ -98,3 +98,30 @@ export interface ConfirmDecision {
   confirmId: string;
   approved: boolean;
 }
+
+// ---------------------------------------------------------------------------
+// M4a 知识库 RAG
+// ---------------------------------------------------------------------------
+
+/** 知识库文档摄取状态：pending 摄取中 / ready 可检索 / failed 失败。 */
+export type KbDocStatus = 'pending' | 'ready' | 'failed';
+
+/** `/kb` 页列表项。 */
+export interface KbDocDto {
+  id: string;
+  filename: string;
+  mime: string;
+  size: number;
+  status: KbDocStatus;
+  chunkCount: number;
+  error: string | null;
+  createdAt: string;
+}
+
+/** 一次检索命中：`kb.retrieve` 的切片级结果（docName + 切片序号 + 相似度 + 正文）。 */
+export interface KbSearchHit {
+  docName: string;
+  seq: number;
+  score: number;
+  text: string;
+}
