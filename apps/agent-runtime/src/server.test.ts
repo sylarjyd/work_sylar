@@ -536,3 +536,44 @@ describe('POST /connectors/validate', () => {
     }
   });
 });
+
+describe('/runs 的 per-run MCP 工具拼装', () => {
+  it('extraTools 按 tenantId 被调用，其结果并入模型工具列表', async () => {
+    const seen: string[] = [];
+    const toolNames: string[] = [];
+    const mcpTool: Tool = {
+      name: 'mcp.x.y',
+      description: 'd',
+      parameters: {},
+      permission: 'confirm',
+      async execute() { return { ok: true }; },
+    };
+    const gateway: ModelGateway = {
+      async chat(req) {
+        toolNames.push(...req.tools.map((t) => t.name));
+        return { content: '完成', toolCalls: [], usage: { input: 0, output: 0 } };
+      },
+    };
+    const server = createRuntimeServer({
+      gateway,
+      tools: [echo],
+      extraTools: async (tenantId) => { seen.push(tenantId); return [mcpTool]; },
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
+    try {
+      const addr = server.address();
+      if (!addr || typeof addr === 'string') throw new Error('no port');
+      const res = await fetch(`http://127.0.0.1:${addr.port}/runs`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ runId: 'r1', sessionId: 's1', tenantId: 't1', userId: 'u1', goal: 'g', messages: [] }),
+      });
+      await res.text();
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+    expect(seen).toEqual(['t1']);
+    expect(toolNames).toContain('mcp.x.y');
+    expect(toolNames).toContain('web.search'); // 既有 base 工具仍在
+  });
+});

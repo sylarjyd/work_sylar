@@ -16,6 +16,9 @@ import type { EmbeddingGateway } from './embedding/types';
 import { ingest } from './kb/ingest';
 import { validateConnector as defaultValidateConnector } from './mcp/validate';
 import type { McpToolInfo } from '@ai-office/shared';
+import { McpHost } from './mcp/host';
+import { fetchConnectors } from './mcp/bff-connector-client';
+import { buildMcpTools } from './mcp/discovery';
 
 export interface RuntimeDeps {
   gateway?: ModelGateway;
@@ -24,12 +27,30 @@ export interface RuntimeDeps {
   embedding?: EmbeddingGateway;
   /** 校验连接器的实现；测试可注入桩。 */
   validateConnector?: typeof defaultValidateConnector;
+  /** 每次 run 追加的工具（按 tenantId）；测试可注入。默认从 BFF 拉连接器构建 MCP 工具。 */
+  extraTools?: (tenantId: string) => Promise<Tool[]>;
 }
 
 export function createRuntimeServer(deps: RuntimeDeps = {}): Server {
   const gateway = deps.gateway ?? createGateway();
   const storage = deps.storage ?? createStorage();
-  const tools = deps.tools ?? createTools(process.env, storage);
+  const baseTools = deps.tools ?? createTools(process.env, storage);
+
+  // 仅生产路径（既未注入 tools 也未注入 extraTools）才起常驻 MCP 池；
+  // 测试注入任一，即不 spawn 真实子进程。注入的 extraTools 与注入的 tools 可并存。
+  const mcpHost =
+    deps.tools || deps.extraTools
+      ? null
+      : new McpHost({
+          heartbeatMs: Number(process.env.MCP_HEARTBEAT_MS ?? 30000),
+          backoffBaseMs: Number(process.env.MCP_BACKOFF_BASE_MS ?? 1000),
+          backoffMaxMs: Number(process.env.MCP_BACKOFF_MAX_MS ?? 30000),
+          initTimeoutMs: Number(process.env.MCP_INIT_TIMEOUT_MS ?? 10000),
+          callTimeoutMs: Number(process.env.MCP_CALL_TIMEOUT_MS ?? 30000),
+        });
+
+  const extraTools = deps.extraTools ?? (mcpHost ? defaultExtraTools(mcpHost) : undefined);
+
   const embedding = deps.embedding ?? createEmbeddingGateway();
   const validateConn = deps.validateConnector ?? defaultValidateConnector;
   // runtime 单实例持有一份确认闸门；连接 close 时按 runId 取消挂起。
@@ -43,7 +64,7 @@ export function createRuntimeServer(deps: RuntimeDeps = {}): Server {
     return !token || req.headers['x-agent-runtime-token'] === token;
   };
 
-  return createServer((req, res) => {
+  const server = createServer((req, res) => {
     if (req.method === 'GET' && req.url === '/health') {
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ ok: true }));
@@ -78,9 +99,12 @@ export function createRuntimeServer(deps: RuntimeDeps = {}): Server {
 
         void (async () => {
           try {
+            const runTools = extraTools
+              ? [...baseTools, ...(await extraTools(runReq.tenantId))]
+              : baseTools;
             for await (const ev of runAgent(runReq, {
               gateway,
-              tools,
+              tools: runTools,
               confirm,
               confirmTimeoutMs,
               onUsage: (u) => res.write(encodeSse({ event: 'usage', data: u })),
@@ -243,6 +267,8 @@ export function createRuntimeServer(deps: RuntimeDeps = {}): Server {
     res.writeHead(404, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ error: 'not found' }));
   });
+  server.on('close', () => void mcpHost?.closeAll());
+  return server;
 }
 
 const isEntry = !!process.argv[1] &&
@@ -264,6 +290,25 @@ if (isEntry) {
   createRuntimeServer({ storage }).listen(port, host, () => {
     console.log(`agent-runtime listening on http://${host}:${port}`);
   });
+}
+
+/** 默认追加工具：拉启用连接器 → 构建 MCP 工具；BFF 不可达时降级为空。 */
+function defaultExtraTools(host: McpHost): (tenantId: string) => Promise<Tool[]> {
+  return async (tenantId: string): Promise<Tool[]> => {
+    try {
+      const connectors = await fetchConnectors(
+        {
+          baseUrl: process.env.BFF_INTERNAL_URL ?? 'http://localhost:4000',
+          internalToken: process.env.INTERNAL_TOKEN,
+        },
+        tenantId,
+      );
+      return await buildMcpTools(connectors, host);
+    } catch {
+      // 拉取失败退化为无 MCP 工具，不中断本次 run。
+      return [];
+    }
+  };
 }
 
 function isStringRecord(v: unknown): v is Record<string, string> {
