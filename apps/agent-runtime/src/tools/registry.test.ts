@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { createTools } from './registry';
 
 describe('createTools', () => {
-  it('返回 web / doc / code 共六个工具，且元数据完整（不触发网络）', () => {
+  it('返回 web / doc / code / kb 共七个工具，且元数据完整（不触发网络）', () => {
     const tools = createTools({});
     expect(tools.map((t) => t.name)).toEqual([
       'web.search',
@@ -11,6 +11,7 @@ describe('createTools', () => {
       'doc.xlsx',
       'doc.pptx',
       'code.exec',
+      'kb.retrieve',
     ]);
     for (const tool of tools) {
       expect(tool.description.length).toBeGreaterThan(0);
