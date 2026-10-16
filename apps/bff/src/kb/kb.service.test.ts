@@ -3,7 +3,6 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { NotFoundException } from '@nestjs/common';
 import { KbService } from './kb.service';
 import type { PrismaService } from '../db/prisma.service';
-import type { KbStorage } from './storage';
 
 interface RawCall {
   sql: string;
@@ -51,10 +50,8 @@ const fakePrisma = {
   },
 } as unknown as PrismaService;
 
-const fakeStorage: KbStorage = { putObject: async () => {} };
-
 function makeService() {
-  return new KbService(fakePrisma, fakeStorage, {
+  return new KbService(fakePrisma, {
     fetchImpl: (async (_url: string, init: RequestInit) => {
       const body = JSON.parse(String(init.body));
       runtimeCalls.push(body);
@@ -159,7 +156,7 @@ describe('KbService.ingest', () => {
   });
 
   it('runtime 不可达时抛错', async () => {
-    const svc = new KbService(fakePrisma, fakeStorage, {
+    const svc = new KbService(fakePrisma, {
       runtimeUrl: 'http://runtime',
       fetchImpl: (async () => {
         throw new Error('econnrefused');

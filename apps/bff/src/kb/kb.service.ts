@@ -1,8 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import type { KbDocDto, KbSearchHit, KbDocStatus } from '@ai-office/shared';
 import { PrismaService } from '../db/prisma.service';
-import type { KbStorage } from './storage';
 
 const INGEST_TIMEOUT_MS = 30_000;
 
@@ -33,8 +32,7 @@ export class KbService {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly storage: KbStorage,
-    private readonly cfg: KbIngestConfig = {},
+    @Optional() private readonly cfg: KbIngestConfig = {},
   ) {}
 
   async create(input: CreateDocInput): Promise<KbDocDto> {
