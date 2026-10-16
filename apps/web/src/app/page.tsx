@@ -2,13 +2,15 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import type { AgentEvent, SessionSummary } from '@ai-office/shared';
+import type { AgentEvent, ArtifactDto, SessionSummary } from '@ai-office/shared';
 import { createSseParser } from '../lib/sse-parser';
 import {
   clearToken,
   createSession,
+  downloadArtifact,
   getToken,
   isUnauthorized,
+  listArtifacts,
   listSessions,
   streamTask,
 } from '../lib/api';
@@ -20,6 +22,7 @@ export default function Home() {
   const [sessionId, setSessionId] = useState<string>('');
   const [goal, setGoal] = useState('调研竞品并给出结论');
   const [events, setEvents] = useState<AgentEvent[]>([]);
+  const [artifacts, setArtifacts] = useState<ArtifactDto[]>([]);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState('');
 
@@ -45,6 +48,27 @@ export default function Home() {
     }
   }
 
+  async function refreshArtifacts(sid: string) {
+    if (!sid) {
+      setArtifacts([]);
+      return;
+    }
+    try {
+      setArtifacts(await listArtifacts(sid));
+    } catch (err) {
+      if (isUnauthorized(err)) {
+        router.push('/login');
+        return;
+      }
+      setError(String(err));
+    }
+  }
+
+  useEffect(() => {
+    void refreshArtifacts(sessionId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId]);
+
   async function newSession(): Promise<SessionSummary> {
     const s = await createSession();
     setSessions((prev) => [s, ...prev]);
@@ -68,10 +92,10 @@ export default function Home() {
     setEvents([]);
     setRunning(true);
     setError('');
+    let sid = sessionId;
     try {
       // sessionId 为 state，newSession 的 setSessionId 不会同步更新本次渲染闭包里的值，
       // 故必须用 newSession 返回的 id 直接发起请求，否则会 POST 到空 id 的会话。
-      let sid = sessionId;
       if (!sid) sid = (await newSession()).id;
       const res = await streamTask(sid, goal);
       if (!res.ok) {
@@ -87,7 +111,23 @@ export default function Home() {
         const { done, value } = await reader.read();
         if (done) break;
         for (const m of parse(decoder.decode(value, { stream: true }))) {
-          if (m.event === 'step') setEvents((prev) => [...prev, m.data as AgentEvent]);
+          if (m.event === 'step') {
+            const ev = m.data as AgentEvent;
+            setEvents((prev) => [...prev, ev]);
+            if (ev.type === 'artifact') {
+              setArtifacts((prev) => [
+                {
+                  id: '',
+                  kind: String(ev.payload.kind ?? 'docx') as ArtifactDto['kind'],
+                  filename: String(ev.payload.filename ?? ''),
+                  size: Number(ev.payload.size ?? 0),
+                  version: 0,
+                  createdAt: new Date().toISOString(),
+                },
+                ...prev,
+              ]);
+            }
+          }
           if (m.event === 'error') {
             const d = m.data as { message?: unknown } | null;
             setError(d && typeof d.message === 'string' ? d.message : JSON.stringify(m.data));
@@ -102,6 +142,7 @@ export default function Home() {
       setError(String(err));
     } finally {
       setRunning(false);
+      void refreshArtifacts(sid);
     }
   }
 
@@ -133,6 +174,31 @@ export default function Home() {
           <li key={ev.seq}>{renderStep(ev)}</li>
         ))}
       </ol>
+      <h2 style={{ marginTop: 24 }}>成果区</h2>
+      {artifacts.length === 0 ? (
+        <p style={{ color: '#888' }}>暂无产出</p>
+      ) : (
+        <ul style={{ listStyle: 'none', padding: 0 }}>
+          {artifacts.map((a, i) => (
+            <li key={a.id || `pending-${i}`} style={{ border: '1px solid #ddd', borderRadius: 6, padding: 12, marginBottom: 8 }}>
+              <div style={{ fontWeight: 600 }}>{a.filename}</div>
+              <div style={{ color: '#666', fontSize: 13 }}>
+                {a.kind} · {a.size} 字节 · v{a.version} · {new Date(a.createdAt).toLocaleString()}
+              </div>
+              {a.id ? (
+                <button
+                  style={{ marginTop: 8 }}
+                  onClick={() => void downloadArtifact(a.id, a.filename).catch((e) => setError(String(e)))}
+                >
+                  下载
+                </button>
+              ) : (
+                <span style={{ color: '#999', fontSize: 13 }}>落库中…</span>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
     </main>
   );
 }

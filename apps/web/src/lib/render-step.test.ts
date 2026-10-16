@@ -24,9 +24,11 @@ describe('renderStep', () => {
     expect(renderStep(ev('tool_result', { tool: 'web.search', ok: true }))).toContain('成功');
     expect(renderStep(ev('tool_result', { tool: 'web.search', ok: false }))).toContain('失败');
   });
-  it('artifact 展示产出内容', () => {
-    const out = renderStep(ev('artifact', { title: '竞品报告', url: 'https://x' }));
-    expect(out).toContain('产出：');
-    expect(out).toContain('竞品报告');
+  it('artifact 展示产出文件名与类型', () => {
+    const out = renderStep(ev('artifact', { kind: 'pptx', filename: '报告.pptx' }));
+    expect(out).toContain('报告.pptx');
+    expect(out).toContain('pptx');
+    expect(out).toContain('产出文档');
+    expect(out).not.toContain('{');
   });
 });

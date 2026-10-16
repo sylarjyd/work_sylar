@@ -1,6 +1,6 @@
 'use client';
 
-import type { AuthResponse, SessionSummary } from '@ai-office/shared';
+import type { ArtifactDto, AuthResponse, SessionSummary } from '@ai-office/shared';
 
 const BFF_URL = process.env.NEXT_PUBLIC_BFF_URL ?? 'http://localhost:4000';
 const TOKEN_KEY = 'ai_office_token';
@@ -93,4 +93,28 @@ export async function streamTask(sessionId: string, goal: string): Promise<Respo
     method: 'POST',
     body: JSON.stringify({ goal }),
   });
+}
+
+export async function listArtifacts(sessionId: string): Promise<ArtifactDto[]> {
+  const res = await authFetch(`/api/sessions/${sessionId}/artifacts`);
+  if (!res.ok) throw new Error(`artifacts_failed_${res.status}`);
+  return (await res.json()) as ArtifactDto[];
+}
+
+/**
+ * 下载产物：JWT 走请求头，故不能用 <a href>，须 fetch 取 blob 再触发保存。
+ * 文件名从 DTO 传入——浏览器不会把 content-disposition 应用到程序化下载。
+ */
+export async function downloadArtifact(id: string, filename: string): Promise<void> {
+  const res = await authFetch(`/api/artifacts/${id}/download`);
+  if (!res.ok) throw new Error(`download_failed_${res.status}`);
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }

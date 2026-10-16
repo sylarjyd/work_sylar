@@ -9,8 +9,11 @@ export function renderStep(ev: AgentEvent): string {
       return `调用工具 ${String(ev.payload.tool)}（${JSON.stringify(ev.payload.args ?? {})}）`;
     case 'tool_result':
       return `工具 ${String(ev.payload.tool)} ${ev.payload.ok ? '成功' : '失败'}`;
-    case 'artifact':
-      return `产出：${JSON.stringify(ev.payload)}`;
+    case 'artifact': {
+      const kind = String(ev.payload.kind ?? '');
+      const filename = String(ev.payload.filename ?? '');
+      return `产出文档 ${filename}（${kind}）`;
+    }
     default:
       // 前向兼容：StepType 未来新增类型时，未知事件渲染为空串而非 undefined。
       return '';
