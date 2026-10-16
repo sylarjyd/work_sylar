@@ -3,7 +3,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { Test } from '@nestjs/testing';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
 import { Readable } from 'node:stream';
-import { ArtifactController } from './artifacts.controller';
+import { ArtifactController, contentDisposition } from './artifacts.controller';
 import { ArtifactService } from './artifacts.service';
 import { ARTIFACT_STORAGE, type ArtifactStorage } from './storage';
 import { PrismaService } from '../db/prisma.service';
@@ -120,5 +120,14 @@ describe('ArtifactController', () => {
       (fakeStorage as { getObjectStream: ArtifactStorage['getObjectStream'] }).getObjectStream =
         original;
     }
+  });
+});
+
+describe('contentDisposition', () => {
+  it('清洗 CR/LF/引号/反斜杠，非 ASCII 走 filename*', () => {
+    const h = contentDisposition('报告\r\n"x\\.pptx');
+    expect(h).not.toMatch(/[\r\n]/);
+    expect(h).toContain('attachment;');
+    expect(h).toContain("filename*=UTF-8''");
   });
 });

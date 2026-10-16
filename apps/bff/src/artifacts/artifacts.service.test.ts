@@ -95,16 +95,21 @@ describe('ArtifactService', () => {
 
   it('getForDownload 越租户抛 404（不泄露存在性）', async () => {
     await service.record('r1', 's1', 't1', ref);
-    await expect(service.getForDownload('a1', 't9')).rejects.toBeInstanceOf(NotFoundException);
+    await expect(service.getForDownload('a1', 't9', 'u1')).rejects.toBeInstanceOf(NotFoundException);
   });
 
   it('getForDownload 返回文件名、类型与流', async () => {
     await service.record('r1', 's1', 't1', ref);
-    const out = await service.getForDownload('a1', 't1');
+    const out = await service.getForDownload('a1', 't1', 'u1');
     expect(out.filename).toBe('报告.pptx');
     expect(out.kind).toBe('pptx');
     const chunks: Buffer[] = [];
     for await (const c of out.stream) chunks.push(c as Buffer);
     expect(Buffer.concat(chunks).toString()).toBe('bytes');
+  });
+
+  it('getForDownload 同租户跨用户抛 404', async () => {
+    await service.record('r1', 's1', 't1', ref);
+    await expect(service.getForDownload('a1', 't1', 'u2')).rejects.toBeInstanceOf(NotFoundException);
   });
 });

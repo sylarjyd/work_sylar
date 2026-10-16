@@ -55,13 +55,15 @@ export class ArtifactService {
     }));
   }
 
-  /** 校验租户归属并取对象流；DB 无行 → 404（不泄露存在性），取流失败由调用方转 502。 */
+  /** 校验归属并取对象流：先按租户取行，再校验会话归属（与 list 一致）；DB 无行/非本用户 → 404。 */
   async getForDownload(
     id: string,
     tenantId: string,
+    userId: string,
   ): Promise<{ filename: string; kind: string; stream: Readable }> {
     const a = await this.prisma.artifact.findFirst({ where: { id, tenantId } });
     if (!a) throw new NotFoundException('artifact_not_found');
+    await this.sessions.assertOwned(a.sessionId, tenantId, userId);
     const stream = await this.storage.getObjectStream(a.storageKey);
     return { filename: a.filename, kind: a.kind, stream };
   }

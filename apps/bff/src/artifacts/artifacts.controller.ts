@@ -13,8 +13,8 @@ const MIME: Record<string, string> = {
 };
 
 /** 兼容非 ASCII 文件名：ASCII 回退 + RFC 5987 的 filename*。 */
-function contentDisposition(filename: string): string {
-  const ascii = filename.replace(/[^\x20-\x7e]/g, '_').replace(/"/g, '');
+export function contentDisposition(filename: string): string {
+  const ascii = filename.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '');
   return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
 }
 
@@ -36,7 +36,7 @@ export class ArtifactController {
   ): Promise<void> {
     let result: { filename: string; kind: string; stream: NodeJS.ReadableStream };
     try {
-      result = await this.artifacts.getForDownload(id, user.tenantId);
+      result = await this.artifacts.getForDownload(id, user.tenantId, user.sub);
     } catch (err) {
       if (err instanceof NotFoundException) {
         reply.status(404).send({ error: 'not_found' });
