@@ -12,6 +12,7 @@ interface RawCall {
 
 let rawCalls: RawCall[];
 let execCalls: RawCall[];
+let deleteCalls: { docId: string }[];
 let searchRows: unknown[];
 let docRows: Record<string, unknown>[];
 let runtimeStatus = 200;
@@ -33,7 +34,13 @@ const fakePrisma = {
     update: async ({ data }: { data: Record<string, unknown> }) => ({ ...data }),
     delete: async () => ({}),
   },
-  kbChunk: { deleteMany: async () => ({ count: 0 }) },
+  kbChunk: {
+    deleteMany: async ({ where }: { where: { docId: string } }) => {
+      deleteCalls.push(where);
+      return { count: 0 };
+    },
+  },
+  $transaction: async (cb: (tx: unknown) => Promise<unknown>) => cb(fakePrisma),
   $queryRaw: async (strings: TemplateStringsArray, ...values: unknown[]) => {
     rawCalls.push({ sql: strings.join('?'), values });
     return searchRows;
@@ -62,6 +69,7 @@ let runtimeCalls: Record<string, unknown>[];
 beforeEach(() => {
   rawCalls = [];
   execCalls = [];
+  deleteCalls = [];
   searchRows = [];
   docRows = [];
   runtimeStatus = 200;
@@ -136,6 +144,11 @@ describe('KbService.ingest', () => {
     expect(execCalls).toHaveLength(2);
     expect(execCalls[0].values).toContain('[1,0,0]');
     expect(execCalls[1].values).toContain('[0,1,0]');
+  });
+
+  it('摄取前先按 docId 清掉旧切片（幂等）', async () => {
+    await makeService().ingest({ id: 'd1', tenantId: 't1', userId: 'u1', filename: 'a.txt', mime: 'text/plain', storageKey: 'k' });
+    expect(deleteCalls).toEqual([{ docId: 'd1' }]);
   });
 
   it('runtime 回 ok:false 时抛错（由调用方置 failed）', async () => {

@@ -4,6 +4,8 @@ import type { KbDocDto, KbSearchHit, KbDocStatus } from '@ai-office/shared';
 import { PrismaService } from '../db/prisma.service';
 import type { KbStorage } from './storage';
 
+const INGEST_TIMEOUT_MS = 30_000;
+
 export interface KbIngestConfig {
   runtimeUrl?: string;
   runtimeToken?: string;
@@ -111,11 +113,15 @@ export class KbService {
           filename: target.filename,
           mime: target.mime,
         }),
+        signal: AbortSignal.timeout(INGEST_TIMEOUT_MS),
       });
     } catch {
       throw new Error('runtime_unreachable');
     }
-    if (!res.ok) throw new Error(`runtime_http_${res.status}`);
+    if (!res.ok) {
+      await res.body?.cancel().catch(() => {});
+      throw new Error(`runtime_http_${res.status}`);
+    }
     const data = (await res.json()) as {
       ok: boolean;
       error?: string;
@@ -124,15 +130,19 @@ export class KbService {
     if (!data.ok) throw new Error(data.error ?? 'ingest_failed');
     const chunks = data.chunks ?? [];
 
-    for (const c of chunks) {
-      await this.prisma.$executeRaw`
-        INSERT INTO "KbChunk" ("id", "docId", "tenantId", "userId", "seq", "text", "vector", "createdAt")
-        VALUES (${randomUUID()}, ${target.id}, ${target.tenantId}, ${target.userId}, ${c.seq}, ${c.text}, ${toVectorLiteral(c.vector)}::vector, NOW())
-      `;
-    }
-    await this.prisma.kbDoc.update({
-      where: { id: target.id },
-      data: { status: 'ready', chunkCount: chunks.length, error: null },
+    await this.prisma.$transaction(async (tx) => {
+      // 幂等：重摄取先清掉旧切片，避免残留重复。
+      await tx.kbChunk.deleteMany({ where: { docId: target.id } });
+      for (const c of chunks) {
+        await tx.$executeRaw`
+          INSERT INTO "KbChunk" ("id", "docId", "tenantId", "userId", "seq", "text", "vector", "createdAt")
+          VALUES (${randomUUID()}, ${target.id}, ${target.tenantId}, ${target.userId}, ${c.seq}, ${c.text}, ${toVectorLiteral(c.vector)}::vector, NOW())
+        `;
+      }
+      await tx.kbDoc.update({
+        where: { id: target.id },
+        data: { status: 'ready', chunkCount: chunks.length, error: null },
+      });
     });
   }
 
