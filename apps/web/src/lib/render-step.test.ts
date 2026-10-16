@@ -34,4 +34,27 @@ describe('renderStep', () => {
   it('confirm_request 返回空串（卡片由工作台渲染）', () => {
     expect(renderStep(ev('confirm_request', { confirmId: 'c1', tool: 'code.exec', args: {} }))).toBe('');
   });
+
+  it('kb.retrieve 命中时渲染来源列表（文件名#seq + score）', () => {
+    const out = renderStep(
+      ev('tool_result', {
+        tool: 'kb.retrieve',
+        ok: true,
+        display: { sources: [{ docName: '报告.docx', seq: 3, score: 0.82, snippet: '片段' }] },
+      }),
+    );
+    expect(out).toContain('报告.docx#3');
+    expect(out).toContain('0.82');
+    expect(out).toContain('来源');
+  });
+
+  it('kb.retrieve 无命中时提示无匹配', () => {
+    const out = renderStep(ev('tool_result', { tool: 'kb.retrieve', ok: true, display: { sources: [] } }));
+    expect(out).toContain('无匹配');
+  });
+
+  it('kb.retrieve 检索不可达时提示失败', () => {
+    const out = renderStep(ev('tool_result', { tool: 'kb.retrieve', ok: false, display: { sources: [] } }));
+    expect(out).toContain('失败');
+  });
 });

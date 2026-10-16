@@ -1,6 +1,6 @@
 'use client';
 
-import type { ArtifactDto, AuthResponse, SessionSummary } from '@ai-office/shared';
+import type { ArtifactDto, AuthResponse, KbDocDto, SessionSummary } from '@ai-office/shared';
 
 const BFF_URL = process.env.NEXT_PUBLIC_BFF_URL ?? 'http://localhost:4000';
 const TOKEN_KEY = 'ai_office_token';
@@ -132,4 +132,33 @@ export async function downloadArtifact(id: string, filename: string): Promise<vo
   a.remove();
   // 部分浏览器（Safari/Firefox）在 click 后异步读取 blob，立即 revoke 会导致下载为空；延后一帧再回收。
   setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+export async function listKbDocs(): Promise<KbDocDto[]> {
+  const res = await authFetch('/api/kb/docs');
+  if (!res.ok) throw new Error(`kb_list_failed_${res.status}`);
+  return (await res.json()) as KbDocDto[];
+}
+
+/** 上传知识库文档。用 FormData：**不能**设 content-type，否则 boundary 丢失（故不走 authFetch 的默认头）。 */
+export async function uploadKbDoc(file: File): Promise<KbDocDto> {
+  const token = getToken();
+  const form = new FormData();
+  form.append('file', file);
+  const res = await fetch(`${BFF_URL}/api/kb/docs`, {
+    method: 'POST',
+    headers: token ? { authorization: `Bearer ${token}` } : {},
+    body: form,
+  });
+  if (res.status === 401) {
+    clearToken();
+    throw new Error('unauthorized');
+  }
+  if (!res.ok) throw new Error(`kb_upload_failed_${res.status}`);
+  return (await res.json()) as KbDocDto;
+}
+
+export async function deleteKbDoc(id: string): Promise<void> {
+  const res = await authFetch(`/api/kb/docs/${id}`, { method: 'DELETE' });
+  if (!res.ok) throw new Error(`kb_delete_failed_${res.status}`);
 }

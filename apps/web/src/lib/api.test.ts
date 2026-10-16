@@ -48,3 +48,39 @@ describe('authErrorMessage', () => {
     expect(msg).not.toContain('some_internal_code');
   });
 });
+
+describe('uploadKbDoc', () => {
+  it('uploadKbDoc 用 FormData 且不覆盖 content-type', async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            id: 'd1',
+            filename: 'a.txt',
+            mime: 'text/plain',
+            size: 1,
+            status: 'pending',
+            chunkCount: 0,
+            error: null,
+            createdAt: '2026-01-01T00:00:00Z',
+          }),
+          { status: 202, headers: { 'content-type': 'application/json' } },
+        ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    // Node 环境没有 window/localStorage，stub window 让 getToken() 返回 'tok'。
+    vi.stubGlobal('window', {
+      localStorage: { getItem: () => 'tok', setItem: () => {}, removeItem: () => {} },
+    });
+
+    const { uploadKbDoc } = await import('./api');
+    await uploadKbDoc(new File(['x'], 'a.txt', { type: 'text/plain' }));
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(String(url)).toContain('/api/kb/docs');
+    expect(init.body).toBeInstanceOf(FormData);
+    const headers = (init.headers ?? {}) as Record<string, string>;
+    expect(headers['content-type']).toBeUndefined();
+    expect(headers.authorization).toBe('Bearer tok');
+  });
+});
