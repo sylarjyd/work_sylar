@@ -11,9 +11,10 @@ import { ArtifactController } from './artifacts/artifacts.controller';
 import { ArtifactService } from './artifacts/artifacts.service';
 import { ARTIFACT_STORAGE, createArtifactStorage } from './artifacts/storage';
 import { KbModule } from './kb/kb.module';
+import { ConnectorModule } from './connector/connector.module';
 
 @Module({
-  imports: [PrismaModule, KbModule],
+  imports: [PrismaModule, KbModule, ConnectorModule],
   controllers: [AuthController, SessionsController, TasksController, RunsController, ArtifactController],
   providers: [
     AuthService,

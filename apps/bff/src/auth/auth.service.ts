@@ -21,7 +21,7 @@ export class AuthService {
         tenant: { create: { type: 'personal', name: req.email } },
       },
     });
-    return this.issue(user.id, user.tenantId, user.email);
+    return this.issue(user.id, user.tenantId, user.email, user.role);
   }
 
   async login(req: LoginRequest): Promise<AuthResponse> {
@@ -30,13 +30,13 @@ export class AuthService {
     if (!user || !(await argon2.verify(user.passwordHash, req.password))) {
       throw new UnauthorizedException('invalid_credentials');
     }
-    return this.issue(user.id, user.tenantId, user.email);
+    return this.issue(user.id, user.tenantId, user.email, user.role);
   }
 
-  private issue(userId: string, tenantId: string, email: string): AuthResponse {
+  private issue(userId: string, tenantId: string, email: string, role: string): AuthResponse {
     return {
       token: signToken({ sub: userId, tenantId }),
-      user: { id: userId, email },
+      user: { id: userId, email, role },
     };
   }
 }

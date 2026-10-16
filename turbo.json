@@ -29,7 +29,13 @@
     "INTERNAL_TOKEN",
     "KB_CHUNK_SIZE",
     "KB_CHUNK_OVERLAP",
-    "KB_MAX_FILE_BYTES"
+    "KB_MAX_FILE_BYTES",
+    "CONNECTOR_ENC_KEY",
+    "MCP_HEARTBEAT_MS",
+    "MCP_BACKOFF_BASE_MS",
+    "MCP_BACKOFF_MAX_MS",
+    "MCP_INIT_TIMEOUT_MS",
+    "MCP_CALL_TIMEOUT_MS"
   ],
   "tasks": {
     "build": { "dependsOn": ["^build"], "outputs": ["dist/**", ".next/**"] },

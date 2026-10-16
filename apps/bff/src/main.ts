@@ -5,11 +5,14 @@ import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fa
 import multipart from '@fastify/multipart';
 import { AppModule } from './app.module';
 import { CORS_OPTIONS } from './cors';
+import { assertConnectorKey } from './connector/crypto';
 
 // 必须在 NestFactory.create 之前：Prisma 连接串、JWT 密钥都在实例化服务时读取。
 loadRootEnv();
 
 async function bootstrap(): Promise<void> {
+  // 缺/非法 CONNECTOR_ENC_KEY 立即失败，避免运行到首次写连接器才暴露。
+  assertConnectorKey();
   const app = await NestFactory.create<NestFastifyApplication>(
     AppModule,
     new FastifyAdapter(),
