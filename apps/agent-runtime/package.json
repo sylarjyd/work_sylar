@@ -10,12 +10,13 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "@ai-office/shared": "workspace:*"
+    "@ai-office/shared": "workspace:*",
+    "@aws-sdk/client-s3": "^3.1152.0"
   },
   "devDependencies": {
     "@types/node": "^22.9.0",
-    "tsx": "^4.19.2",
     "tsup": "^8.3.5",
+    "tsx": "^4.19.2",
     "typescript": "^5.6.3",
     "vitest": "^2.1.8"
   }
