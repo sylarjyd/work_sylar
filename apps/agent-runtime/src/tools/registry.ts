@@ -2,9 +2,10 @@ import type { Tool } from './types';
 import { createWebSearchTool, createSearchProvider } from './web-search';
 import { createWebFetchTool } from './web-fetch';
 import { createDocTools } from './doc';
+import { createCodeExecTool } from './code-exec';
 import { createStorage, type Storage } from '../storage/s3';
 
-/** 内置工具集：web.search / web.fetch + doc.docx / doc.xlsx / doc.pptx。 */
+/** 内置工具集：web.search / web.fetch + doc.docx / doc.xlsx / doc.pptx + code.exec。 */
 export function createTools(
   env: NodeJS.ProcessEnv = process.env,
   storage: Storage = createStorage(env),
@@ -13,5 +14,6 @@ export function createTools(
     createWebSearchTool(createSearchProvider(env)),
     createWebFetchTool(),
     ...createDocTools(storage),
+    createCodeExecTool(env),
   ];
 }
