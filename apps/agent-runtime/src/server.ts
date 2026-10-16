@@ -1,4 +1,4 @@
-import { createServer, type Server } from 'node:http';
+import { createServer, type IncomingMessage, type Server } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 import { encodeSse } from '@ai-office/shared';
@@ -8,6 +8,7 @@ import { createGateway } from './model/create-gateway';
 import type { ModelGateway } from './model/types';
 import { createTools } from './tools/registry';
 import type { Tool } from './tools/types';
+import { ConfirmBroker } from './confirm/broker';
 import { loadRootEnv } from './load-env';
 import { createStorage, type Storage } from './storage/s3';
 
@@ -21,6 +22,16 @@ export function createRuntimeServer(deps: RuntimeDeps = {}): Server {
   const gateway = deps.gateway ?? createGateway();
   const storage = deps.storage ?? createStorage();
   const tools = deps.tools ?? createTools(process.env, storage);
+  // runtime 单实例持有一份确认闸门；连接 close 时按 runId 取消挂起。
+  const confirm = new ConfirmBroker();
+  const confirmTimeoutMs = Number(process.env.CONFIRM_TIMEOUT_MS ?? 120000);
+
+  // BFF→runtime 共享密钥：设置 AGENT_RUNTIME_TOKEN 后强制校验，供网络化部署用；
+  // 未设置时仅靠入口默认绑本机（见 isEntry）限制可达面。
+  const authorized = (req: IncomingMessage): boolean => {
+    const token = process.env.AGENT_RUNTIME_TOKEN;
+    return !token || req.headers['x-agent-runtime-token'] === token;
+  };
 
   return createServer((req, res) => {
     if (req.method === 'GET' && req.url === '/health') {
@@ -30,10 +41,7 @@ export function createRuntimeServer(deps: RuntimeDeps = {}): Server {
     }
 
     if (req.method === 'POST' && req.url === '/runs') {
-      // BFF→runtime 共享密钥：设置 AGENT_RUNTIME_TOKEN 后强制校验，供网络化部署用；
-      // 未设置时仅靠入口默认绑本机（见 isEntry）限制可达面。
-      const token = process.env.AGENT_RUNTIME_TOKEN;
-      if (token && req.headers['x-agent-runtime-token'] !== token) {
+      if (!authorized(req)) {
         res.writeHead(401, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ error: 'unauthorized' }));
         return;
@@ -55,12 +63,16 @@ export function createRuntimeServer(deps: RuntimeDeps = {}): Server {
           'cache-control': 'no-cache',
           connection: 'keep-alive',
         });
+        // 客户端断开：把该 run 的挂起闸门按拒绝兑现，避免悬停到超时。
+        res.on('close', () => confirm.cancel(runReq.runId));
 
         void (async () => {
           try {
             for await (const ev of runAgent(runReq, {
               gateway,
               tools,
+              confirm,
+              confirmTimeoutMs,
               onUsage: (u) => res.write(encodeSse({ event: 'usage', data: u })),
             })) {
               res.write(encodeSse({ event: 'step', data: ev }));
@@ -72,6 +84,42 @@ export function createRuntimeServer(deps: RuntimeDeps = {}): Server {
             res.end();
           }
         })();
+      });
+      return;
+    }
+
+    const confirmMatch = req.method === 'POST' && /^\/runs\/([^/]+)\/confirm$/.exec(req.url ?? '');
+    if (confirmMatch) {
+      if (!authorized(req)) {
+        res.writeHead(401, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: 'unauthorized' }));
+        return;
+      }
+      const runId = decodeURIComponent(confirmMatch[1]);
+      let body = '';
+      req.on('data', (chunk) => (body += chunk));
+      req.on('end', () => {
+        let decision: { confirmId?: unknown; approved?: unknown };
+        try {
+          decision = JSON.parse(body || '{}') as typeof decision;
+        } catch {
+          res.writeHead(400, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ error: 'invalid json' }));
+          return;
+        }
+        if (
+          typeof decision.confirmId !== 'string' ||
+          decision.confirmId === '' ||
+          typeof decision.approved !== 'boolean'
+        ) {
+          res.writeHead(400, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ error: 'invalid_decision' }));
+          return;
+        }
+        // runtime 无 run 注册表，区分不了「未知 run」与「已决」；二者统一 matched:false（幂等安全）。
+        const matched = confirm.resolve(runId, decision.confirmId, decision.approved);
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, matched }));
       });
       return;
     }
