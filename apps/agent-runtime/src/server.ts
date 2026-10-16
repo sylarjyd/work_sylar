@@ -287,9 +287,15 @@ if (isEntry) {
   // 默认只绑本机：该端点无内置鉴权（仅有可选 token），暴露到网络等于开放一个无鉴权的模型入口。
   // 部署到网络时须显式设 AGENT_RUNTIME_HOST=0.0.0.0 并同时配置 AGENT_RUNTIME_TOKEN。
   const host = process.env.AGENT_RUNTIME_HOST ?? '127.0.0.1';
-  createRuntimeServer({ storage }).listen(port, host, () => {
+  const server = createRuntimeServer({ storage });
+  server.listen(port, host, () => {
     console.log(`agent-runtime listening on http://${host}:${port}`);
   });
+  // 收到终止信号时优雅停机：server.close() 触发 'close' → McpHost.closeAll() 回收 MCP 子进程；
+  // 不调用 process.exit，让事件循环在子进程回收后自然退出，避免遗留孤儿子进程。
+  const shutdown = () => { server.close(); };
+  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', shutdown);
 }
 
 /** 默认追加工具：拉启用连接器 → 构建 MCP 工具；BFF 不可达时降级为空。 */
