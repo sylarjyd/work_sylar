@@ -60,6 +60,9 @@ importers:
       '@ai-office/shared':
         specifier: workspace:*
         version: link:../../packages/shared
+      '@aws-sdk/client-s3':
+        specifier: ^3.1152.0
+        version: 3.1152.0
       '@nestjs/common':
         specifier: ^10.4.6
         version: 10.4.22(reflect-metadata@0.2.2)(rxjs@7.8.2)
