@@ -168,7 +168,7 @@ describe('runtime server', () => {
       const res = await fetch(`http://127.0.0.1:${addr.port}/runs`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ runId: 'r', sessionId: 's', tenantId: 't', goal: 'g', messages: [] }),
+        body: JSON.stringify({ runId: 'r', sessionId: 's', tenantId: 't', userId: 'u', goal: 'g', messages: [] }),
       });
       expect(res.status).toBe(200);
       const text = await res.text();
@@ -217,6 +217,7 @@ describe('runtime 确认端点', () => {
     runId,
     sessionId: 's',
     tenantId: 't',
+    userId: 'u',
     goal: 'g',
     messages: [{ role: 'user', content: 'g' }],
   });

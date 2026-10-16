@@ -3,7 +3,7 @@ import { createDocTools, artifactKey, safeFilename } from './doc';
 import type { Storage } from '../storage/s3';
 import type { RunContext } from './types';
 
-const ctx: RunContext = { tenantId: 't1', sessionId: 's1', runId: 'r1' };
+const ctx: RunContext = { tenantId: 't1', userId: 'u1', sessionId: 's1', runId: 'r1' };
 
 function fakeStorage(captured: { key: string; body: Buffer; contentType: string }[]): Storage {
   return {
