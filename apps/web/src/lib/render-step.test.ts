@@ -31,4 +31,7 @@ describe('renderStep', () => {
     expect(out).toContain('产出文档');
     expect(out).not.toContain('{');
   });
+  it('confirm_request 返回空串（卡片由工作台渲染）', () => {
+    expect(renderStep(ev('confirm_request', { confirmId: 'c1', tool: 'code.exec', args: {} }))).toBe('');
+  });
 });

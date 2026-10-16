@@ -6,6 +6,7 @@ import type { AgentEvent, ArtifactDto, SessionSummary } from '@ai-office/shared'
 import { createSseParser } from '../lib/sse-parser';
 import {
   clearToken,
+  confirmRun,
   createSession,
   downloadArtifact,
   getToken,
@@ -14,6 +15,7 @@ import {
   listSessions,
   streamTask,
 } from '../lib/api';
+import { currentConfirmCard } from '../lib/pending-confirm';
 import { renderStep } from '../lib/render-step';
 
 export default function Home() {
@@ -25,6 +27,8 @@ export default function Home() {
   const [artifacts, setArtifacts] = useState<ArtifactDto[]>([]);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState('');
+  const [runId, setRunId] = useState('');
+  const [decisions, setDecisions] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     if (!getToken()) {
@@ -95,6 +99,7 @@ export default function Home() {
     setEvents([]);
     setRunning(true);
     setError('');
+    setDecisions({});
     let sid = sessionId;
     try {
       // sessionId 为 state，newSession 的 setSessionId 不会同步更新本次渲染闭包里的值，
@@ -116,6 +121,7 @@ export default function Home() {
         for (const m of parse(decoder.decode(value, { stream: true }))) {
           if (m.event === 'step') {
             const ev = m.data as AgentEvent;
+            setRunId(ev.runId);
             setEvents((prev) => [...prev, ev]);
             if (ev.type === 'artifact') {
               setArtifacts((prev) => [
@@ -149,6 +155,20 @@ export default function Home() {
     }
   }
 
+  async function decide(confirmId: string, approved: boolean) {
+    // 立即禁用按钮（在 tool_result 回来之前给出反馈）；随后由事件流自然收尾。
+    setDecisions((prev) => ({ ...prev, [confirmId]: approved }));
+    try {
+      await confirmRun(runId, confirmId, approved);
+    } catch (err) {
+      if (isUnauthorized(err)) {
+        router.push('/login');
+        return;
+      }
+      setError(String(err));
+    }
+  }
+
   return (
     <main>
       <h1>AI 办公智能体 · M1 工作台</h1>
@@ -177,6 +197,27 @@ export default function Home() {
           <li key={ev.seq}>{renderStep(ev)}</li>
         ))}
       </ol>
+      {(() => {
+        const card = currentConfirmCard(events);
+        if (!card) return null;
+        const decided = decisions[card.confirmId];
+        return (
+          <div style={{ border: '1px solid #f0ad4e', borderRadius: 6, padding: 12, marginTop: 12 }}>
+            <div style={{ fontWeight: 600 }}>需要确认：{card.tool}</div>
+            <pre style={{ whiteSpace: 'pre-wrap', background: '#f7f7f7', padding: 8, borderRadius: 4 }}>
+              {JSON.stringify(card.args, null, 2)}
+            </pre>
+            {decided === undefined ? (
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button onClick={() => void decide(card.confirmId, true)}>允许</button>
+                <button onClick={() => void decide(card.confirmId, false)}>拒绝</button>
+              </div>
+            ) : (
+              <span style={{ color: '#666' }}>{decided ? '已允许' : '已拒绝'}（等待执行结果…）</span>
+            )}
+          </div>
+        );
+      })()}
       <h2 style={{ marginTop: 24 }}>成果区</h2>
       {artifacts.length === 0 ? (
         <p style={{ color: '#888' }}>暂无产出</p>

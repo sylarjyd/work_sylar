@@ -1,5 +1,29 @@
-import { describe, it, expect } from 'vitest';
-import { authErrorMessage, isUnauthorized } from './api';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { authErrorMessage, confirmRun, isUnauthorized } from './api';
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+describe('confirmRun', () => {
+  it('POST 到 /api/runs/:id/confirm 并回传 matched', async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ ok: true, matched: true }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const out = await confirmRun('r1', 'c1', true);
+    expect(out).toEqual({ ok: true, matched: true });
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(String(url)).toContain('/api/runs/r1/confirm');
+    expect(JSON.parse(init.body as string)).toEqual({ confirmId: 'c1', approved: true });
+  });
+});
 
 describe('isUnauthorized', () => {
   it('识别 authFetch 抛出的 unauthorized', () => {

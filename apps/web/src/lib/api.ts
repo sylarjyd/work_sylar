@@ -101,6 +101,20 @@ export async function listArtifacts(sessionId: string): Promise<ArtifactDto[]> {
   return (await res.json()) as ArtifactDto[];
 }
 
+/** 提交确认决策：JWT 走请求头。返回 runtime 的 { ok, matched }（matched=false 表示重复/过期/未知）。 */
+export async function confirmRun(
+  runId: string,
+  confirmId: string,
+  approved: boolean,
+): Promise<{ ok: boolean; matched: boolean }> {
+  const res = await authFetch(`/api/runs/${runId}/confirm`, {
+    method: 'POST',
+    body: JSON.stringify({ confirmId, approved }),
+  });
+  if (!res.ok) throw new Error(`confirm_failed_${res.status}`);
+  return (await res.json()) as { ok: boolean; matched: boolean };
+}
+
 /**
  * 下载产物：JWT 走请求头，故不能用 <a href>，须 fetch 取 blob 再触发保存。
  * 文件名从 DTO 传入——浏览器不会把 content-disposition 应用到程序化下载。

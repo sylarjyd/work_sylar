@@ -14,6 +14,9 @@ export function renderStep(ev: AgentEvent): string {
       const filename = String(ev.payload.filename ?? '');
       return `产出文档 ${filename}（${kind}）`;
     }
+    case 'confirm_request':
+      // 卡片由工作台单独渲染；文本渲染器保持纯文本职责，返回空串。
+      return '';
     default:
       // 前向兼容：StepType 未来新增类型时，未知事件渲染为空串而非 undefined。
       return '';
