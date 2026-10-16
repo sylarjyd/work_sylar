@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { buildMcpTools } from './discovery';
 import type { ConnectorConfig } from './transport';
 import type { McpHost } from './host';
@@ -43,5 +43,37 @@ describe('buildMcpTools', () => {
     });
     const tools = await buildMcpTools([cfg, bad, disabled], host);
     expect(tools.map((t) => t.name)).toEqual(['mcp.fb.echo']);
+  });
+
+  it('disabled 连接器不触发 ensure', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const calls: string[] = [];
+      const host = fakeHost({
+        ensure: async (c: ConnectorConfig) => { calls.push(c.name); return [{ name: 'echo', description: '', inputSchema: {} }]; },
+      });
+      const disabled: ConnectorConfig = { ...cfg, id: 'c3', name: 'off', enabled: false };
+      await buildMcpTools([disabled], host);
+      expect(calls).toEqual([]);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('同名工具只保留一个并告警', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const host = fakeHost({
+        ensure: async () => [
+          { name: 'echo', description: '', inputSchema: {} },
+          { name: 'echo', description: '', inputSchema: {} },
+        ],
+      });
+      const tools = await buildMcpTools([cfg], host);
+      expect(tools.map((t) => t.name)).toEqual(['mcp.fb.echo']);
+      expect(warn).toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

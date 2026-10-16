@@ -11,16 +11,23 @@ export async function buildMcpTools(
   host: McpHost,
 ): Promise<Tool[]> {
   const tools: Tool[] = [];
+  const seen = new Set<string>();
   for (const cfg of connectors) {
     if (!cfg.enabled) continue;
     let infos;
     try {
       infos = await host.ensure(cfg);
-    } catch {
-      continue; // 记日志由 host 承担；此处静默跳过该 Server。
+    } catch (err) {
+      console.warn(`[mcp] 连接器 "${cfg.name}" 拉起失败，跳过其工具`, err);
+      continue;
     }
     for (const info of infos) {
       const name = `mcp.${cfg.name}.${info.name}`;
+      if (seen.has(name)) {
+        console.warn(`[mcp] 工具名 "${name}" 重复，忽略后者`);
+        continue;
+      }
+      seen.add(name);
       tools.push({
         name,
         description: info.description || `MCP 工具 ${cfg.name}/${info.name}`,
