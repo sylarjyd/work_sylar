@@ -42,16 +42,19 @@
 
 ### 3.1 分层变更
 
-- **shared**：新增 `KbDocDto`（`{ id, filename, mime, size, status, chunkCount, error, createdAt }`）、`KbSearchHit`（`{ docName, seq, score, text }`）类型，供 BFF/web 复用。
+- **shared**：新增 `KbDocDto`（`{ id, filename, mime, size, status, chunkCount, error, createdAt }`）、`KbSearchHit`（`{ docName, seq, score, text }`）类型，供 BFF/web 复用。另 `RunRequest` 增加 `userId`（BFF 从 JWT 的 `sub` 透传）：检索需按 `tenant_id + user_id` 过滤，而 runtime 只做嵌入、不知道用户身份（M3 仅透传了 `tenantId`）。
 - **agent-runtime**：
   - 新增 `embedding/`：`types.ts`（`EmbeddingGateway { embed(texts: string[]): Promise<number[][]> }`）、`openai-compat-embedding.ts`、`mock-embedding.ts`、`create-embedding-gateway.ts`。
   - 新增 `kb/`：`parse.ts`（按类型抽文本）、`chunk.ts`（滑窗切分）、`ingest.ts`（编排）、`bff-client.ts`（调 BFF 内部检索端点）。
   - 新增 `tools/kb-retrieve.ts`（`permission: 'safe'`）。
+  - `tools/types.ts`：`RunContext` 增加 `userId`（来源同 `RunRequest`）。
+  - `agent-loop.ts`：`tool_result` 事件新增 `display` 字段**原样透传**（工具结果里的 `display` 不做 500 字截断，供 web 渲染来源列表；`preview` 仍截断）。
   - `server.ts`：新增 `POST /kb/ingest`（复用 M3 的 `authorized()` 校验 `x-agent-runtime-token`）。
   - `tools/registry.ts`：注册 `kb.retrieve`（工具数 6 → 7）。
 - **bff**：
   - Prisma 新增 `KbDoc` / `KbChunk`；`KbChunk.vector` 为 `Unsupported("vector(1024)")`（Prisma 无法原生建模，见 §4.3）。
-  - 新增 `kb/`：`kb.service.ts`（上传/列表/删除/摄取编排/向量检索）、`kb.controller.ts`（对外 JWT 路由 + 内部 token 路由）、`kb.module.ts`。
+  - 新增 `kb/`：`kb.service.ts`（上传/列表/删除/摄取编排/向量检索）、`kb.controller.ts`（对外 JWT 路由 + 内部 token 路由）、`kb.module.ts`、`storage.ts`（KB 对象写入，ARTIFACT_STORAGE 仅只读）。
+  - `main.ts`：注册 `@fastify/multipart`（新增依赖）以解析上传。
   - `app.module.ts` 注册 `KbModule`。
 - **web**：新增 `/kb` 页（上传/列表/删除/轮询）；`lib/api.ts` 增 `listKbDocs` / `uploadKbDoc` / `deleteKbDoc`；工作台 `render-step` 识别 `kb.retrieve` 结果渲染来源引用。
 - **基础设施**：Postgres 镜像由 `postgres:16-alpine` 换为 `pgvector/pgvector:pg16`（drop-in，含扩展）；`schema.sql` 增 `CREATE EXTENSION vector`、两张表、HNSW 索引。
@@ -75,7 +78,7 @@ Web                 BFF                          Runtime
 ```
 Agent loop ── 模型决定调 kb.retrieve({query,topK})
    │  runtime 本地 embed(query) → 向量 v
-   │  POST {BFF_INTERNAL_URL}/internal/kb/search  (header: x-internal-token)  {vector:v, topK}
+   │  POST {BFF_INTERNAL_URL}/internal/kb/search  (header: x-internal-token)  {vector:v, topK, tenantId, userId}
    │  BFF: SELECT … ORDER BY vector <=> v LIMIT topK（按 tenant_id+user_id 过滤）
    │  ◀─ [{docName,seq,score,text}]
    └─ 组装带引用的文本 → 回填 tool_result → 模型据此作答
@@ -115,7 +118,7 @@ KbChunk: id(uuid) doc_id tenant_id user_id seq text vector vector(1024) created_
 ### 5.2 BFF 内部（`x-internal-token`）
 | 方法 | 路径 | 入参 | 出参 |
 |---|---|---|---|
-| POST | `/internal/kb/search` | `{ vector:number[], topK:number }` | `200 [{docName,seq,score,text}]`；token 不符 `401` |
+| POST | `/internal/kb/search` | `{ vector:number[], topK:number, tenantId:string, userId:string }` | `200 [{docName,seq,score,text}]`；token 不符 `401` |
 
 ### 5.3 runtime（`x-agent-runtime-token`，复用 M3 `authorized()`）
 | 方法 | 路径 | 入参 | 出参 |
@@ -129,12 +132,13 @@ KbChunk: id(uuid) doc_id tenant_id user_id seq text vector vector(1024) created_
 - **工具结果结构**（供 agent-loop 回填 `tool_result` 与 web 渲染）：
   ```
   { ok: true, tool: 'kb.retrieve',
-    preview: { hits: [{ docName, seq, score, text }],
-               text: '[来源: {docName}#{seq}] …' } }
+    text: '[来源: {docName}#{seq}] …',                    // 回给模型读的引用正文
+    display: { sources: [{ docName, seq, score, snippet }] } }  // 供 web 渲染
   ```
-  无命中：`{ ok:true, preview:{ hits:[], text:'知识库无匹配内容' } }`；
-  检索不可达：`{ ok:false, tool:'kb.retrieve', error:'kb_search_unreachable' }`。
-- web 由 `preview.hits` 渲染来源列表；`preview.text` 回给模型。
+  **`display` 由 agent-loop 原样透传**（不受 500 字 `preview` 截断影响；snippet 取切片前 200 字，避免 step 落库过大）。
+  无命中：`{ ok:true, tool:'kb.retrieve', text:'知识库无匹配内容', display:{ sources:[] } }`；
+  检索不可达：`{ ok:false, tool:'kb.retrieve', error:'kb_search_unreachable', text:'知识库暂时不可用', display:{ sources:[] } }`。
+- web 由 `display.sources` 渲染来源列表；`text` 回给模型。
 
 ## 6. 切分与检索
 
@@ -158,7 +162,7 @@ KbChunk: id(uuid) doc_id tenant_id user_id seq text vector vector(1024) created_
 ## 8. Web UI
 
 - **`/kb` 页**：文件选择 + 上传按钮；列表（文件名 · 状态徽标[`pending`/`ready`/`failed`+error] · 切片数 · 时间 · 删除）；存在 `pending` 项时按 2–3s 间隔轮询刷新，全部落定后停止。
-- **工作台**：`kb.retrieve` 的 `tool_result` 渲染为**来源列表**（`文件名#seq` + 片段 + score），扩展 `render-step.ts`；`kb.retrieve` 与既有工具共用 `tool_call`/`tool_result` step 类型，无需新 `StepType`。
+- **工作台**：`kb.retrieve` 的 `tool_result` 渲染为**来源列表**（`文件名#seq` + score + 片段），读 `payload.display.sources`，扩展 `render-step.ts`；`kb.retrieve` 与既有工具共用 `tool_call`/`tool_result` step 类型，无需新 `StepType`。
 
 ## 9. 配置项
 
