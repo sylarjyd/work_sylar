@@ -30,5 +30,5 @@ describe('端到端：接入 MCP Server 后其工具可用', () => {
 
     const out = await tools[0].execute({ text: '你好' }, { tenantId: 't1', userId: 'u1', sessionId: 's1', runId: 'r1' });
     expect(out).toMatchObject({ ok: true, tool: 'mcp.echo.echo', text: 'echo:你好' });
-  });
+  }, 30_000); // Host 的 init/call 超时是 20s，vitest 默认 5s 会先杀掉用例，这里显式放宽到 30s
 });
