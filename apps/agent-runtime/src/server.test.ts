@@ -141,4 +141,34 @@ describe('runtime server', () => {
       await new Promise<void>((r) => errServer.close(() => r()));
     }
   });
+
+  it('注入 storage 时正常启动并透传工具（不触网）', async () => {
+    const storage = {
+      ensureBucket: async () => {},
+      putObject: async () => {},
+      getObjectStream: async () => {
+        throw new Error('unused');
+      },
+    };
+    const server = createRuntimeServer({
+      gateway: {
+        async chat() {
+          return { content: 'hi', toolCalls: [], usage: { input: 0, output: 0 } };
+        },
+      },
+      tools: [],
+      storage,
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
+    const addr = server.address();
+    if (!addr || typeof addr === 'string') throw new Error('no port');
+    const res = await fetch(`http://127.0.0.1:${addr.port}/runs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ runId: 'r', sessionId: 's', tenantId: 't', goal: 'g', messages: [] }),
+    });
+    expect(res.status).toBe(200);
+    await res.text();
+    await new Promise<void>((r) => server.close(() => r()));
+  });
 });
