@@ -1,5 +1,7 @@
 import { isIP } from 'node:net';
 import { lookup } from 'node:dns/promises';
+import { request as httpsRequest } from 'node:https';
+import { request as httpRequest } from 'node:http';
 import type { Tool } from './types';
 
 const MAX_CHARS = 8000;
@@ -7,6 +9,13 @@ const FETCH_TIMEOUT_MS = 15_000;
 
 /** 解析主机名的**全部** A/AAAA 记录：只查一条会漏掉多记录里混入的内网地址。 */
 export type Resolver = (hostname: string) => Promise<string[]>;
+
+/** 发一次 GET 并返回状态与响应体（不跟随跳转）；可注入以在单测中替代真实网络。 */
+export type Transport = (
+  url: URL,
+  ip: string,
+  timeoutMs: number,
+) => Promise<{ status: number; body: string }>;
 
 /** 拒绝环回/私网/链路本地/ULA/保留等非公网地址，封堵 SSRF（云元数据、内网服务）。 */
 export function isBlockedIp(ip: string): boolean {
@@ -44,6 +53,53 @@ export function isBlockedIp(ip: string): boolean {
 const defaultResolve: Resolver = async (hostname) =>
   (await lookup(hostname, { all: true })).map((r) => r.address);
 
+/**
+ * 把 socket 连接固定在**已校验**的 IP 上。node 的 lookup 是连接前唯一的解析路径，
+ * 固定它即可杜绝“校验用一次解析、连接再解析一次”的 DNS rebinding TOCTOU——
+ * 校验的地址与实际连接的地址同源。TLS 的 SNI 与证书校验仍按原 hostname（由 url 推导）。
+ *
+ * 兼容 node 的三种调用形式：http(s) 连接会以 (host, {all:true}, cb) 调用、要求回带
+ * 地址数组；其余路径可能用 (host, {…}, cb) 或 (host, cb)，要求回带单个地址。
+ */
+export function pinnedLookup(ip: string, family: 4 | 6 = isIP(ip) === 6 ? 6 : 4) {
+  return (hostname: string, optionsOrCb: unknown, maybeCb?: unknown): void => {
+    const cb = (typeof optionsOrCb === 'function' ? optionsOrCb : maybeCb) as (
+      err: NodeJS.ErrnoException | null,
+      address: unknown,
+    ) => void;
+    const all =
+      typeof optionsOrCb === 'object' &&
+      optionsOrCb !== null &&
+      (optionsOrCb as { all?: boolean }).all === true;
+    if (all) cb(null, [{ address: ip, family }]);
+    else cb(null, ip);
+  };
+}
+
+/** 默认传输：node:http(s) 发 GET，lookup 固定到已校验 IP（见 pinnedLookup），不跟随跳转。 */
+export const requestPinned: Transport = (url, ip, timeoutMs) =>
+  new Promise((resolve, reject) => {
+    const req = (url.protocol === 'https:' ? httpsRequest : httpRequest)(
+      url,
+      { lookup: pinnedLookup(ip) as never, timeout: timeoutMs },
+      (res) => {
+        const status = res.statusCode ?? 0;
+        if (status >= 300 && status < 400) {
+          res.resume(); // 不跟随跳转：丢弃响应体，状态交由调用方判为 redirect_blocked
+          resolve({ status, body: '' });
+          return;
+        }
+        let body = '';
+        res.setEncoding('utf8');
+        res.on('data', (c: string) => (body += c));
+        res.on('end', () => resolve({ status, body }));
+      },
+    );
+    req.on('timeout', () => req.destroy(new Error('fetch_timeout')));
+    req.on('error', reject);
+    req.end();
+  });
+
 /** 极简 HTML→文本：去 script/style、去标签、压缩空白。M1 不引入解析库。 */
 export function htmlToText(html: string): string {
   return html
@@ -63,16 +119,13 @@ export function htmlToText(html: string): string {
 /**
  * web.fetch 的 URL 由模型生成、可被目标网页或用户目标间接影响，属 SSRF 攻击面：
  * 攻击者可诱使 Agent 抓取云元数据（169.254.169.254）或内网服务，再把响应读回对话。
- * 因此在发起请求前解析主机名的**全部**地址，只要有一条非公网即拒绝，且不自动跟随跳转
- * （避免 3xx 绕过校验）。resolver 可注入：单测用它替代真实 DNS，保持离线可跑。
- *
- * 残余风险（已评估、暂接受）：校验与 fetch 各自解析，理论上存在 DNS rebinding 的 TOCTOU
- * 窗口。彻底封堵需把连接固定在已校验 IP 上（自定义 undici Agent + 自定义 lookup），会引入
- * 依赖；结合 runtime 默认仅绑本机，M1 暂不展开，留待网络化里程碑或前置出网代理处理。
+ * 防护：发起前解析主机名的**全部**地址，只要有一条非公网即拒绝；随后把连接固定到
+ * 已校验 IP（pinnedLookup），使校验与连接同源，杜绝 DNS rebinding；且不跟随跳转。
+ * resolver / transport 可注入：单测用替身替代真实 DNS 与网络，保持离线可跑。
  */
 export function createWebFetchTool(
-  fetcher: typeof fetch = fetch,
   resolve: Resolver = defaultResolve,
+  transport: Transport = requestPinned,
 ): Tool {
   return {
     name: 'web.fetch',
@@ -93,14 +146,10 @@ export function createWebFetchTool(
       if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('invalid_url');
       const addrs = await resolve(url.hostname);
       if (addrs.length === 0 || addrs.some(isBlockedIp)) throw new Error('blocked_host');
-      const res = await fetcher(raw, {
-        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-        // 不自动跟随跳转：否则重定向可绕过上面的 host 校验。
-        redirect: 'manual',
-      });
-      if (res.status >= 300 && res.status < 400) throw new Error('redirect_blocked');
-      if (!res.ok) throw new Error(`fetch_http_${res.status}`);
-      const text = htmlToText(await res.text());
+      const { status, body } = await transport(url, addrs[0], FETCH_TIMEOUT_MS);
+      if (status >= 300 && status < 400) throw new Error('redirect_blocked');
+      if (status < 200 || status >= 300) throw new Error(`fetch_http_${status}`);
+      const text = htmlToText(body);
       return { url: raw, text: text.slice(0, MAX_CHARS), truncated: text.length > MAX_CHARS };
     },
   };
