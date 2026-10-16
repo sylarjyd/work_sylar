@@ -1,6 +1,6 @@
 import type { AgentEvent, RunRequest } from '@ai-office/shared';
 import type { ModelGateway, ModelMessage } from './model/types';
-import type { Tool } from './tools/types';
+import type { RunContext, Tool } from './tools/types';
 
 export interface RunDeps {
   gateway: ModelGateway;
@@ -23,6 +23,11 @@ export async function* runAgent(req: RunRequest, deps: RunDeps): AsyncGenerator<
     parameters: t.parameters,
   }));
   const messages: ModelMessage[] = [...req.messages];
+  const ctx: RunContext = {
+    tenantId: req.tenantId,
+    sessionId: req.sessionId,
+    runId: req.runId,
+  };
   let seq = 0;
   let usage = { input: 0, output: 0 };
   const step = (type: AgentEvent['type'], payload: Record<string, unknown>): AgentEvent => ({
@@ -58,7 +63,7 @@ export async function* runAgent(req: RunRequest, deps: RunDeps): AsyncGenerator<
       let result: unknown;
       try {
         if (!tool) throw new Error(`unknown_tool:${call.name}`);
-        result = await tool.execute(call.args);
+        result = await tool.execute(call.args, ctx);
       } catch (err) {
         ok = false;
         result = { error: String(err) };

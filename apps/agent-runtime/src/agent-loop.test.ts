@@ -24,6 +24,7 @@ const echoTool: Tool = {
 const req: RunRequest = {
   runId: 'r1',
   sessionId: 's1',
+  tenantId: 't1',
   goal: '查竞品',
   messages: [{ role: 'user', content: '查竞品' }],
 };
@@ -136,5 +137,34 @@ describe('runAgent', () => {
     const events = await collect(runAgent(req, { gateway, tools: [badTool] }));
     const toolResult = events.find((e) => e.type === 'tool_result');
     expect(toolResult?.payload.ok).toBe(false);
+  });
+
+  it('把运行上下文透传给工具 execute', async () => {
+    let seen: unknown;
+    let round = 0;
+    const gateway: ModelGateway = {
+      async chat() {
+        round++;
+        if (round === 1) {
+          return {
+            content: '调用',
+            toolCalls: [{ id: 'c1', name: 'web.search', args: { query: 'x' } }],
+            usage: { input: 0, output: 0 },
+          };
+        }
+        return { content: '收尾', toolCalls: [], usage: { input: 0, output: 0 } };
+      },
+    };
+    const spyTool: Tool = {
+      name: 'web.search',
+      description: 'd',
+      parameters: {},
+      async execute(_args, ctx) {
+        seen = ctx;
+        return { results: [] };
+      },
+    };
+    await collect(runAgent(req, { gateway, tools: [spyTool] }));
+    expect(seen).toEqual({ tenantId: 't1', sessionId: 's1', runId: 'r1' });
   });
 });
