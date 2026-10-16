@@ -30,6 +30,13 @@ describe('artifactKey / safeFilename', () => {
     expect(key.startsWith('artifacts/t1/r1/')).toBe(true);
     expect(key).not.toContain('..');
   });
+
+  it('清洗控制字符（CR/LF）与路径穿越', () => {
+    const cleaned = safeFilename('bad\r\nInjected: 1\r\n\r\n../x');
+    expect(cleaned).not.toMatch(/[\r\n]/);
+    expect(cleaned).not.toContain('..');
+    expect(cleaned).not.toContain('/');
+  });
 });
 
 describe('createDocTools', () => {
@@ -68,5 +75,26 @@ describe('createDocTools', () => {
     )) as { artifact: Record<string, unknown> };
     expect(out.artifact).toMatchObject({ kind: 'xlsx', filename: '表.xlsx' });
     expect(captured[0].contentType).toContain('spreadsheetml');
+  });
+
+  it('返回的 ArtifactRef.filename 为清洗后的名字（供 Content-Disposition 使用）', async () => {
+    const pptx = createDocTools(fakeStorage([])).find((t) => t.name === 'doc.pptx')!;
+    const out = (await pptx.execute(
+      { filename: '../../evil\r\nX: y.pptx', slides: [{ bullets: ['a'] }] },
+      ctx,
+    )) as { artifact: { filename: string } };
+    expect(out.artifact.filename).not.toContain('..');
+    expect(out.artifact.filename).not.toContain('/');
+    expect(out.artifact.filename).not.toMatch(/[\r\n]/);
+  });
+
+  it('doc.xlsx 缺 sheets 抛错', async () => {
+    const xlsx = createDocTools(fakeStorage([])).find((t) => t.name === 'doc.xlsx')!;
+    await expect(xlsx.execute({ filename: 'a.xlsx' }, ctx)).rejects.toThrow('missing_sheets');
+  });
+
+  it('doc.pptx 缺 slides 抛错', async () => {
+    const pptx = createDocTools(fakeStorage([])).find((t) => t.name === 'doc.pptx')!;
+    await expect(pptx.execute({ filename: 'a.pptx' }, ctx)).rejects.toThrow('missing_slides');
   });
 });

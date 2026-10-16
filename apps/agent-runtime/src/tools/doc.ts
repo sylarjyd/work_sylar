@@ -10,9 +10,13 @@ const MIME: Record<ArtifactKind, string> = {
   pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
 };
 
-/** 去掉路径分隔符与 `..`，防止模型给的 filename 越出 `artifacts/{tenantId}/{runId}/` 前缀。 */
+/** 去掉控制字符（含 CR/LF，防止注入 HTTP 头）与路径分隔符 / `..`，防止模型给的 filename 越出 `artifacts/{tenantId}/{runId}/` 前缀。 */
 export function safeFilename(name: string): string {
-  const cleaned = name.replace(/[\\/]/g, '_').replace(/\.\./g, '_').trim();
+  const cleaned = name
+    .replace(/[\x00-\x1f\x7f]/g, '')
+    .replace(/[\\/]/g, '_')
+    .replace(/\.\./g, '_')
+    .trim();
   return cleaned || 'artifact';
 }
 
@@ -33,9 +37,10 @@ async function emit(
   filename: string,
   bytes: Buffer,
 ): Promise<{ artifact: ArtifactRef }> {
-  const storageKey = artifactKey(ctx, filename);
+  const clean = safeFilename(filename);
+  const storageKey = artifactKey(ctx, clean);
   await storage.putObject(storageKey, bytes, MIME[kind]);
-  return { artifact: { kind, filename, storageKey, size: bytes.length } };
+  return { artifact: { kind, filename: clean, storageKey, size: bytes.length } };
 }
 
 export function createDocTools(storage: Storage): Tool[] {
