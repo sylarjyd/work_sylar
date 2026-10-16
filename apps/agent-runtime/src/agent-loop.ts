@@ -95,6 +95,6 @@ function preview(value: unknown): unknown {
 function extractArtifact(result: unknown): Record<string, unknown> | undefined {
   if (result === null || typeof result !== 'object') return undefined;
   const ref = (result as { artifact?: unknown }).artifact;
-  if (ref === null || typeof ref !== 'object') return undefined;
+  if (ref === null || typeof ref !== 'object' || Array.isArray(ref)) return undefined;
   return ref as Record<string, unknown>;
 }

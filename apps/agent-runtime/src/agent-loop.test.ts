@@ -199,6 +199,7 @@ describe('runAgent', () => {
       'artifact',
       'think',
     ]);
+    expect(events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4]);
     const art = events.find((e) => e.type === 'artifact');
     expect(art?.payload).toMatchObject({ kind: 'pptx', filename: 'a.pptx', storageKey: 'k', size: 3 });
   });
@@ -227,6 +228,33 @@ describe('runAgent', () => {
       },
     };
     const events = await collect(runAgent(req, { gateway, tools: [badTool] }));
+    expect(events.some((e) => e.type === 'artifact')).toBe(false);
+  });
+
+  it('artifact 字段为数组时不产出 artifact step', async () => {
+    let round = 0;
+    const gateway: ModelGateway = {
+      async chat() {
+        round++;
+        if (round === 1) {
+          return {
+            content: '生成',
+            toolCalls: [{ id: 'c1', name: 'doc.pptx', args: {} }],
+            usage: { input: 0, output: 0 },
+          };
+        }
+        return { content: '完成', toolCalls: [], usage: { input: 0, output: 0 } };
+      },
+    };
+    const weirdTool: Tool = {
+      name: 'doc.pptx',
+      description: 'd',
+      parameters: {},
+      async execute() {
+        return { artifact: [] };
+      },
+    };
+    const events = await collect(runAgent(req, { gateway, tools: [weirdTool] }));
     expect(events.some((e) => e.type === 'artifact')).toBe(false);
   });
 });
