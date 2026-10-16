@@ -100,4 +100,18 @@ describe('InternalConnectorController', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual([]);
   });
+
+  it('未配 token 时仅回环放行', async () => {
+    delete process.env.INTERNAL_TOKEN;
+    const res = await app.inject({ method: 'GET', url: '/internal/connectors?tenantId=t1' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual([]);
+  });
+
+  it('缺 tenantId 400 missing_tenant', async () => {
+    process.env.INTERNAL_TOKEN = 'sekret';
+    const res = await app.inject({ method: 'GET', url: '/internal/connectors', headers: { 'x-internal-token': 'sekret' } });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ error: 'missing_tenant' });
+  });
 });

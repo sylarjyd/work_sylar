@@ -1,9 +1,11 @@
 import {
   Body,
+  ConflictException,
   Controller,
   Delete,
   Get,
   HttpCode,
+  NotFoundException,
   Param,
   Patch,
   Post,
@@ -74,17 +76,16 @@ export class ConnectorController {
 
 /** 把 service 抛出的领域异常映射为 HTTP 响应；未识别的一律重抛由 Nest 兜底。 */
 function sendMapped(err: unknown, reply: FastifyReply, notFound = 'connector_not_found'): void {
-  const name = (err as { constructor?: { name?: string } })?.constructor?.name;
   if (err instanceof ValidateFailedError) {
     // ValidateFailedError.message 已是固定码（Task 5 起不再回传 runtime 原始错误），无需再透传 reason。
     reply.status(400).send({ error: 'validate_failed' });
     return;
   }
-  if (name === 'ConflictException') {
+  if (err instanceof ConflictException) {
     reply.status(400).send({ error: 'duplicate_name' });
     return;
   }
-  if (name === 'NotFoundException') {
+  if (err instanceof NotFoundException) {
     reply.status(404).send({ error: notFound });
     return;
   }
