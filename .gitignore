@@ -11,3 +11,5 @@ node_modules/
 dist/
 .turbo/
 *.tsbuildinfo
+/.playwright-mcp/季度复盘.pptx
+/.playwright-mcp/
