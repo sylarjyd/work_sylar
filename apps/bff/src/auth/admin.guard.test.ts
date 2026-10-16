@@ -22,14 +22,20 @@ describe('AdminGuard', () => {
   });
 
   it('角色非 admin 抛 Forbidden not_admin', async () => {
-    await expect(guardWith('member').canActivate(ctxFor('u1'))).rejects.toBeInstanceOf(ForbiddenException);
+    const err = await guardWith('member').canActivate(ctxFor('u1')).catch((e) => e);
+    expect(err).toBeInstanceOf(ForbiddenException);
+    expect(err.message).toBe('not_admin');
   });
 
   it('用户不存在抛 Forbidden', async () => {
-    await expect(guardWith(null).canActivate(ctxFor('u1'))).rejects.toBeInstanceOf(ForbiddenException);
+    const err = await guardWith(null).canActivate(ctxFor('u1')).catch((e) => e);
+    expect(err).toBeInstanceOf(ForbiddenException);
+    expect(err.message).toBe('not_admin');
   });
 
   it('无 req.user（未过 JwtGuard）抛 Forbidden', async () => {
-    await expect(guardWith('admin').canActivate(ctxFor(undefined))).rejects.toBeInstanceOf(ForbiddenException);
+    const err = await guardWith('admin').canActivate(ctxFor(undefined)).catch((e) => e);
+    expect(err).toBeInstanceOf(ForbiddenException);
+    expect(err.message).toBe('not_admin');
   });
 });
