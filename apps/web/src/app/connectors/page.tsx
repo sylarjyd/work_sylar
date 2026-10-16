@@ -24,8 +24,7 @@ export default function ConnectorsPage() {
   const [command, setCommand] = useState('');
   const [argsText, setArgsText] = useState('');
   const [envRows, setEnvRows] = useState<EnvRow[]>([{ key: '', value: '' }]);
-
-  const isAdmin = getRole() === 'admin';
+  const [isAdmin, setIsAdmin] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -46,6 +45,10 @@ export default function ConnectorsPage() {
     }
     void refresh();
   }, [refresh, router]);
+
+  useEffect(() => {
+    setIsAdmin(getRole() === 'admin');
+  }, []);
 
   async function submit() {
     setBusy(true);
@@ -77,7 +80,11 @@ export default function ConnectorsPage() {
       const updated = await updateConnector(item.id, { enabled: !item.enabled });
       setItems((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
     } catch (err) {
-      if (!isUnauthorized(err)) setError(String(err));
+      if (isUnauthorized(err)) {
+        router.push('/login');
+        return;
+      }
+      setError(String(err));
     }
   }
 
