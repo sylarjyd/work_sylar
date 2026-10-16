@@ -1,0 +1,174 @@
+# AI 办公智能体 · 开发计划（Development Plan）
+
+- 版本：v1.0
+- 日期：2026-10-16
+- 状态：随 M2 交付更新
+- 关联：`docs/design/01-overview-design.md`、`docs/deploy/06-deployment.md`
+
+> 团队规模 1–2 人、业余节奏。计划按**里程碑**组织，每个里程碑交付**可运行、可验证**的增量。工期为**乐观估计（人日）**，实际按业余节奏拉长。
+
+---
+
+## 1. 里程碑总览
+
+| 期 | 目标 | 状态 | 关键产出 |
+|---|---|---|---|
+| **M0 脚手架** | 三层骨架 + SSE 打通 | ✅ 已交付 | 前端可收到运行时流式事件；shared 协议 |
+| **M1 最小闭环** | 账号 + 会话 + 基础 Agent Loop | ✅ 已交付 | 注册登录、消息持久化、真模型 Loop、`web.search`/`web.fetch` |
+| **M2 会干活** | 工具系统 + 文档生成 + 成果区 | ✅ 已交付 | `doc.*` 三工具、产物落库/落存储、成果区与下载 |
+| **M3 安全** | 沙箱 + 确认卡片 + 权限分级 | 规划 | 破坏性操作需确认；`code.exec` 隔离 |
+| **M4 扩展** | 知识库 RAG + 连接器/MCP | 规划 | 文档问答；接外部工具 |
+| **M5 商业化** | 计费 + 用量 + 可观测 + 上线 | 规划 | 个人版可对外 |
+| 阶段二 | 桌面端 + 人机双写 | 后续 | Electron + Monaco，复用 runtime |
+| 阶段三 | 企业层 | 后续 | 组织/权限/审计/SSO/私有化/信创、企微 |
+
+```mermaid
+gantt
+    title 里程碑路线（相对排期，非日历）
+    dateFormat X
+    axisFormat %s
+    section 已交付
+    M0 脚手架        :done, m0, 0, 2
+    M1 最小闭环      :done, m1, after m0, 4
+    M2 会干活        :done, m2, after m1, 5
+    section 规划
+    M3 安全          :m3, after m2, 6
+    M4 扩展          :m4, after m3, 6
+    M5 商业化        :m5, after m4, 8
+```
+
+---
+
+## 2. 已完成里程碑回顾
+
+### 2.1 M0 脚手架 ✅
+
+- 单仓多包（pnpm + turbo）：shared / agent-runtime / bff / web。
+- SSE 协议（`encodeSse`/`createSseParser`）与 `StepType`（含预留 `artifact`）。
+- 端到端打通：web 收到 runtime 流式事件。
+
+### 2.2 M1 最小闭环 ✅
+
+- 账号：邮箱密码注册/登录，argon2 哈希，JWT（HS256/7d）鉴权。
+- 会话：多会话 + 消息历史（Postgres + Prisma），按 seq 排序。
+- Agent Loop：plan→act→observe，真模型驱动（OpenAI 兼容），内置 `web.search`/`web.fetch`。
+- 安全加固：`web.fetch` SSRF 防护（全地址校验 + 连接固定 IP + 不跟随跳转）。
+
+### 2.3 M2 会干活 ✅
+
+- 工具契约引入 `RunContext`；新增 `doc.docx`/`doc.xlsx`/`doc.pptx`。
+- 对象存储（MinIO/S3）封装，启动幂等建桶；产物字节 runtime 直写。
+- BFF 产物模块：落库（`version` 按 `(sessionId,filename)` 递增）、列表、下载代理（租户+用户校验、响应头清洗、流回收）。
+- `agent-loop` 补发 `artifact` step；`tasks.controller` 边转发边落库。
+- Web 成果区：列表 + 下载 + 乐观卡片。
+- 加固：BFF 校验 runtime 产物引用（跨进程信任边界）、下载流回收、`content-disposition` 清洗。
+
+**端到端验证（真模型）**：下达「生成一份三页 PPT」→ SSE 出现 `artifact`（size 约 60KB）→ 列表 → 下载（200、`presentationml`、attachment、PK 魔数、合法 zip）；越权 404、无 token 401、未知 id 404；浏览器成果区可渲染并下载合法 pptx。
+
+**验证结果**：全量测试通过（shared 10 / runtime 67 / web 10 / bff 43），构建 4/4 通过。
+
+---
+
+## 3. M3 安全（详细任务拆解）
+
+**目标**：破坏性操作需用户确认，高危操作隔离执行。**预计 6 人日**。
+
+| # | 任务 | 产出 | 依赖 | 估时 |
+|---|---|---|---|---|
+| M3-1 | 工具契约扩展权限等级：`Tool.permission: 'safe'\|'confirm'\|'blocked'` | shared + runtime 契约单测 | M2 | 1 |
+| M3-2 | 内置工具标注权限（`doc.*`/`web.*` 为 safe；未来 `file.*` 写类为 confirm） | runtime | M3-1 | 0.5 |
+| M3-3 | Loop 遇 `confirm` 工具时挂起，发 `confirm_request` 事件（新 `StepType`） | runtime + shared 契约 | M3-1 | 1.5 |
+| M3-4 | BFF 透传确认请求 + 新增确认应答端点（`POST /api/runs/:id/confirm`） | bff | M3-3 | 1 |
+| M3-5 | Web 确认卡片（工具名 + 入参 + 允许/拒绝） | web | M3-4 | 1.5 |
+| M3-6 | 沙箱执行：`code.exec` 用 `isolated-vm` 隔离，限制在受限工作区 | runtime | M3-1 | 2（含安全测试） |
+| M3-7 | 删除重定向回收站、修改前自动备份（为 `file.*` 工具铺路） | runtime | M3-6 | 1 |
+
+**验收**：调用 `code.exec` 或其他 confirm 工具时前端弹出确认卡片，拒绝则不执行；沙箱逃逸用例全部拦截。
+
+---
+
+## 4. M4 扩展（概要）
+
+**目标**：知识库 RAG + 连接器/MCP。**预计 6 人日**。
+
+| # | 任务 | 产出 |
+|---|---|---|
+| M4-1 | Postgres 启用 pgvector；`kb`/`kb_doc`/`kb_chunk` 表 | 迁移 + DDL |
+| M4-2 | 文档上传 → 解析/切分/向量化管道 | runtime/worker + 任务队列 |
+| M4-3 | `kb.retrieve` 工具（检索问答，带来源引用） | 工具 + 测试 |
+| M4-4 | MCP Host：管理 MCP Server 子进程（守护 + 心跳 + 崩溃退避重拉） | runtime |
+| M4-5 | MCP 工具自动发现并入注册表 | runtime + 契约 |
+| M4-6 | Web：知识库页面、连接器管理页面 | web |
+
+**验收**：上传文档后可问答并能溯源；接入一个 MCP Server 后其工具可用。
+
+---
+
+## 5. M5 商业化（概要）
+
+**目标**：个人版可对外。**预计 8 人日**。
+
+| # | 任务 | 产出 |
+|---|---|---|
+| M5-1 | 模型网关收口：多模型路由 / 限流 / 用量埋点 / fallback | runtime 网关 |
+| M5-2 | 计费：`usage_record` 表 + token/成本统计 | bff + DDL |
+| M5-3 | 可观测：全链路 trace + token/成本指标 + 看板/告警 | 全栈 |
+| M5-4 | 任务队列化（BullMQ/Redis）+ 可恢复/断点续传 | bff + runtime |
+| M5-5 | Web：套餐/用量查询页 | web |
+| M5-6 | 上线准备：CI/CD、备份、反代/TLS、密钥托管 | 运维 |
+
+**验收**：个人用户可注册使用、看到用量；服务可观测、可备份、可发布。
+
+---
+
+## 6. 生产化 backlog（当前已知风险 → 处置）
+
+> 这些是**已识别**的生产风险，需在 M3–M5 期间逐项消化（按优先级排序）。
+
+| # | 风险 | 影响 | 建议处置 | 建议期 |
+|---|---|---|---|---|
+| P1 | `Artifact.version` 无唯一约束，靠「查 max+1」计算 | 并发下重号、数据不一致 | 加 `@@unique([sessionId, filename, version])`，落库冲突时重试 | M3 |
+| P2 | `.env` 曾含真实 `DEEPSEEK_API_KEY`；仓库 origin 为公开地址 | 密钥泄露 | **轮换密钥**；确认 `.gitignore` 覆盖 `.env`；生产用密管注入 | 立即 |
+| P3 | `docker-compose.yml` MinIO 镜像钉 `:latest`、DB/MinIO 凭证为默认值 | 不可复现构建、弱凭证 | 钉镜像 digest；凭证走环境变量 | M3 |
+| P4 | `@aws-sdk/client-s3` 在 bff / runtime 版本偏斜 | 行为不一致、重复体积 | 统一版本（workspace catalog 或同版本号） | M3 |
+| P5 | CORS 生产未收敛白名单（`origin:true`） | 跨站请求风险 | 生产按域名白名单 | M5 |
+| P6 | 无 CI/CD、无覆盖率门槛 | 回归风险 | 加 CI（lint+test+build）；设覆盖率门槛 | M5 |
+| P7 | 无请求限流 / 无配额 | 滥用、成本失控 | 网关与 BFF 限流、按租户配额 | M5 |
+| P8 | runtime `/runs` 无内置鉴权（仅可选 token + 绑本机） | 暴露即无鉴权模型入口 | 生产强制 token + 网络隔离 | M5 |
+| P9 | 无备份/恢复演练、对象存储无生命周期策略 | 数据丢失风险、成本增长 | Postgres 定期备份 + S3 生命周期 | M5 |
+| P10 | 长任务无队列、无断点续传（客户端断开即中断） | 可靠性 | 队列化 + 以 `step` 为 checkpoint 续跑 | M5 |
+
+---
+
+## 7. 排期与资源
+
+| 项 | 说明 |
+|---|---|
+| 人力 | 1–2 人（业余），按「每期交付可用增量」节奏 |
+| 已投入 | M0–M2 已完成（见 §2） |
+| 待投入 | M3 ≈6 人日、M4 ≈6 人日、M5 ≈8 人日（乐观估计） |
+| 交付策略 | 每里程碑独立可演示、可验证；未通过验收不进下一期 |
+
+---
+
+## 8. 风险与依赖
+
+| 风险 | 说明 | 缓解 |
+|---|---|---|
+| 模型 API 限流/波动 | 影响体验与成本 | M5 网关重试 + fallback + 限流 |
+| 沙箱安全 | `code.exec` 逃逸风险 | `isolated-vm` + 安全测试；必要时升级容器沙箱 |
+| 私有化/信创 | 需换国产模型、无强托管依赖 | 网关抽象 + 数据可迁（架构已预留） |
+| 团队节奏 | 业余节奏导致延期 | 里程碑小步交付，随时可停可续 |
+| 文档与实现漂移 | 设计文档过期 | 改代码同步改文档；关键契约以 shared 为准 |
+
+---
+
+## 9. 完成定义（DoD）
+
+一个里程碑「完成」需同时满足：
+
+1. 功能通过**端到端**验收（真模型真栈或等价替身）。
+2. 全量 `pnpm test` 与 `pnpm build` 通过。
+3. 新增/变更契约已同步到 `@ai-office/shared` 与设计文档。
+4. 安全红线（租户隔离、输入校验、密钥）无回退。
+5. 提交信息规范（中文）、无遗留调试代码与无关文件。
