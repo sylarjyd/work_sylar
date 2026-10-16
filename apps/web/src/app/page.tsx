@@ -165,6 +165,13 @@ export default function Home() {
         router.push('/login');
         return;
       }
+      // 决策未送达（网络/上游故障）：撤销乐观禁用，否则按钮会一直卡在
+      // 「已允许/已拒绝」直到闸门超时，用户无法重试。
+      setDecisions((prev) => {
+        const next = { ...prev };
+        delete next[confirmId];
+        return next;
+      });
       setError(String(err));
     }
   }

@@ -14,6 +14,7 @@ let upstream: Server;
 let runtimeUrl: string;
 let upstreamStatus = 200;
 let upstreamBody = JSON.stringify({ ok: true, matched: true });
+let prismaFail = false;
 
 // 归属：仅 r1 属 t1/u1；嵌套关系过滤由假库按 where 结构模拟。
 const ownedRun = { id: 'r1' };
@@ -24,6 +25,7 @@ const fakePrisma = {
     }: {
       where: { id: string; task?: { session?: { tenantId?: string; userId?: string } } };
     }) => {
+      if (prismaFail) throw new Error('db down');
       const s = where.task?.session;
       return where.id === ownedRun.id && s?.tenantId === 't1' && s?.userId === 'u1'
         ? { id: 'r1' }
@@ -61,6 +63,7 @@ beforeAll(async () => {
 beforeEach(() => {
   upstreamStatus = 200;
   upstreamBody = JSON.stringify({ ok: true, matched: true });
+  prismaFail = false;
   delete process.env.AGENT_RUNTIME_TOKEN;
   process.env.AGENT_RUNTIME_URL = runtimeUrl;
 });
@@ -92,6 +95,17 @@ describe('RunsController', () => {
       payload: { confirmId: 'c1', approved: true },
     });
     expect(res.statusCode).toBe(404);
+  });
+
+  it('归属查询故障时原样抛出（500），不伪装成 404', async () => {
+    prismaFail = true;
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/runs/r1/confirm',
+      headers: auth(),
+      payload: { confirmId: 'c1', approved: true },
+    });
+    expect(res.statusCode).toBe(500);
   });
 
   it('body 非法返回 400（不转发上游）', async () => {

@@ -1,4 +1,4 @@
-import { Body, Controller, Param, Post, Res, UseGuards } from '@nestjs/common';
+import { Body, Controller, NotFoundException, Param, Post, Res, UseGuards } from '@nestjs/common';
 import type { FastifyReply } from 'fastify';
 import type { ConfirmDecision } from '@ai-office/shared';
 import { TasksService } from '../tasks/tasks.service';
@@ -25,12 +25,16 @@ export class RunsController {
       return;
     }
 
-    // 归属校验：非本人 run 回 404（不泄露存在性）。
+    // 归属校验：非本人 run 回 404（不泄露存在性）。仅把「不存在」归为 404，
+    // 其余（如 DB 连接故障）原样抛出走 500，避免把基础设施异常伪装成 run_not_found。
     try {
       await this.tasks.assertRunOwned(runId, user.tenantId, user.sub);
-    } catch {
-      reply.status(404).send({ error: 'run_not_found' });
-      return;
+    } catch (err) {
+      if (err instanceof NotFoundException) {
+        reply.status(404).send({ error: 'run_not_found' });
+        return;
+      }
+      throw err;
     }
 
     const runtimeUrl = process.env.AGENT_RUNTIME_URL ?? 'http://localhost:4001';

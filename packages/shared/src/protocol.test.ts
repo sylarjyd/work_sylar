@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { encodeSse, decodeSseFrames, parseSseFrame } from './protocol';
+import type { AgentEvent } from './protocol';
 
 describe('encodeSse', () => {
   it('编码为合法的 SSE 帧', () => {
@@ -57,5 +58,18 @@ describe('decodeSseFrames', () => {
     const text =
       encodeSse({ event: 'step', data: { seq: 0 } }) + 'event: step\ndata: {"seq":';
     expect(decodeSseFrames(text)).toEqual([{ event: 'step', data: { seq: 0 } }]);
+  });
+
+  it('confirm_request 步骤帧可往返（新增 StepType 前向兼容）', () => {
+    const ev: AgentEvent = {
+      runId: 'r1',
+      seq: 1,
+      type: 'confirm_request',
+      payload: { confirmId: 'c1', tool: 'code.exec', args: { code: '1 + 1' } },
+      ts: 0,
+    };
+    const out = decodeSseFrames(encodeSse({ event: 'step', data: ev }));
+    expect(out).toEqual([{ event: 'step', data: ev }]);
+    expect((out[0]!.data as AgentEvent).type).toBe('confirm_request');
   });
 });
