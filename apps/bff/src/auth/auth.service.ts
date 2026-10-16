@@ -4,6 +4,15 @@ import { PrismaService } from '../db/prisma.service';
 import { signToken } from './jwt';
 import type { AuthResponse, LoginRequest, RegisterRequest } from '@ai-office/shared';
 
+/** 平台管理员白名单（逗号分隔邮箱，大小写不敏感）；命中者注册即 admin，其余为 member。 */
+function isAdminEmail(email: string): boolean {
+  const allow = (process.env.ADMIN_EMAILS ?? '')
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+  return allow.includes(email.trim().toLowerCase());
+}
+
 @Injectable()
 export class AuthService {
   constructor(private readonly prisma: PrismaService) {}
@@ -13,11 +22,13 @@ export class AuthService {
     if (existing) throw new ConflictException('email_taken');
 
     const passwordHash = await argon2.hash(req.password);
+    const role = isAdminEmail(req.email) ? 'admin' : 'member';
     // 个人用户 = 一个 personal 租户；注册时自动创建（为多租户预留）。
     const user = await this.prisma.user.create({
       data: {
         email: req.email,
         passwordHash,
+        role,
         tenant: { create: { type: 'personal', name: req.email } },
       },
     });

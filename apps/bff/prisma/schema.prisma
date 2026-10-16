@@ -23,7 +23,7 @@ model User {
   email        String   @unique
   passwordHash String
   status       String   @default("active")
-  role         String   @default("admin")
+  role         String   @default("member")
   createdAt    DateTime @default(now())
   tenant       Tenant   @relation(fields: [tenantId], references: [id])
   sessions     Session[]

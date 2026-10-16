@@ -96,4 +96,23 @@ describe('AuthController', () => {
     expect(body.token).toBeTruthy();
     expect(body.user.email).toBe('a@b.com');
   });
+
+  it('ADMIN_EMAILS 命中的邮箱注册为 admin，其余为 member', async () => {
+    process.env.ADMIN_EMAILS = 'boss@x.com, Chief@X.com';
+    try {
+      const a = await app.inject({ method: 'POST', url: '/api/auth/register', payload: { email: 'boss@x.com', password: 'pw123456' } });
+      expect(JSON.parse(a.payload).user.role).toBe('admin');
+      const b = await app.inject({ method: 'POST', url: '/api/auth/register', payload: { email: 'peon@x.com', password: 'pw123456' } });
+      expect(JSON.parse(b.payload).user.role).toBe('member');
+      const c = await app.inject({ method: 'POST', url: '/api/auth/register', payload: { email: 'chief@x.com', password: 'pw123456' } });
+      expect(JSON.parse(c.payload).user.role).toBe('admin');
+    } finally {
+      delete process.env.ADMIN_EMAILS;
+    }
+  });
+
+  it('未设置 ADMIN_EMAILS 时注册为 member', async () => {
+    const res = await app.inject({ method: 'POST', url: '/api/auth/register', payload: { email: 'nobody@x.com', password: 'pw123456' } });
+    expect(JSON.parse(res.payload).user.role).toBe('member');
+  });
 });

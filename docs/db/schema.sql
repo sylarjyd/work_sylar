@@ -46,7 +46,7 @@ CREATE TABLE "User" (
     "email"        TEXT         NOT NULL,
     "passwordHash" TEXT         NOT NULL,
     "status"       TEXT         NOT NULL DEFAULT 'active',
-    "role"         TEXT         NOT NULL DEFAULT 'admin',
+    "role"         TEXT         NOT NULL DEFAULT 'member',
     "createdAt"    TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT "User_pkey" PRIMARY KEY ("id")
 );
