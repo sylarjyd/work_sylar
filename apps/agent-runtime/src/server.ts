@@ -11,17 +11,22 @@ import type { Tool } from './tools/types';
 import { ConfirmBroker } from './confirm/broker';
 import { loadRootEnv } from './load-env';
 import { createStorage, type Storage } from './storage/s3';
+import { createEmbeddingGateway } from './embedding/create-embedding-gateway';
+import type { EmbeddingGateway } from './embedding/types';
+import { ingest } from './kb/ingest';
 
 export interface RuntimeDeps {
   gateway?: ModelGateway;
   tools?: Tool[];
   storage?: Storage;
+  embedding?: EmbeddingGateway;
 }
 
 export function createRuntimeServer(deps: RuntimeDeps = {}): Server {
   const gateway = deps.gateway ?? createGateway();
   const storage = deps.storage ?? createStorage();
   const tools = deps.tools ?? createTools(process.env, storage);
+  const embedding = deps.embedding ?? createEmbeddingGateway();
   // runtime 单实例持有一份确认闸门；连接 close 时按 runId 取消挂起。
   const confirm = new ConfirmBroker();
   const confirmTimeoutMs = Number(process.env.CONFIRM_TIMEOUT_MS ?? 120000);
@@ -120,6 +125,57 @@ export function createRuntimeServer(deps: RuntimeDeps = {}): Server {
         const matched = confirm.resolve(runId, decision.confirmId, decision.approved);
         res.writeHead(200, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ ok: true, matched }));
+      });
+      return;
+    }
+
+    if (req.method === 'POST' && req.url === '/kb/ingest') {
+      if (!authorized(req)) {
+        res.writeHead(401, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: 'unauthorized' }));
+        return;
+      }
+      let body = '';
+      req.on('data', (chunk) => (body += chunk));
+      req.on('end', () => {
+        void (async () => {
+          let payload: { storageKey?: unknown; filename?: unknown; mime?: unknown };
+          try {
+            payload = JSON.parse(body || '{}');
+          } catch {
+            res.writeHead(400, { 'content-type': 'application/json' });
+            res.end(JSON.stringify({ ok: false, error: 'invalid json' }));
+            return;
+          }
+          const storageKey = String(payload.storageKey ?? '');
+          const filename = String(payload.filename ?? '');
+          const mime = typeof payload.mime === 'string' ? payload.mime : undefined;
+          if (!storageKey || !filename) {
+            res.writeHead(400, { 'content-type': 'application/json' });
+            res.end(JSON.stringify({ ok: false, error: 'missing_params' }));
+            return;
+          }
+          try {
+            const stream = await storage.getObjectStream(storageKey);
+            const chunks: Buffer[] = [];
+            for await (const c of stream) chunks.push(Buffer.from(c as Buffer));
+            const data = Buffer.concat(chunks);
+            const out = await ingest(
+              { data, filename, mime },
+              { embed: embedding },
+              {
+                chunkSize: Number(process.env.KB_CHUNK_SIZE ?? 800),
+                chunkOverlap: Number(process.env.KB_CHUNK_OVERLAP ?? 150),
+              },
+            );
+            res.writeHead(200, { 'content-type': 'application/json' });
+            res.end(JSON.stringify({ ok: true, chunks: out }));
+          } catch (err) {
+            // 摄取失败是预期内业务结果（异步、前端轮询可见），回 200 + ok:false，不当作传输错误。
+            res.writeHead(200, { 'content-type': 'application/json' });
+            res.end(JSON.stringify({ ok: false, error: (err as Error).message }));
+          }
+        })();
       });
       return;
     }

@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { Readable } from 'node:stream';
 import type { Server } from 'node:http';
 import { decodeSseFrames, createSseParser } from '@ai-office/shared';
 import type { AgentEvent } from '@ai-office/shared';
@@ -347,6 +348,71 @@ describe('runtime 确认端点', () => {
       expect(res.status).toBe(401);
     } finally {
       await new Promise<void>((r) => server.close(() => r()));
+      delete process.env.AGENT_RUNTIME_TOKEN;
+    }
+  });
+});
+
+describe('runtime 摄取端点', () => {
+  const txtStorage = {
+    ensureBucket: async () => {},
+    putObject: async () => {},
+    getObjectStream: async () => Readable.from([Buffer.from('甲'.repeat(2000), 'utf8')]),
+  };
+
+  let srv: Server;
+  let base: string;
+
+  beforeAll(async () => {
+    srv = createRuntimeServer({
+      gateway: { async chat() { return { content: '', toolCalls: [], usage: { input: 0, output: 0 } }; } },
+      tools: [],
+      storage: txtStorage,
+      embedding: { dim: 3, async embed(texts) { return texts.map((t) => [t.length, 0, 0]); } },
+    });
+    await new Promise<void>((r) => srv.listen(0, '127.0.0.1', () => r()));
+    const addr = srv.address();
+    if (!addr || typeof addr === 'string') throw new Error('no port');
+    base = `http://127.0.0.1:${addr.port}`;
+  });
+
+  afterAll(async () => {
+    await new Promise<void>((r) => srv.close(() => r()));
+  });
+
+  it('摄取成功：返回 ok 与连续 seq 的切片', async () => {
+    const res = await fetch(`${base}/kb/ingest`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ storageKey: 'k', filename: 'a.txt', mime: 'text/plain' }),
+    });
+    expect(res.status).toBe(200);
+    const data = (await res.json()) as { ok: boolean; chunks: { seq: number; vector: number[] }[] };
+    expect(data.ok).toBe(true);
+    expect(data.chunks.map((c) => c.seq)).toEqual(data.chunks.map((_, i) => i));
+    expect(data.chunks[0].vector.length).toBe(3);
+  });
+
+  it('解析失败：返回 ok:false 与 error', async () => {
+    const res = await fetch(`${base}/kb/ingest`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ storageKey: 'k', filename: 'a.exe', mime: 'application/octet-stream' }),
+    });
+    expect(res.status).toBe(200);
+    expect((await res.json()).ok).toBe(false);
+  });
+
+  it('设置 AGENT_RUNTIME_TOKEN 后缺 token 返回 401', async () => {
+    process.env.AGENT_RUNTIME_TOKEN = 'secret-tok';
+    try {
+      const res = await fetch(`${base}/kb/ingest`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ storageKey: 'k', filename: 'a.txt' }),
+      });
+      expect(res.status).toBe(401);
+    } finally {
       delete process.env.AGENT_RUNTIME_TOKEN;
     }
   });
