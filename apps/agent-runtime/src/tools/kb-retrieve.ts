@@ -38,12 +38,14 @@ export function createKbRetrieveTool(cfg: KbRetrieveConfig): Tool {
       let hits: KbSearchHit[];
       try {
         const [vector] = await cfg.embed.embed([query]);
+        if (!vector) throw new Error('empty_embedding');
         hits = await searchKb(client, {
           vector,
           topK,
           tenantId: ctx.tenantId,
           userId: ctx.userId,
         });
+        if (!Array.isArray(hits)) throw new Error('invalid_search_response');
       } catch {
         // 检索不可达不中断 agent loop：回结构化失败，模型据此说明。
         return {

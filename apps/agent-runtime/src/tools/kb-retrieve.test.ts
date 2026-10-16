@@ -85,4 +85,35 @@ describe('kb.retrieve', () => {
     expect(out.ok).toBe(false);
     expect(out.error).toBe('kb_search_unreachable');
   });
+
+  it('BFF 返回 200 但非数组：收敛为 kb_search_unreachable，不抛异常', async () => {
+    const fetchImpl = (async () =>
+      new Response(JSON.stringify({ error: 'x' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })) as unknown as typeof fetch;
+    const out = (await toolWith(fetchImpl).execute({ query: 'x' }, ctx)) as Record<string, unknown>;
+    expect(out.ok).toBe(false);
+    expect(out.error).toBe('kb_search_unreachable');
+    expect(out.display).toEqual({ sources: [] });
+  });
+
+  it('嵌入返回空数组：不发出无向量请求，收敛为 kb_search_unreachable', async () => {
+    const emptyEmbed: EmbeddingGateway = {
+      dim: 2,
+      async embed() {
+        return [];
+      },
+    };
+    let called = false;
+    const fetchImpl = (async () => {
+      called = true;
+      return new Response('[]', { status: 200 });
+    }) as unknown as typeof fetch;
+    const t = createKbRetrieveTool({ baseUrl: 'http://bff', internalToken: 'tok', embed: emptyEmbed, fetchImpl });
+    const out = (await t.execute({ query: 'x' }, ctx)) as Record<string, unknown>;
+    expect(out.ok).toBe(false);
+    expect(out.error).toBe('kb_search_unreachable');
+    expect(called).toBe(false);
+  });
 });
