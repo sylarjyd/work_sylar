@@ -1,5 +1,6 @@
 import { Controller, Get, NotFoundException, Param, Res, UseGuards } from '@nestjs/common';
 import type { FastifyReply } from 'fastify';
+import type { Readable } from 'node:stream';
 import type { ArtifactDto } from '@ai-office/shared';
 import { ArtifactService } from './artifacts.service';
 import { JwtGuard } from '../auth/jwt.guard';
@@ -34,7 +35,7 @@ export class ArtifactController {
     @Param('id') id: string,
     @Res() reply: FastifyReply,
   ): Promise<void> {
-    let result: { filename: string; kind: string; stream: NodeJS.ReadableStream };
+    let result: { filename: string; kind: string; stream: Readable };
     try {
       result = await this.artifacts.getForDownload(id, user.tenantId, user.sub);
     } catch (err) {
@@ -48,6 +49,8 @@ export class ArtifactController {
     }
     reply.header('content-type', MIME[result.kind] ?? 'application/octet-stream');
     reply.header('content-disposition', contentDisposition(result.filename));
+    // 客户端中途断开时主动销毁上游 S3 流，否则连接/句柄会挂到对象读完才释放。
+    reply.raw.once('close', () => result.stream.destroy());
     await reply.send(result.stream);
   }
 }

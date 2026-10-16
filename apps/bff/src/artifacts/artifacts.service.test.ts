@@ -78,8 +78,32 @@ describe('ArtifactService', () => {
 
   it('同名重生成 version 递增', async () => {
     await service.record('r1', 's1', 't1', ref);
-    await service.record('r2', 's1', 't1', ref);
+    await service.record('r2', 's1', 't1', {
+      ...ref,
+      storageKey: 'artifacts/t1/r2/x-报告.pptx',
+    });
     expect(rows.map((r) => r.version)).toEqual([1, 2]);
+  });
+
+  it('record 拒绝非法 kind，不落库', async () => {
+    await expect(
+      service.record('r1', 's1', 't1', { ...ref, kind: 'exe' as ArtifactRef['kind'] }),
+    ).rejects.toThrow('invalid_kind');
+    expect(rows).toHaveLength(0);
+  });
+
+  it('record 拒绝越出租户前缀的 storageKey，不落库', async () => {
+    await expect(
+      service.record('r1', 's1', 't1', { ...ref, storageKey: 'artifacts/t2/r1/x' }),
+    ).rejects.toThrow('invalid_storage_key');
+    expect(rows).toHaveLength(0);
+  });
+
+  it('record 拒绝非法 size，不落库', async () => {
+    await expect(service.record('r1', 's1', 't1', { ...ref, size: -1 })).rejects.toThrow(
+      'invalid_size',
+    );
+    expect(rows).toHaveLength(0);
   });
 
   it('list 先校验会话归属，越权抛 404', async () => {

@@ -108,7 +108,7 @@ beforeAll(async () => {
       return;
     }
     res.write(encodeSse({ event: 'step', data: { runId: 'run1', seq: 1, type: 'tool_call', payload: { tool: 'web.search' }, ts: 2 } }));
-    res.write(encodeSse({ event: 'step', data: { runId: 'run1', seq: 2, type: 'artifact', payload: { kind: 'pptx', filename: 'a.pptx', storageKey: 'k', size: 3 }, ts: 3 } }));
+    res.write(encodeSse({ event: 'step', data: { runId: 'run1', seq: 2, type: 'artifact', payload: { kind: 'pptx', filename: 'a.pptx', storageKey: 'artifacts/t1/run1/x-a.pptx', size: 3 }, ts: 3 } }));
     res.write(encodeSse({ event: 'usage', data: { input: 1, output: 1 } }));
     res.write(encodeSse({ event: 'done', data: { runId: 'run1' } }));
     res.end();

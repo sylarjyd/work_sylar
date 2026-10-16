@@ -2,7 +2,9 @@ import 'reflect-metadata';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { Test } from '@nestjs/testing';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
+import { EventEmitter } from 'node:events';
 import { Readable } from 'node:stream';
+import type { FastifyReply } from 'fastify';
 import { ArtifactController, contentDisposition } from './artifacts.controller';
 import { ArtifactService } from './artifacts.service';
 import { ARTIFACT_STORAGE, type ArtifactStorage } from './storage';
@@ -120,6 +122,34 @@ describe('ArtifactController', () => {
       (fakeStorage as { getObjectStream: ArtifactStorage['getObjectStream'] }).getObjectStream =
         original;
     }
+  });
+});
+
+describe('ArtifactController.download 资源回收', () => {
+  it('响应 close 时销毁上游 S3 流，避免连接悬挂', async () => {
+    const stream = new Readable({ read() {} }); // 永不结束，模拟长下载
+    let destroyed = false;
+    stream.on('close', () => {
+      destroyed = true;
+    });
+    const service = {
+      getForDownload: async () => ({ filename: 'a.pptx', kind: 'pptx', stream }),
+    } as unknown as ArtifactService;
+    const controller = new ArtifactController(service);
+    const raw = new EventEmitter();
+    const reply = {
+      header: () => reply,
+      status: () => reply,
+      send: async () => {},
+      raw,
+    } as unknown as FastifyReply;
+
+    await controller.download({ sub: 'u1', tenantId: 't1' }, 'a1', reply);
+    expect(raw.listenerCount('close')).toBe(1);
+    raw.emit('close');
+    // destroy() 下一 tick 才发 'close'，等一拍再断言。
+    await new Promise((r) => setImmediate(r));
+    expect(destroyed).toBe(true);
   });
 });
 

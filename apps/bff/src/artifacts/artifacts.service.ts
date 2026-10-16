@@ -5,6 +5,26 @@ import { PrismaService } from '../db/prisma.service';
 import { SessionsService } from '../sessions/sessions.service';
 import { ARTIFACT_STORAGE, type ArtifactStorage } from './storage';
 
+const KINDS = ['docx', 'xlsx', 'pptx'] as const;
+
+/**
+ * 校验 runtime SSE 传来的产物引用：runtime 是独立进程、走 HTTP 送达，不能信任其 payload。
+ * 不合规即抛错（由调用方 safeRecordArtifact 吞掉并记日志），既不落库也不打断 SSE 流。
+ * storageKey 必须落在本租户本次运行的 key 前缀内，杜绝越权指向他人对象。
+ */
+function assertValidRef(ref: ArtifactRef, tenantId: string, runId: string): void {
+  const r = ref as unknown as Record<string, unknown>;
+  if (typeof r.filename !== 'string' || r.filename.trim() === '') throw new Error('invalid_filename');
+  if (!KINDS.includes(r.kind as (typeof KINDS)[number])) throw new Error('invalid_kind');
+  if (!Number.isInteger(r.size) || (r.size as number) < 0) throw new Error('invalid_size');
+  if (
+    typeof r.storageKey !== 'string' ||
+    !r.storageKey.startsWith(`artifacts/${tenantId}/${runId}/`)
+  ) {
+    throw new Error('invalid_storage_key');
+  }
+}
+
 @Injectable()
 export class ArtifactService {
   constructor(
@@ -20,6 +40,7 @@ export class ArtifactService {
     tenantId: string,
     ref: ArtifactRef,
   ): Promise<void> {
+    assertValidRef(ref, tenantId, runId);
     const agg = await this.prisma.artifact.aggregate({
       where: { sessionId, filename: ref.filename },
       _max: { version: true },
