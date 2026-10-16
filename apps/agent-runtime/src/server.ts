@@ -141,7 +141,12 @@ export function createRuntimeServer(deps: RuntimeDeps = {}): Server {
         void (async () => {
           let payload: { storageKey?: unknown; filename?: unknown; mime?: unknown };
           try {
-            payload = JSON.parse(body || '{}');
+            const parsed: unknown = JSON.parse(body || '{}');
+            // 非对象（含字面量 null / 数组 / 标量）一律视为非法体，避免后续取属性抛错逃出保护块。
+            if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+              throw new Error('not_object');
+            }
+            payload = parsed as { storageKey?: unknown; filename?: unknown; mime?: unknown };
           } catch {
             res.writeHead(400, { 'content-type': 'application/json' });
             res.end(JSON.stringify({ ok: false, error: 'invalid json' }));

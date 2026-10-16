@@ -416,4 +416,14 @@ describe('runtime 摄取端点', () => {
       delete process.env.AGENT_RUNTIME_TOKEN;
     }
   });
+
+  it('请求体为 JSON null：返回 400 而非崩溃/挂起', async () => {
+    const res = await fetch(`${base}/kb/ingest`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: 'null',
+    });
+    expect(res.status).toBe(400);
+    expect((await res.json()).ok).toBe(false);
+  });
 });
