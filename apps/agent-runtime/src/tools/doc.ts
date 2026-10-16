@@ -67,6 +67,7 @@ export function createDocTools(storage: Storage): Tool[] {
         },
         required: ['filename', 'sections'],
       },
+      permission: 'safe',
       async execute(args, ctx) {
         const filename = str(args, 'filename');
         const sections = args.sections;
@@ -100,6 +101,7 @@ export function createDocTools(storage: Storage): Tool[] {
         },
         required: ['filename', 'sheets'],
       },
+      permission: 'safe',
       async execute(args, ctx) {
         const filename = str(args, 'filename');
         const sheets = args.sheets;
@@ -129,6 +131,7 @@ export function createDocTools(storage: Storage): Tool[] {
         },
         required: ['filename', 'slides'],
       },
+      permission: 'safe',
       async execute(args, ctx) {
         const filename = str(args, 'filename');
         const slides = args.slides;

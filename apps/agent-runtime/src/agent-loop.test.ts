@@ -16,6 +16,7 @@ const echoTool: Tool = {
   name: 'web.search',
   description: 'd',
   parameters: {},
+  permission: 'safe',
   async execute(args) {
     return { results: [{ title: 'T', url: 'u', snippet: String(args.query) }] };
   },
@@ -101,6 +102,7 @@ describe('runAgent', () => {
       name: 'web.search',
       description: 'd',
       parameters: {},
+      permission: 'safe',
       async execute() {
         return undefined;
       },
@@ -130,6 +132,7 @@ describe('runAgent', () => {
       name: 'boom',
       description: 'd',
       parameters: {},
+      permission: 'safe',
       async execute() {
         throw new Error('kaboom');
       },
@@ -159,6 +162,7 @@ describe('runAgent', () => {
       name: 'web.search',
       description: 'd',
       parameters: {},
+      permission: 'safe',
       async execute(_args, ctx) {
         seen = ctx;
         return { results: [] };
@@ -187,6 +191,7 @@ describe('runAgent', () => {
       name: 'doc.pptx',
       description: 'd',
       parameters: {},
+      permission: 'safe',
       async execute() {
         return { artifact: { kind: 'pptx', filename: 'a.pptx', storageKey: 'k', size: 3 } };
       },
@@ -223,6 +228,7 @@ describe('runAgent', () => {
       name: 'doc.pptx',
       description: 'd',
       parameters: {},
+      permission: 'safe',
       async execute() {
         throw new Error('upload_failed');
       },
@@ -250,6 +256,7 @@ describe('runAgent', () => {
       name: 'doc.pptx',
       description: 'd',
       parameters: {},
+      permission: 'safe',
       async execute() {
         return { artifact: [] };
       },

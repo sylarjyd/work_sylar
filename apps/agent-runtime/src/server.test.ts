@@ -9,6 +9,7 @@ const echo: Tool = {
   name: 'web.search',
   description: 'd',
   parameters: {},
+  permission: 'safe',
   async execute() {
     return { results: [] };
   },

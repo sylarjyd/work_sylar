@@ -27,6 +27,7 @@ export function createWebSearchTool(provider: SearchProvider): Tool {
       properties: { query: { type: 'string', description: '搜索关键词' } },
       required: ['query'],
     },
+    permission: 'safe',
     async execute(args) {
       const query = String(args.query ?? '').trim();
       if (!query) throw new Error('missing_query');

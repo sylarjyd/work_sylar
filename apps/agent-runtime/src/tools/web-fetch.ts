@@ -135,6 +135,7 @@ export function createWebFetchTool(
       properties: { url: { type: 'string', description: '要抓取的完整 URL' } },
       required: ['url'],
     },
+    permission: 'safe',
     async execute(args) {
       const raw = String(args.url ?? '');
       let url: URL;
