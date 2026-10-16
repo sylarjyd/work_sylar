@@ -41,6 +41,7 @@ model Session {
   user      User     @relation(fields: [userId], references: [id])
   messages  Message[]
   tasks     Task[]
+  artifacts Artifact[]
 
   @@index([tenantId, userId])
 }
@@ -78,6 +79,7 @@ model Run {
   endedAt   DateTime?
   task      Task      @relation(fields: [taskId], references: [id])
   steps     Step[]
+  artifacts Artifact[]
 
   @@index([taskId])
 }
@@ -92,4 +94,22 @@ model Step {
   run     Run      @relation(fields: [runId], references: [id])
 
   @@unique([runId, seq])
+}
+
+model Artifact {
+  id         String   @id @default(uuid())
+  tenantId   String
+  sessionId  String
+  runId      String
+  kind       String   // docx | xlsx | pptx
+  filename   String
+  storageKey String
+  size       Int
+  version    Int      @default(1)
+  createdAt  DateTime @default(now())
+  session    Session  @relation(fields: [sessionId], references: [id])
+  run        Run      @relation(fields: [runId], references: [id])
+
+  @@index([sessionId])
+  @@index([tenantId])
 }
