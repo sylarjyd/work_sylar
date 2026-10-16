@@ -189,7 +189,8 @@ spawn(process.execPath,
   - 校验 body：`confirmId` 非空字符串、`approved` 布尔；不合法 → 400。
   - **归属校验**：`runId → task → session`，要求 `session.tenantId === user.tenantId && session.userId === user.sub`；否则 404（不泄露存在性）。需 `TasksService` 增 `assertRunOwned(runId, tenantId, userId)`。
   - 转发 runtime `POST /runs/:id/confirm`（带 `x-agent-runtime-token`）。
-  - 映射：runtime 200 → `{ ok:true, matched }`；runtime 404 → 404；上游不可达 → 502。
+  - 映射：runtime 200 → `{ ok:true, matched }`；上游非 2xx → 透传其状态码；上游不可达 → 502。
+    runtime 无 run 注册表，区分不了「未知 run」与「已决」；二者统一为 200 `matched:false`，幂等安全。
 - `tasks.controller` 的流式循环：`confirm_request` step 走默认分支即可（`recordStep` 落库），**不得**被当作终止信号。
 
 ## 9. Web 确认卡片（apps/web）
