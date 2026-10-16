@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { authErrorMessage, confirmRun, isUnauthorized } from './api';
+import { authErrorMessage, confirmRun, isUnauthorized, listConnectors, createConnector } from './api';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -19,7 +19,7 @@ describe('confirmRun', () => {
     const out = await confirmRun('r1', 'c1', true);
     expect(out).toEqual({ ok: true, matched: true });
 
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(String(url)).toContain('/api/runs/r1/confirm');
     expect(JSON.parse(init.body as string)).toEqual({ confirmId: 'c1', approved: true });
   });
@@ -76,11 +76,30 @@ describe('uploadKbDoc', () => {
     const { uploadKbDoc } = await import('./api');
     await uploadKbDoc(new File(['x'], 'a.txt', { type: 'text/plain' }));
 
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(String(url)).toContain('/api/kb/docs');
     expect(init.body).toBeInstanceOf(FormData);
     const headers = (init.headers ?? {}) as Record<string, string>;
     expect(headers['content-type']).toBeUndefined();
     expect(headers.authorization).toBe('Bearer tok');
+  });
+});
+
+describe('connectors api', () => {
+  it('listConnectors GET /api/connectors', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify([{ id: 'c1', name: 'echo' }]), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const out = await listConnectors();
+    expect(out).toHaveLength(1);
+    expect(String((fetchMock.mock.calls[0] as unknown as [string])[0])).toContain('/api/connectors');
+  });
+
+  it('createConnector POST 携带 JSON 体', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ id: 'c1', name: 'echo' }), { status: 201 }));
+    vi.stubGlobal('fetch', fetchMock);
+    await createConnector({ name: 'echo', command: 'node', args: ['s.mjs'], env: { K: 'v' } });
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body as string)).toEqual({ name: 'echo', command: 'node', args: ['s.mjs'], env: { K: 'v' } });
   });
 });

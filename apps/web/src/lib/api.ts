@@ -1,9 +1,10 @@
 'use client';
 
-import type { ArtifactDto, AuthResponse, KbDocDto, SessionSummary } from '@ai-office/shared';
+import type { ArtifactDto, AuthResponse, ConnectorDto, KbDocDto, SessionSummary } from '@ai-office/shared';
 
 const BFF_URL = process.env.NEXT_PUBLIC_BFF_URL ?? 'http://localhost:4000';
 const TOKEN_KEY = 'ai_office_token';
+const ROLE_KEY = 'ai_office_role';
 
 export function getToken(): string | null {
   return typeof window === 'undefined' ? null : window.localStorage.getItem(TOKEN_KEY);
@@ -13,8 +14,17 @@ export function setToken(token: string): void {
   window.localStorage.setItem(TOKEN_KEY, token);
 }
 
+export function getRole(): string | null {
+  return typeof window === 'undefined' ? null : window.localStorage.getItem(ROLE_KEY);
+}
+
+function setRole(role: string): void {
+  window.localStorage.setItem(ROLE_KEY, role);
+}
+
 export function clearToken(): void {
   window.localStorage.removeItem(TOKEN_KEY);
+  window.localStorage.removeItem(ROLE_KEY);
 }
 
 async function authFetch(path: string, init: RequestInit = {}): Promise<Response> {
@@ -61,6 +71,7 @@ export async function register(email: string, password: string): Promise<AuthRes
   if (!res.ok) throw new Error(`register_failed_${res.status}`);
   const data = (await res.json()) as AuthResponse;
   setToken(data.token);
+  setRole(data.user.role);
   return data;
 }
 
@@ -73,6 +84,7 @@ export async function login(email: string, password: string): Promise<AuthRespon
   if (!res.ok) throw new Error(`login_failed_${res.status}`);
   const data = (await res.json()) as AuthResponse;
   setToken(data.token);
+  setRole(data.user.role);
   return data;
 }
 
@@ -161,4 +173,35 @@ export async function uploadKbDoc(file: File): Promise<KbDocDto> {
 export async function deleteKbDoc(id: string): Promise<void> {
   const res = await authFetch(`/api/kb/docs/${id}`, { method: 'DELETE' });
   if (!res.ok) throw new Error(`kb_delete_failed_${res.status}`);
+}
+
+export async function listConnectors(): Promise<ConnectorDto[]> {
+  const res = await authFetch('/api/connectors');
+  if (!res.ok) throw new Error(`connectors_failed_${res.status}`);
+  return (await res.json()) as ConnectorDto[];
+}
+
+export async function createConnector(input: {
+  name: string;
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+}): Promise<ConnectorDto> {
+  const res = await authFetch('/api/connectors', { method: 'POST', body: JSON.stringify(input) });
+  if (!res.ok) throw new Error(`connector_create_failed_${res.status}`);
+  return (await res.json()) as ConnectorDto;
+}
+
+export async function updateConnector(
+  id: string,
+  patch: { name?: string; command?: string; args?: string[]; env?: Record<string, string>; enabled?: boolean },
+): Promise<ConnectorDto> {
+  const res = await authFetch(`/api/connectors/${id}`, { method: 'PATCH', body: JSON.stringify(patch) });
+  if (!res.ok) throw new Error(`connector_update_failed_${res.status}`);
+  return (await res.json()) as ConnectorDto;
+}
+
+export async function deleteConnector(id: string): Promise<void> {
+  const res = await authFetch(`/api/connectors/${id}`, { method: 'DELETE' });
+  if (!res.ok) throw new Error(`connector_delete_failed_${res.status}`);
 }
