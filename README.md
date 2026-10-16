@@ -20,6 +20,8 @@ pnpm --filter @ai-office/bff db:up      # 起 Postgres 与 MinIO（docker compos
 pnpm --filter @ai-office/bff db:push    # 同步表结构
 ```
 
+> 本地数据库镜像已改为 **pgvector**（`pgvector/pgvector:pg16`），因此 `CREATE EXTENSION vector` 可用，知识库向量检索开箱即用。
+
 ### 对象存储（MinIO / S3）
 
 文档产出（docx/xlsx/pptx）由 agent-runtime 写入 S3 兼容对象存储，bff 代理下载。本地用 MinIO：`db:up` 会一并起 `minio` 容器（S3 端口 9000、控制台 9001，默认账号 `minioadmin/minioadmin`）。连接参数走 `.env` 的 `S3_ENDPOINT` / `S3_ACCESS_KEY` / `S3_SECRET_KEY` / `S3_BUCKET`（见 `.env.example`）。
@@ -47,6 +49,10 @@ pnpm --filter @ai-office/bff db:push    # 同步表结构
 - 工具权限：工具契约引入 `safe` / `confirm` / `blocked` 三级，`Tool.permission` 必填
 - 确认卡片：`confirm` 级工具（`code.exec`）在工作台下发内联卡片，用户允许/拒绝后 loop 继续
 - 代码沙箱：`code.exec` 在「子进程 + Node `--permission` + 受限 harness」中执行，无文件/网络/子进程，含超时与输出上限
+
+## M4a 已具备
+
+- 知识库 RAG：上传文档→检索问答→来源引用（pgvector 向量检索；runtime 解析+嵌入，bff 独占库）
 
 ## 包结构
 

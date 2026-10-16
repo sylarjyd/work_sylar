@@ -86,6 +86,15 @@ flowchart LR
 | `CODE_EXEC_MAX_OLD_SPACE_MB` | `128` | 沙箱子进程堆上限 |
 | `CODE_EXEC_MAX_OUTPUT_BYTES` | `65536` | 沙箱 stdout 累计截断阈值 |
 | `NEXT_PUBLIC_BFF_URL` | `http://localhost:4000` | **构建期**注入（Next.js 公开变量），生产为对外 BFF 地址 |
+| `EMBEDDING_BASE_URL` | `https://api.siliconflow.cn/v1` | 按嵌入服务端点 |
+| `EMBEDDING_API_KEY` | 空 | 真实 key（空则走 Mock 嵌入，不可用于生产） |
+| `EMBEDDING_MODEL` | `BAAI/bge-large-zh-v1.5` | 按嵌入服务模型 |
+| `EMBEDDING_DIM` | `1024` | 须与 `KbChunk.vector` 列维度一致（当前 `vector(1024)`） |
+| `BFF_INTERNAL_URL` | `http://localhost:4000` | runtime 访问 BFF 内部端点的内网地址 |
+| `INTERNAL_TOKEN` | 空 | **必须设置**（强随机），非本机部署必设 |
+| `KB_CHUNK_SIZE` | `800` | 按文档类型与模型上下文调优 |
+| `KB_CHUNK_OVERLAP` | `150` | 按切分效果调优 |
+| `KB_MAX_FILE_BYTES` | `10485760` | 按业务与存储配额调整 |
 
 > `JWT_SECRET` 未设置时 BFF 会抛错（fail-fast）；`AGENT_RUNTIME_TOKEN` 未设置时 runtime 仅靠绑本机限制可达面——生产两者都必须设置。
 
@@ -139,6 +148,15 @@ pnpm --filter @ai-office/bff exec prisma migrate deploy
 3. 或用 `docs/db/schema.sql` 作为基线手工建表（仅首次），后续仍走迁移。
 
 > **首次建库**可用 `docs/db/schema.sql`：它把 Prisma 模型翻译为等价 DDL（Postgres）。
+
+### 5.3 知识库（pgvector）
+
+知识库 RAG 依赖 Postgres 的 **pgvector** 扩展做向量检索，部署时注意：
+
+1. **镜像须带 pgvector**：本地 `db:up`/docker compose 已使用 `pgvector/pgvector:pg16`；生产 Postgres 必须是带 pgvector 扩展的镜像或安装该扩展的实例。
+2. **启用扩展**：启动后须执行 `CREATE EXTENSION IF NOT EXISTS vector`（`prisma db push` 与 `docs/db/schema.sql` 均已包含；若手工建库须自行执行）。
+3. **维度一致**：环境变量 `EMBEDDING_DIM` 必须等于 `KbChunk.vector` 列维度（当前 `vector(1024)`），二者不一致会导致写入/检索报错。
+4. **内部端点鉴权**：非本机部署时 `INTERNAL_TOKEN` **必设**——runtime 经该共享密钥调用 BFF 内部检索端点 `POST /internal/kb/search`；空值仅在本地开发允许（不校验）。
 
 ---
 

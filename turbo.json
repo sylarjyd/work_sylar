@@ -20,7 +20,16 @@
     "CONFIRM_TIMEOUT_MS",
     "CODE_EXEC_TIMEOUT_MS",
     "CODE_EXEC_MAX_OLD_SPACE_MB",
-    "CODE_EXEC_MAX_OUTPUT_BYTES"
+    "CODE_EXEC_MAX_OUTPUT_BYTES",
+    "EMBEDDING_BASE_URL",
+    "EMBEDDING_API_KEY",
+    "EMBEDDING_MODEL",
+    "EMBEDDING_DIM",
+    "BFF_INTERNAL_URL",
+    "INTERNAL_TOKEN",
+    "KB_CHUNK_SIZE",
+    "KB_CHUNK_OVERLAP",
+    "KB_MAX_FILE_BYTES"
   ],
   "tasks": {
     "build": { "dependsOn": ["^build"], "outputs": ["dist/**", ".next/**"] },
