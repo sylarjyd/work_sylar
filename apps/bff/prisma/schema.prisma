@@ -23,6 +23,7 @@ model User {
   email        String   @unique
   passwordHash String
   status       String   @default("active")
+  role         String   @default("admin")
   createdAt    DateTime @default(now())
   tenant       Tenant   @relation(fields: [tenantId], references: [id])
   sessions     Session[]
@@ -145,4 +146,23 @@ model KbChunk {
 
   @@index([docId])
   @@index([tenantId, userId])
+}
+
+model Connector {
+  id              String    @id @default(uuid())
+  tenantId        String
+  name            String
+  command         String
+  args            Json
+  // AES-256-GCM: base64(IV ‖ authTag ‖ ciphertext)；永不回传前端。
+  envEncrypted    String
+  enabled         Boolean   @default(true)
+  toolCount       Int       @default(0)
+  lastValidatedAt DateTime?
+  createdBy       String
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
 }

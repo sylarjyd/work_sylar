@@ -46,6 +46,7 @@ CREATE TABLE "User" (
     "email"        TEXT         NOT NULL,
     "passwordHash" TEXT         NOT NULL,
     "status"       TEXT         NOT NULL DEFAULT 'active',
+    "role"         TEXT         NOT NULL DEFAULT 'admin',
     "createdAt"    TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT "User_pkey" PRIMARY KEY ("id")
 );
@@ -234,6 +235,28 @@ ALTER TABLE "KbChunk"
     ADD CONSTRAINT "KbChunk_docId_fkey"
     FOREIGN KEY ("docId") REFERENCES "KbDoc" ("id")
     ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- -----------------------------------------------------------------------------
+-- Connector（M4b MCP 连接器配置；envEncrypted 为 AES-256-GCM 密文，永不回传前端）
+-- -----------------------------------------------------------------------------
+CREATE TABLE "Connector" (
+    "id"              TEXT         NOT NULL DEFAULT gen_random_uuid(),
+    "tenantId"        TEXT         NOT NULL,
+    "name"            TEXT         NOT NULL,
+    "command"         TEXT         NOT NULL,
+    "args"            JSONB        NOT NULL,
+    "envEncrypted"    TEXT         NOT NULL,
+    "enabled"         BOOLEAN      NOT NULL DEFAULT true,
+    "toolCount"       INTEGER      NOT NULL DEFAULT 0,
+    "lastValidatedAt" TIMESTAMP(3),
+    "createdBy"       TEXT         NOT NULL,
+    "createdAt"       TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt"       TIMESTAMP(3) NOT NULL,
+    CONSTRAINT "Connector_pkey" PRIMARY KEY ("id")
+);
+
+CREATE UNIQUE INDEX "Connector_tenantId_name_key" ON "Connector" ("tenantId", "name");
+CREATE INDEX "Connector_tenantId_idx" ON "Connector" ("tenantId");
 
 -- =============================================================================
 -- 可选：生产加固（不在 Prisma schema 中，按需单独应用；应用后需同步维护）
