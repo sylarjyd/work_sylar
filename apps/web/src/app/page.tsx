@@ -65,9 +65,12 @@ export default function Home() {
   }
 
   useEffect(() => {
+    // 跑流期间不刷新：新会话在建流时会 setSessionId 触发本 effect，若并发拉取会覆盖乐观卡片；
+    // 流结束后由 run() 的 finally 统一刷新，故这里等待 running 归位。
+    if (running) return;
     void refreshArtifacts(sessionId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId]);
+  }, [sessionId, running]);
 
   async function newSession(): Promise<SessionSummary> {
     const s = await createSession();
@@ -150,13 +153,13 @@ export default function Home() {
     <main>
       <h1>AI 办公智能体 · M1 工作台</h1>
       <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-        <select value={sessionId} onChange={(e) => setSessionId(e.target.value)} style={{ padding: 8 }}>
+        <select value={sessionId} onChange={(e) => setSessionId(e.target.value)} disabled={running} style={{ padding: 8 }}>
           <option value="">（新会话）</option>
           {sessions.map((s) => (
             <option key={s.id} value={s.id}>{s.title}</option>
           ))}
         </select>
-        <button onClick={() => void handleNewSession()}>新建会话</button>
+        <button onClick={() => void handleNewSession()} disabled={running}>新建会话</button>
         <button
           onClick={() => { clearToken(); router.push('/login'); }}
           style={{ marginLeft: 'auto' }}

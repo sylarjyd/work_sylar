@@ -116,5 +116,6 @@ export async function downloadArtifact(id: string, filename: string): Promise<vo
   document.body.appendChild(a);
   a.click();
   a.remove();
-  URL.revokeObjectURL(url);
+  // 部分浏览器（Safari/Firefox）在 click 后异步读取 blob，立即 revoke 会导致下载为空；延后一帧再回收。
+  setTimeout(() => URL.revokeObjectURL(url), 0);
 }
