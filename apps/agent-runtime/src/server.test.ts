@@ -160,15 +160,19 @@ describe('runtime server', () => {
       storage,
     });
     await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
-    const addr = server.address();
-    if (!addr || typeof addr === 'string') throw new Error('no port');
-    const res = await fetch(`http://127.0.0.1:${addr.port}/runs`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ runId: 'r', sessionId: 's', tenantId: 't', goal: 'g', messages: [] }),
-    });
-    expect(res.status).toBe(200);
-    await res.text();
-    await new Promise<void>((r) => server.close(() => r()));
+    try {
+      const addr = server.address();
+      if (!addr || typeof addr === 'string') throw new Error('no port');
+      const res = await fetch(`http://127.0.0.1:${addr.port}/runs`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ runId: 'r', sessionId: 's', tenantId: 't', goal: 'g', messages: [] }),
+      });
+      expect(res.status).toBe(200);
+      const text = await res.text();
+      expect(text).toContain('event: done');
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()));
+    }
   });
 });
