@@ -28,7 +28,12 @@ export class OpenAICompatEmbeddingGateway implements EmbeddingGateway {
       body: JSON.stringify({ model: this.cfg.model, input: texts }),
     });
     if (!res.ok) throw new Error(`embedding_http_${res.status}`);
-    const data = (await res.json()) as EmbeddingsResponse;
+    let data: EmbeddingsResponse;
+    try {
+      data = (await res.json()) as EmbeddingsResponse;
+    } catch {
+      throw new Error('embedding_bad_json');
+    }
     const rows = [...(data.data ?? [])];
     // provider 不保证顺序：按 index 升序还原，缺 index 时按原序。
     rows.sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
