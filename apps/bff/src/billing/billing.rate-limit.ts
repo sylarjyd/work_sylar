@@ -7,6 +7,8 @@ export interface RateLimitResult {
 
 export interface RateLimiter {
   hit(key: string, limit: number, windowSeconds?: number): Promise<RateLimitResult>;
+  /** 释放底层连接；内存实现无需实现。 */
+  close?(): Promise<void>;
 }
 
 export const RATE_LIMITER = Symbol('RATE_LIMITER');

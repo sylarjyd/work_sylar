@@ -1,4 +1,11 @@
-import { BadRequestException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Inject,
+  Injectable,
+  Logger,
+  NotFoundException,
+  type OnModuleDestroy,
+} from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import type { Plan, Subscription } from '@prisma/client';
 import type {
@@ -53,13 +60,18 @@ function toPlanDto(p: Plan): PlanDto {
  * 所有入口先 ensureSubscription（懒建/续期），保证存量租户无需迁移脚本。
  */
 @Injectable()
-export class BillingService {
+export class BillingService implements OnModuleDestroy {
   private readonly logger = new Logger(BillingService.name);
 
   constructor(
     private readonly prisma: PrismaService,
     @Inject(RATE_LIMITER) private readonly limiter: RateLimiter,
   ) {}
+
+  /** 应用关闭时释放限流器的 Redis 连接，避免进程退出前残留连接。 */
+  async onModuleDestroy(): Promise<void> {
+    await this.limiter.close?.();
+  }
 
   // ------------------------------------------------------------------ 套餐与发放
   async ensureSubscription(tenantId: string): Promise<{ plan: Plan; sub: Subscription }> {
