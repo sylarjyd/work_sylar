@@ -53,7 +53,7 @@ COMMENT ON TABLE "Step" IS '步骤表：执行过程中的思考、工具调用�
 COMMENT ON COLUMN "Step"."id" IS '步骤 ID';
 COMMENT ON COLUMN "Step"."runId" IS '所属执行 ID';
 COMMENT ON COLUMN "Step"."seq" IS '执行内步骤序号，从 1 递增';
-COMMENT ON COLUMN "Step"."type" IS '步骤类型：think / tool_call / tool_result / artifact / confirm_request';
+COMMENT ON COLUMN "Step"."type" IS '步骤类型：think / tool_call / tool_result / artifact / confirm_request / notice';
 COMMENT ON COLUMN "Step"."payload" IS '步骤结构化数据（JSON）';
 COMMENT ON COLUMN "Step"."ts" IS '记录时间';
 
@@ -105,3 +105,78 @@ COMMENT ON COLUMN "Connector"."lastValidatedAt" IS '上次校验时间';
 COMMENT ON COLUMN "Connector"."createdBy" IS '创建者用户 ID';
 COMMENT ON COLUMN "Connector"."createdAt" IS '创建时间';
 COMMENT ON COLUMN "Connector"."updatedAt" IS '更新时间';
+
+COMMENT ON TABLE "Plan" IS '套餐表：订阅档位与每月积分额度';
+COMMENT ON COLUMN "Plan"."id" IS '套餐 ID：free / standard / premium / ultimate';
+COMMENT ON COLUMN "Plan"."name" IS '套餐展示名';
+COMMENT ON COLUMN "Plan"."priceCents" IS '展示价格（分），不参与扣费';
+COMMENT ON COLUMN "Plan"."monthlyBaseCredits" IS '每周期发放的基础积分';
+COMMENT ON COLUMN "Plan"."monthlyBonusCredits" IS '每周期发放的赠送积分';
+COMMENT ON COLUMN "Plan"."maxCreditsPerRun" IS '单次运行最大预占/消耗积分';
+COMMENT ON COLUMN "Plan"."rpm" IS '每分钟最大运行发起数';
+COMMENT ON COLUMN "Plan"."allowedModels" IS '允许调用的模型列表（按优先级）';
+COMMENT ON COLUMN "Plan"."active" IS '是否可订阅';
+COMMENT ON COLUMN "Plan"."createdAt" IS '创建时间';
+
+COMMENT ON TABLE "Subscription" IS '订阅表：租户当前套餐与计费周期';
+COMMENT ON COLUMN "Subscription"."id" IS '订阅 ID';
+COMMENT ON COLUMN "Subscription"."tenantId" IS '所属租户 ID，一个租户一条';
+COMMENT ON COLUMN "Subscription"."planId" IS '当前套餐 ID';
+COMMENT ON COLUMN "Subscription"."status" IS '状态：active / expired / canceled';
+COMMENT ON COLUMN "Subscription"."periodStart" IS '当前周期开始（UTC）';
+COMMENT ON COLUMN "Subscription"."periodEnd" IS '当前周期结束（UTC），积分到期时间';
+COMMENT ON COLUMN "Subscription"."createdAt" IS '创建时间';
+COMMENT ON COLUMN "Subscription"."updatedAt" IS '更新时间';
+
+COMMENT ON TABLE "CreditLot" IS '积分批次表：每批积分的来源、余额与到期时间';
+COMMENT ON COLUMN "CreditLot"."id" IS '批次 ID';
+COMMENT ON COLUMN "CreditLot"."tenantId" IS '所属租户 ID';
+COMMENT ON COLUMN "CreditLot"."source" IS '来源：base / bonus / pack / adjust';
+COMMENT ON COLUMN "CreditLot"."granted" IS '发放数量';
+COMMENT ON COLUMN "CreditLot"."remaining" IS '剩余可用数量';
+COMMENT ON COLUMN "CreditLot"."expiresAt" IS '到期时间；NULL 表示不过期';
+COMMENT ON COLUMN "CreditLot"."note" IS '备注（周期标记等）';
+COMMENT ON COLUMN "CreditLot"."createdAt" IS '创建时间';
+
+COMMENT ON TABLE "CreditTx" IS '积分流水表：只追加不修改，保留完整审计链';
+COMMENT ON COLUMN "CreditTx"."id" IS '流水 ID';
+COMMENT ON COLUMN "CreditTx"."tenantId" IS '所属租户 ID';
+COMMENT ON COLUMN "CreditTx"."type" IS '类型：grant / consume / expire / adjust / refund';
+COMMENT ON COLUMN "CreditTx"."amount" IS '有符号数量：发放为正，消耗/过期为负';
+COMMENT ON COLUMN "CreditTx"."source" IS '来源标记（base/bonus/pack/adjust/usage）';
+COMMENT ON COLUMN "CreditTx"."runId" IS '关联运行 ID（结算幂等键，唯一）';
+COMMENT ON COLUMN "CreditTx"."note" IS '备注';
+COMMENT ON COLUMN "CreditTx"."createdAt" IS '创建时间';
+
+COMMENT ON TABLE "TenantCredit" IS '租户积分汇总表：余额与已预占额度';
+COMMENT ON COLUMN "TenantCredit"."tenantId" IS '租户 ID';
+COMMENT ON COLUMN "TenantCredit"."balance" IS '未过期未消耗的积分总额（含已预占）';
+COMMENT ON COLUMN "TenantCredit"."reserved" IS '进行中运行预占的积分';
+COMMENT ON COLUMN "TenantCredit"."updatedAt" IS '更新时间';
+
+COMMENT ON TABLE "CreditHold" IS '积分预占表：运行前锁定额度，结算或失败时释放';
+COMMENT ON COLUMN "CreditHold"."runId" IS '运行 ID（主键，天然幂等）';
+COMMENT ON COLUMN "CreditHold"."tenantId" IS '所属租户 ID';
+COMMENT ON COLUMN "CreditHold"."amount" IS '预占积分';
+COMMENT ON COLUMN "CreditHold"."createdAt" IS '创建时间';
+COMMENT ON COLUMN "CreditHold"."expiresAt" IS '兜底清理时间（24 小时）';
+
+COMMENT ON TABLE "UsageRecord" IS '用量记录表：一次运行的模型 token 与折算积分';
+COMMENT ON COLUMN "UsageRecord"."id" IS '记录 ID';
+COMMENT ON COLUMN "UsageRecord"."runId" IS '运行 ID（唯一，结算幂等键）';
+COMMENT ON COLUMN "UsageRecord"."tenantId" IS '所属租户 ID';
+COMMENT ON COLUMN "UsageRecord"."userId" IS '发起用户 ID';
+COMMENT ON COLUMN "UsageRecord"."sessionId" IS '所属会话 ID';
+COMMENT ON COLUMN "UsageRecord"."models" IS '按模型的用量 JSON：[{model,input,output}]';
+COMMENT ON COLUMN "UsageRecord"."inputTokens" IS '输入 token 合计';
+COMMENT ON COLUMN "UsageRecord"."outputTokens" IS '输出 token 合计';
+COMMENT ON COLUMN "UsageRecord"."credits" IS '实际结算积分';
+COMMENT ON COLUMN "UsageRecord"."status" IS '状态：pending / settled / void';
+COMMENT ON COLUMN "UsageRecord"."createdAt" IS '创建时间';
+COMMENT ON COLUMN "UsageRecord"."settledAt" IS '结算时间';
+
+COMMENT ON TABLE "ModelPrice" IS '模型价格表：每千 token 的毫积分费率';
+COMMENT ON COLUMN "ModelPrice"."model" IS '模型名（与 runtime 上报一致）';
+COMMENT ON COLUMN "ModelPrice"."inputMilliCreditsPer1k" IS '输入每千 token 毫积分费率';
+COMMENT ON COLUMN "ModelPrice"."outputMilliCreditsPer1k" IS '输出每千 token 毫积分费率';
+COMMENT ON COLUMN "ModelPrice"."updatedAt" IS '更新时间';
