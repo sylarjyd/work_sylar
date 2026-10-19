@@ -21,12 +21,14 @@ flowchart LR
         RT["runtime :4001"]
         PG[("Postgres :5432")]
         S3[("MinIO :9000/9001")]
+        RD[("Redis :6379")]
     end
     Browser["浏览器"] --> WEB
     Browser -->|CORS| BFF
     BFF --> RT
     BFF --> PG
     BFF --> S3
+    BFF --> RD
     RT --> S3
 ```
 
@@ -134,7 +136,7 @@ pnpm build                 # turbo：按依赖顺序构建 shared → 各 app
 ### 5.1 开发
 
 ```bash
-pnpm --filter @ai-office/bff db:up      # docker compose 起 Postgres + MinIO
+pnpm --filter @ai-office/bff db:up      # docker compose 起 Postgres + MinIO + Redis
 pnpm --filter @ai-office/bff db:push    # 用 Prisma schema 同步表结构（无迁移历史）
 pnpm --filter @ai-office/bff db:generate
 ```
