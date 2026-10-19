@@ -1,5 +1,5 @@
 import 'reflect-metadata';
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import { Test } from '@nestjs/testing';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
 import multipart from '@fastify/multipart';
@@ -8,6 +8,7 @@ import { InternalKbController } from './internal-kb.controller';
 import { KbService } from './kb.service';
 import { KB_STORAGE } from './storage';
 import { PrismaService } from '../db/prisma.service';
+import { SettingsService } from '../settings/settings.service';
 import { signToken } from '../auth/jwt';
 
 let app: NestFastifyApplication;
@@ -68,6 +69,10 @@ beforeAll(async () => {
           }),
       },
       { provide: KB_STORAGE, useValue: fakeStorage },
+      {
+        provide: SettingsService,
+        useValue: { getKbConfig: async () => ({ chunkSize: 600, chunkOverlap: 100 }) },
+      },
       // JwtGuard 依赖 PrismaService 查库，需与 useFactory 的 KbService 共用同一假库。
       { provide: PrismaService, useValue: fakePrisma },
     ],
@@ -115,6 +120,19 @@ describe('KbController', () => {
     expect(res.statusCode).toBe(202);
     expect(res.json()).toMatchObject({ filename: 'a.txt', status: 'pending' });
     expect(created).toHaveLength(1);
+  });
+
+  it('上传后异步摄取携带管理端切分配置', async () => {
+    const spy = vi.spyOn(KbService.prototype, 'ingest').mockResolvedValue(undefined);
+    try {
+      const form = multipartForm('a.txt', 'hello');
+      const res = await app.inject({ method: 'POST', url: '/api/kb/docs', headers: { ...auth(), ...form.headers }, payload: form.body });
+      expect(res.statusCode).toBe(202);
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(spy.mock.calls[0][1]).toEqual({ chunkSize: 600, chunkOverlap: 100 });
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('不支持的类型返回 400 unsupported_type', async () => {

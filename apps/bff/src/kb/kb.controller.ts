@@ -22,6 +22,7 @@ import { Inject } from '@nestjs/common';
 import { JwtGuard } from '../auth/jwt.guard';
 import { CurrentUser } from '../auth/current-user';
 import type { JwtPayload } from '../auth/jwt';
+import { SettingsService } from '../settings/settings.service';
 
 const ALLOWED_EXT = ['txt', 'md', 'csv', 'docx', 'xlsx', 'pdf'];
 
@@ -33,6 +34,7 @@ export class KbController {
   constructor(
     private readonly kb: KbService,
     @Inject(KB_STORAGE) private readonly storage: KbStorage,
+    private readonly settings: SettingsService,
   ) {}
 
   @Get()
@@ -83,9 +85,14 @@ export class KbController {
       size: buffer.length,
       storageKey,
     });
+    // 每次上传读取当前管理端配置并随请求下发；runtime 再做防御性夹取。
+    const chunkConfig = await this.settings.getKbConfig();
     // 异步摄取：不阻塞上传响应，前端轮询 status；失败置 failed + error。
     void this.kb
-      .ingest({ id: doc.id, tenantId: user.tenantId, userId: user.sub, filename: doc.filename, mime: doc.mime, storageKey })
+      .ingest(
+        { id: doc.id, tenantId: user.tenantId, userId: user.sub, filename: doc.filename, mime: doc.mime, storageKey },
+        chunkConfig,
+      )
       .catch(async (err: unknown) => {
         const msg = err instanceof Error ? err.message : String(err);
         this.logger.warn(`kb doc ${doc.id} 摄取失败: ${msg}`);

@@ -174,14 +174,26 @@ export function createRuntimeServer(deps: RuntimeDeps = {}): Server {
       req.on('data', (chunk) => (body += chunk));
       req.on('end', () => {
         void (async () => {
-          let payload: { storageKey?: unknown; filename?: unknown; mime?: unknown };
+          let payload: {
+            storageKey?: unknown;
+            filename?: unknown;
+            mime?: unknown;
+            chunkSize?: unknown;
+            chunkOverlap?: unknown;
+          };
           try {
             const parsed: unknown = JSON.parse(body || '{}');
             // 非对象（含字面量 null / 数组 / 标量）一律视为非法体，避免后续取属性抛错逃出保护块。
             if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
               throw new Error('not_object');
             }
-            payload = parsed as { storageKey?: unknown; filename?: unknown; mime?: unknown };
+            payload = parsed as {
+              storageKey?: unknown;
+              filename?: unknown;
+              mime?: unknown;
+              chunkSize?: unknown;
+              chunkOverlap?: unknown;
+            };
           } catch {
             res.writeHead(400, { 'content-type': 'application/json' });
             res.end(JSON.stringify({ ok: false, error: 'invalid json' }));
@@ -200,13 +212,11 @@ export function createRuntimeServer(deps: RuntimeDeps = {}): Server {
             const chunks: Buffer[] = [];
             for await (const c of stream) chunks.push(Buffer.from(c as Buffer));
             const data = Buffer.concat(chunks);
+            const chunkConfig = resolveChunkConfig(payload, process.env);
             const out = await ingest(
               { data, filename, mime },
               { embed: embedding },
-              {
-                chunkSize: Number(process.env.KB_CHUNK_SIZE ?? 800),
-                chunkOverlap: Number(process.env.KB_CHUNK_OVERLAP ?? 150),
-              },
+              chunkConfig,
             );
             res.writeHead(200, { 'content-type': 'application/json' });
             res.end(JSON.stringify({ ok: true, chunks: out }));
@@ -283,6 +293,28 @@ export function isLoopback(ip: string | undefined): boolean {
   // 双栈 socket 上 Node 把 IPv4 呈现为 ::ffff:127.0.0.1。
   const addr = ip.startsWith('::ffff:') ? ip.slice(7) : ip;
   return addr === '::1' || addr.startsWith('127.');
+}
+
+/** 解析 KB 切分参数：请求值非法时回落 env/默认；overlap 必须小于 size。 */
+export function resolveChunkConfig(
+  payload: { chunkSize?: unknown; chunkOverlap?: unknown },
+  env: NodeJS.ProcessEnv,
+): { chunkSize: number; chunkOverlap: number } {
+  const int = (raw: unknown, min: number, max: number, fallback: number): number =>
+    typeof raw === 'number' && Number.isSafeInteger(raw) && raw >= min && raw <= max
+      ? raw
+      : fallback;
+
+  const chunkSize = int(payload.chunkSize, 100, 4000, int(Number(env.KB_CHUNK_SIZE), 100, 4000, 800));
+  const requestedOverlap = int(
+    payload.chunkOverlap,
+    0,
+    1000,
+    int(Number(env.KB_CHUNK_OVERLAP), 0, 1000, 150),
+  );
+  const chunkOverlap =
+    requestedOverlap < chunkSize ? requestedOverlap : Math.min(150, Math.max(0, chunkSize - 1));
+  return { chunkSize, chunkOverlap };
 }
 
 const isEntry = !!process.argv[1] &&

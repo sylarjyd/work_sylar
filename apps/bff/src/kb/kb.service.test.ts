@@ -163,6 +163,20 @@ describe('KbService.ingest', () => {
     expect(deleteCalls).toEqual([{ docId: 'd1' }]);
   });
 
+  it('ingest 把请求级 chunk 参数带给 runtime', async () => {
+    await makeService().ingest(
+      { id: 'd1', tenantId: 't1', userId: 'u1', filename: 'a.txt', mime: 'text/plain', storageKey: 'k' },
+      { chunkSize: 600, chunkOverlap: 100 },
+    );
+    expect(runtimeCalls[0]).toMatchObject({ chunkSize: 600, chunkOverlap: 100 });
+  });
+
+  it('未传 chunk 参数时不下发该字段（runtime 自行回落）', async () => {
+    await makeService().ingest({ id: 'd1', tenantId: 't1', userId: 'u1', filename: 'a.txt', mime: 'text/plain', storageKey: 'k' });
+    expect(runtimeCalls[0]).not.toHaveProperty('chunkSize');
+    expect(runtimeCalls[0]).not.toHaveProperty('chunkOverlap');
+  });
+
   it('runtime 回 ok:false 时抛错（由调用方置 failed）', async () => {
     runtimeBody = JSON.stringify({ ok: false, error: 'empty_document' });
     await expect(

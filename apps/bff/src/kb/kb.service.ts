@@ -94,7 +94,10 @@ export class KbService {
    * 摄取编排：调 runtime /kb/ingest 取切片（含向量），写 KbChunk（向量走原始 SQL），
    * 并把 doc 置 ready。任一步失败抛错，由调用方置 failed。
    */
-  async ingest(target: IngestTarget): Promise<void> {
+  async ingest(
+    target: IngestTarget,
+    chunkConfig?: { chunkSize: number; chunkOverlap: number },
+  ): Promise<void> {
     // 归属校验：切片与状态一律针对「属于该 tenant/user 的文档」写入，
     // 杜绝调用方传入错配的 tenant/user 造成跨租户写入（与 remove 同款前置校验）。
     const owned = await this.prisma.kbDoc.findFirst({
@@ -118,6 +121,7 @@ export class KbService {
           storageKey: target.storageKey,
           filename: target.filename,
           mime: target.mime,
+          ...(chunkConfig ?? {}),
         }),
         signal: AbortSignal.timeout(INGEST_TIMEOUT_MS),
       });
