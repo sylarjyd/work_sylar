@@ -13,3 +13,5 @@ dist/
 *.tsbuildinfo
 /.playwright-mcp/季度复盘.pptx
 /.playwright-mcp/
+
+/.run/
