@@ -73,7 +73,7 @@ flowchart LR
 | `AGENT_RUNTIME_URL` | `http://localhost:4001` | 内网地址（多实例时指向 LB） |
 | `AGENT_RUNTIME_HOST` | `127.0.0.1` | 生产设内网 IP 或 `0.0.0.0`（配合网络隔离） |
 | `AGENT_RUNTIME_PORT` | `4001` | 按需 |
-| `AGENT_RUNTIME_TOKEN` | 空 | **必须设置**（强随机），BFF 自动携带 |
+| `AGENT_RUNTIME_TOKEN` | 空 | **必须设置**（强随机），BFF 自动携带；未设置时 runtime 仅放行回环来源（fail-closed） |
 | `DEEPSEEK_API_KEY` | 空 | 真实 key（空则走 Mock，不可用于生产） |
 | `MODEL_BASE_URL` | `https://api.deepseek.com/v1` | 按模型服务 |
 | `MODEL_NAME` | `deepseek-chat` | 按模型服务 |
@@ -96,13 +96,12 @@ flowchart LR
 | `KB_CHUNK_OVERLAP` | `150` | 按切分效果调优 |
 | `KB_MAX_FILE_BYTES` | `10485760` | 按业务与存储配额调整 |
 | `CONNECTOR_ENC_KEY` | 空 | **必须设置**（32 字节 hex）；MCP Server 的 env 加解密密钥，缺失时 BFF 启动失败 |
-| `ADMIN_EMAILS` | 空 | 平台管理员邮箱白名单（逗号分隔，大小写不敏感）；仅这些邮箱注册为 `admin`，其余为 `member` |
 | `MCP_HEARTBEAT_MS` | `30000` | MCP 子进程心跳间隔 |
 | `MCP_BACKOFF_BASE_MS` / `MCP_BACKOFF_MAX_MS` | `1000` / `30000` | MCP 子进程崩溃退避重拉 |
 | `MCP_INIT_TIMEOUT_MS` | `10000` | MCP `initialize` / 校验握手超时 |
 | `MCP_CALL_TIMEOUT_MS` | `30000` | MCP 单次工具调用超时 |
 
-> `JWT_SECRET` 未设置时 BFF 会抛错（fail-fast）；`AGENT_RUNTIME_TOKEN` 未设置时 runtime 仅靠绑本机限制可达面——生产两者都必须设置。
+> `JWT_SECRET` 未设置时 BFF 会抛错（fail-fast）；`AGENT_RUNTIME_TOKEN` 未设置时 runtime 仅放行回环来源（fail-closed）——生产两者都必须设置。
 
 ---
 
@@ -168,11 +167,11 @@ pnpm --filter @ai-office/bff exec prisma migrate deploy
 
 - **密钥必设**：`CONNECTOR_ENC_KEY` 缺失时 BFF 启动即失败；轮换密钥会使既有连接器 env 无法解密，须同时重填。
 - **子进程环境隔离**：runtime spawn MCP Server 时**不注入**本服务 `process.env`，仅传 SDK 白名单（`PATH`/`HOME` 等）+ 连接器自身 `env`，避免泄露 `DEEPSEEK_API_KEY`/`JWT_SECRET`。
-- **权限**：连接器增删改仅租户管理员；`/connectors` 页对非管理员只读。管理员由 `ADMIN_EMAILS` 白名单在注册时决定（`role`），须结合下述残余风险使用。
+- **权限**：连接器增删改仅租户管理员；`/connectors` 页对非管理员只读。注册路径一律创建 `member`，管理员由运维在账号注册后预置：`pnpm --filter @ai-office/bff admin:promote <email>`。
 - **内网地址**：runtime 需能访问 `BFF_INTERNAL_URL`（默认 `http://localhost:4000`）拉连接器；跨机部署必设 `INTERNAL_TOKEN`。
 - **隔离**：v1 不做命令白名单 / 沙箱，生产需按信任边界评估是否上容器隔离。
 - **提示注入信任边界**：MCP Server 的工具描述与调用结果会进入模型上下文且未做净化；`permission:'confirm'`（工具调用前需人工确认）是主要缓解手段。仅接入可信的 MCP Server。
-- **注册与角色残余风险**：`ADMIN_EMAILS` 判定发生在注册时，v1 无邮箱验证——白名单邮箱可被他人抢注为 `admin`。生产建议引入邮箱验证或邀请制；邮箱以原样存储（未统一小写）。
+- **注册与角色**：注册不授予管理员，避免抢注邮箱提权；邮箱统一 trim + 小写后存储，注册与登录的查重均为大小写不敏感（兼容存量混合大小写账号）。
 - **存量库注意**：`User.role` 列默认值已由 `admin` 改为 `member`。用旧版 `docs/db/schema.sql` 建库的实例须留意：既有默认值与新库不一致，同时既有用户的历史 `role` 不会自动变更，需按需手工校正。
 
 ---

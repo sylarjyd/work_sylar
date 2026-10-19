@@ -3,7 +3,7 @@ import { Readable } from 'node:stream';
 import type { Server } from 'node:http';
 import { decodeSseFrames, createSseParser } from '@ai-office/shared';
 import type { AgentEvent } from '@ai-office/shared';
-import { createRuntimeServer } from './server';
+import { createRuntimeServer, isLoopback } from './server';
 import type { ModelGateway } from './model/types';
 import type { Tool } from './tools/types';
 
@@ -53,6 +53,21 @@ async function postRuns(payload: unknown) {
     body: JSON.stringify(payload),
   });
 }
+
+describe('isLoopback', () => {
+  it('识别 IPv4 / IPv6 与双栈映射地址', () => {
+    expect(isLoopback('127.0.0.1')).toBe(true);
+    expect(isLoopback('127.8.9.10')).toBe(true);
+    expect(isLoopback('::1')).toBe(true);
+    expect(isLoopback('::ffff:127.0.0.1')).toBe(true);
+  });
+
+  it('远程地址与缺失地址一律判否（fail-closed）', () => {
+    expect(isLoopback('10.0.0.5')).toBe(false);
+    expect(isLoopback('::ffff:10.0.0.5')).toBe(false);
+    expect(isLoopback(undefined)).toBe(false);
+  });
+});
 
 describe('runtime server', () => {
   it('GET /health 返回 ok', async () => {

@@ -7,12 +7,20 @@ import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { PrismaService } from '../db/prisma.service';
 
-// 极简内存假库：只实现 AuthService 用到的两个方法。
-const users = new Map<string, { id: string; email: string; passwordHash: string; tenantId: string }>();
+// 极简内存假库：只实现 AuthService 用到的两个方法（键统一小写，模拟大小写不敏感查询）。
+interface FakeUser {
+  id: string;
+  email: string;
+  passwordHash: string;
+  tenantId: string;
+  role: string;
+}
+const users = new Map<string, FakeUser>();
 const fakePrisma = {
   user: {
-    findUnique: async ({ where }: { where: { email: string } }) => users.get(where.email) ?? null,
-    create: async ({ data }: { data: { email: string; passwordHash: string } }) => {
+    findFirst: async ({ where }: { where: { email: { equals: string } } }) =>
+      users.get(where.email.equals.toLowerCase()) ?? null,
+    create: async ({ data }: { data: { email: string; passwordHash: string; role: string } }) => {
       const row = { id: `u${users.size + 1}`, tenantId: `t${users.size + 1}`, ...data };
       users.set(data.email, row);
       return row;
@@ -23,7 +31,13 @@ const fakePrisma = {
 /** 直接往假库塞一个已注册用户，避免用注册接口为其它用例铺状态。 */
 async function seedUser(email: string, password: string): Promise<void> {
   const passwordHash = await argon2.hash(password);
-  users.set(email, { id: `u${users.size + 1}`, tenantId: `t${users.size + 1}`, email, passwordHash });
+  users.set(email.toLowerCase(), {
+    id: `u${users.size + 1}`,
+    tenantId: `t${users.size + 1}`,
+    email: email.toLowerCase(),
+    passwordHash,
+    role: 'member',
+  });
 }
 
 let app: NestFastifyApplication;
@@ -97,22 +111,50 @@ describe('AuthController', () => {
     expect(body.user.email).toBe('a@b.com');
   });
 
-  it('ADMIN_EMAILS 命中的邮箱注册为 admin，其余为 member', async () => {
-    process.env.ADMIN_EMAILS = 'boss@x.com, Chief@X.com';
+  it('注册一律为 member，不再按 ADMIN_EMAILS 自动提权', async () => {
+    process.env.ADMIN_EMAILS = 'boss@x.com';
     try {
-      const a = await app.inject({ method: 'POST', url: '/api/auth/register', payload: { email: 'boss@x.com', password: 'pw123456' } });
-      expect(JSON.parse(a.payload).user.role).toBe('admin');
-      const b = await app.inject({ method: 'POST', url: '/api/auth/register', payload: { email: 'peon@x.com', password: 'pw123456' } });
-      expect(JSON.parse(b.payload).user.role).toBe('member');
-      const c = await app.inject({ method: 'POST', url: '/api/auth/register', payload: { email: 'chief@x.com', password: 'pw123456' } });
-      expect(JSON.parse(c.payload).user.role).toBe('admin');
+      const res = await app.inject({ method: 'POST', url: '/api/auth/register', payload: { email: 'boss@x.com', password: 'pw123456' } });
+      expect(JSON.parse(res.payload).user.role).toBe('member');
     } finally {
       delete process.env.ADMIN_EMAILS;
     }
   });
 
-  it('未设置 ADMIN_EMAILS 时注册为 member', async () => {
-    const res = await app.inject({ method: 'POST', url: '/api/auth/register', payload: { email: 'nobody@x.com', password: 'pw123456' } });
-    expect(JSON.parse(res.payload).user.role).toBe('member');
+  it('注册邮箱统一存小写，大小写不同的重复邮箱返回 409', async () => {
+    const first = await app.inject({
+      method: 'POST',
+      url: '/api/auth/register',
+      payload: { email: 'Boss@X.com', password: 'pw123456' },
+    });
+    expect(first.statusCode).toBe(201);
+    expect(JSON.parse(first.payload).user.email).toBe('boss@x.com');
+    expect(users.has('boss@x.com')).toBe(true);
+
+    const dup = await app.inject({
+      method: 'POST',
+      url: '/api/auth/register',
+      payload: { email: 'boss@x.COM', password: 'pw123456' },
+    });
+    expect(dup.statusCode).toBe(409);
+  });
+
+  it('登录邮箱大小写不敏感', async () => {
+    await seedUser('a@b.com', 'pw123456');
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      payload: { email: 'A@B.COM', password: 'pw123456' },
+    });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('非法邮箱类型返回 400', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/auth/register',
+      payload: { email: 42, password: 'pw123456' },
+    });
+    expect(res.statusCode).toBe(400);
   });
 });

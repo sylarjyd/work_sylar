@@ -57,11 +57,13 @@ export function createRuntimeServer(deps: RuntimeDeps = {}): Server {
   const confirm = new ConfirmBroker();
   const confirmTimeoutMs = Number(process.env.CONFIRM_TIMEOUT_MS ?? 120000);
 
-  // BFF→runtime 共享密钥：设置 AGENT_RUNTIME_TOKEN 后强制校验，供网络化部署用；
-  // 未设置时仅靠入口默认绑本机（见 isEntry）限制可达面。
+  // BFF→runtime 共享密钥：设置 AGENT_RUNTIME_TOKEN 后强制校验；
+  // 未设置时失败关闭，仅放行回环来源——即使误绑 0.0.0.0，远程也无法触发
+  // 模型调用或 spawn 子进程（连接器校验）。
   const authorized = (req: IncomingMessage): boolean => {
     const token = process.env.AGENT_RUNTIME_TOKEN;
-    return !token || req.headers['x-agent-runtime-token'] === token;
+    if (token) return req.headers['x-agent-runtime-token'] === token;
+    return isLoopback(req.socket.remoteAddress);
   };
 
   const server = createServer((req, res) => {
@@ -271,6 +273,14 @@ export function createRuntimeServer(deps: RuntimeDeps = {}): Server {
   return server;
 }
 
+/** 判断请求来源是否为回环地址；未配置共享密钥时仅信任本机调用。 */
+export function isLoopback(ip: string | undefined): boolean {
+  if (!ip) return false;
+  // 双栈 socket 上 Node 把 IPv4 呈现为 ::ffff:127.0.0.1。
+  const addr = ip.startsWith('::ffff:') ? ip.slice(7) : ip;
+  return addr === '::1' || addr.startsWith('127.');
+}
+
 const isEntry = !!process.argv[1] &&
   resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 
@@ -284,7 +294,7 @@ if (isEntry) {
   }
   // 独立端口变量：与 bff 的 PORT 分开，避免根 .env 里 PORT=4000 把 runtime 也顶到 4000。
   const port = Number(process.env.AGENT_RUNTIME_PORT ?? 4001);
-  // 默认只绑本机：该端点无内置鉴权（仅有可选 token），暴露到网络等于开放一个无鉴权的模型入口。
+  // 默认只绑本机；未配置 token 时仅回环来源可通过鉴权（fail-closed）。
   // 部署到网络时须显式设 AGENT_RUNTIME_HOST=0.0.0.0 并同时配置 AGENT_RUNTIME_TOKEN。
   const host = process.env.AGENT_RUNTIME_HOST ?? '127.0.0.1';
   const server = createRuntimeServer({ storage });

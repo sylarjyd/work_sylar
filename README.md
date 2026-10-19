@@ -28,9 +28,9 @@ pnpm --filter @ai-office/bff db:push    # 同步表结构
 
 `artifacts` 桶由 agent-runtime 启动时幂等创建，无需手工建桶；若启动日志出现 `ensureBucket 失败` 告警，说明对象存储未就绪，文档工具会在运行期报错。改完 `.env` 需重启 bff 与 runtime 才会生效（两者仅在启动时加载一次根 `.env`）。
 
-> 网络化部署提醒：agent-runtime 的 `/runs` 无内置鉴权，默认仅绑 `127.0.0.1`。
-> 若要对外暴露，必须设 `AGENT_RUNTIME_HOST=0.0.0.0` 并同时配 `AGENT_RUNTIME_TOKEN`
-> （BFF 会自动携带同一 token 发起请求）。
+> 网络化部署提醒：agent-runtime 默认仅绑 `127.0.0.1`；未配 `AGENT_RUNTIME_TOKEN` 时
+> 只放行回环来源（fail-closed）。若要对外暴露，必须设 `AGENT_RUNTIME_HOST=0.0.0.0`
+> 并同时配 `AGENT_RUNTIME_TOKEN`（BFF 会自动携带同一 token 发起请求）。
 
 ## M1 已具备
 

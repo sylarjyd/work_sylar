@@ -88,7 +88,7 @@ interface RuntimeDeps {
 
 **`POST /runs` 处理逻辑**：
 
-1. **鉴权**：若设 `AGENT_RUNTIME_TOKEN`，校验请求头 `x-agent-runtime-token`；不匹配 → `401 {error:'unauthorized'}`。
+1. **鉴权**：设了 `AGENT_RUNTIME_TOKEN` 则校验请求头 `x-agent-runtime-token`，不匹配 → `401 {error:'unauthorized'}`；未设置时 fail-closed，仅放行回环来源（`127.0.0.1`/`::1`）。
 2. **解析体**：累积 body，`JSON.parse`；失败 → `400 {error:'invalid json'}`。
 3. **开流**：`200 text/event-stream, cache-control:no-cache, connection:keep-alive`。
 4. **执行**：异步迭代 `runAgent(runReq, {gateway, tools, onUsage})`，每事件写 `event: step`；`onUsage` 写 `event: usage`；结束写 `event: done {runId}`；异常写 `event: error {message}`；`finally` 关闭响应。

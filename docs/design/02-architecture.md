@@ -62,7 +62,7 @@ flowchart LR
 | Postgres | docker | 5432 | 外部依赖 |
 | MinIO | docker | 9000（API）/ 9001（控制台） | 外部依赖 |
 
-> **关键**：`agent-runtime` 的 `/runs` **无内置鉴权**，默认仅绑 `127.0.0.1`。对外暴露必须设 `AGENT_RUNTIME_HOST=0.0.0.0` 并配 `AGENT_RUNTIME_TOKEN`，BFF 会自动携带同一 token。
+> **关键**：`agent-runtime` 默认仅绑 `127.0.0.1`；未配 `AGENT_RUNTIME_TOKEN` 时**只放行回环来源**（fail-closed）。对外暴露必须设 `AGENT_RUNTIME_HOST=0.0.0.0` 并配 `AGENT_RUNTIME_TOKEN`，BFF 会自动携带同一 token。
 
 ---
 
@@ -258,7 +258,7 @@ sequenceDiagram
 | **SSRF** | `web.fetch` 解析主机名**全部**地址，任一非公网即拒绝；连接固定到已校验 IP（杜绝 DNS rebinding TOCTOU）；不跟随跳转 |
 | **头注入** | 生成文件名清洗控制字符/路径分隔符/`..`；`content-disposition` 做 ASCII 回退 + RFC 5987 `filename*` |
 | **CORS** | 开发态 `origin: true` 放行（web 与 bff 不同源）；生产应收敛为白名单（见部署文档加固清单） |
-| **内部鉴权** | BFF→runtime 可选共享密钥（`AGENT_RUNTIME_TOKEN`）；runtime 默认只绑本机 |
+| **内部鉴权** | BFF→runtime 共享密钥（`AGENT_RUNTIME_TOKEN`）；未配置时 fail-closed，仅放行回环来源 |
 | **密钥管理** | `.env` 仅本地（gitignore）；生产用环境变量/密管系统注入（见部署文档） |
 
 ---
