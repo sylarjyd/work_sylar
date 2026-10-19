@@ -1,4 +1,5 @@
 import 'reflect-metadata';
+import { randomUUID } from 'node:crypto';
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { Test } from '@nestjs/testing';
 import { BaseExceptionFilter } from '@nestjs/core';
@@ -14,6 +15,8 @@ import { SessionsController } from '../sessions/sessions.controller';
 import { SessionsService } from '../sessions/sessions.service';
 import { PrismaService } from '../db/prisma.service';
 import { signToken } from '../auth/jwt';
+import { BillingService } from '../billing/billing.service';
+import { InsufficientCreditsError, PlanExpiredError, RateLimitedError } from '../billing/billing.errors';
 
 let upstream: Server;
 let app: NestFastifyApplication;
@@ -21,8 +24,8 @@ let baseUrl: string;
 let runtimeUrl: string;
 // 上游收到的最近一次 /runs 请求体原文，供断言 BFF 透传的字段（如 userId）。
 let lastRunsBody = '';
-// 上游行为开关：正常流 / 中途发 error 事件。
-let upstreamMode: 'ok' | 'error' = 'ok';
+// 上游行为开关：正常流 / 中途发 error 事件 / 不发 usage / 慢速流（用于断连排空）。
+let upstreamMode: 'ok' | 'error' | 'nousage' | 'slow' = 'ok';
 // 落库故障注入开关：用于验证控制器在写库失败时的落 failed / 不挂起行为。
 // 这两个开关必须能被各用例独立置位，否则「修复被回退」时用例依旧会通过。
 let failStepCreate = false;
@@ -37,6 +40,30 @@ const stored: {
 } = { steps: [], messages: [], runUpdates: [], taskUpdates: [], artifacts: [] };
 
 const session = { id: 's1', tenantId: 't1', userId: 'u1', title: 'x', createdAt: new Date() };
+
+// 计费调用记录与故障注入：用例据此断言预占/记录/结算/释放的顺序与结果。
+const billingCalls: unknown[][] = [];
+let beginRunError: unknown = null;
+const fakeBilling = {
+  beginRun: async (runId: string, tenantId: string) => {
+    billingCalls.push(['begin', runId, tenantId]);
+    if (beginRunError) throw beginRunError;
+    return {
+      maxCredits: 50,
+      allowedModels: ['mock'],
+      prices: { mock: { inputMilliCreditsPer1k: 100, outputMilliCreditsPer1k: 300 } },
+    };
+  },
+  recordUsage: async (...args: unknown[]) => {
+    billingCalls.push(['record', ...args]);
+  },
+  settle: async (runId: string) => {
+    billingCalls.push(['settle', runId]);
+  },
+  releaseHold: async (runId: string) => {
+    billingCalls.push(['release', runId]);
+  },
+} as unknown as BillingService;
 
 // 逃逸到 Nest 异常处理器的异常会被登记在这里。
 // 存在的意义：Nest 的 BaseExceptionFilter 在 reply 已 hijack 时会兜底
@@ -74,7 +101,7 @@ const fakePrisma = {
     },
   },
   run: {
-    create: async ({ data }: { data: unknown }) => ({ id: 'run1', ...(data as object) }),
+    create: async ({ data }: { data: unknown }) => ({ id: (data as { id?: string }).id ?? 'run1', ...(data as object) }),
     update: async (args: unknown) => {
       if (failRunUpdate) throw new Error('injected run.update failure');
       stored.runUpdates.push(args);
@@ -106,18 +133,36 @@ beforeAll(async () => {
     req.on('data', (chunk) => (reqBody += chunk));
     req.on('end', () => {
       lastRunsBody = reqBody;
+      // runId 由 BFF 预生成：上游事件与产物 storageKey 必须使用请求体里的真实值，
+      // 否则 ArtifactService 的前缀校验会拒绝落库。
+      const runId = (JSON.parse(reqBody) as { runId?: string }).runId ?? 'run1';
       res.writeHead(200, { 'content-type': 'text/event-stream' });
-      res.write(encodeSse({ event: 'step', data: { runId: 'run1', seq: 0, type: 'think', payload: { text: '想' }, ts: 1 } }));
+      res.write(encodeSse({ event: 'step', data: { runId, seq: 0, type: 'think', payload: { text: '想' }, ts: 1 } }));
       if (upstreamMode === 'error') {
         // 上游中途报错：控制器应把本次 run 记为 failed。
         res.write(encodeSse({ event: 'error', data: { message: 'boom' } }));
         res.end();
         return;
       }
-      res.write(encodeSse({ event: 'step', data: { runId: 'run1', seq: 1, type: 'tool_call', payload: { tool: 'web.search' }, ts: 2 } }));
-      res.write(encodeSse({ event: 'step', data: { runId: 'run1', seq: 2, type: 'artifact', payload: { kind: 'pptx', filename: 'a.pptx', storageKey: 'artifacts/t1/run1/x-a.pptx', size: 3 }, ts: 3 } }));
-      res.write(encodeSse({ event: 'usage', data: { input: 1, output: 1 } }));
-      res.write(encodeSse({ event: 'done', data: { runId: 'run1' } }));
+      if (upstreamMode === 'nousage') {
+        // 无 usage：控制器应只释放预占、不结算。
+        res.write(encodeSse({ event: 'done', data: { runId } }));
+        res.end();
+        return;
+      }
+      if (upstreamMode === 'slow') {
+        // 首帧已在上方写出；延迟发出 usage + done，给客户端留出中途断开的时间窗。
+        setTimeout(() => {
+          res.write(encodeSse({ event: 'usage', data: { input: 1, output: 1, models: [{ model: 'mock', input: 1, output: 1 }] } }));
+          res.write(encodeSse({ event: 'done', data: { runId } }));
+          res.end();
+        }, 100);
+        return;
+      }
+      res.write(encodeSse({ event: 'step', data: { runId, seq: 1, type: 'tool_call', payload: { tool: 'web.search' }, ts: 2 } }));
+      res.write(encodeSse({ event: 'step', data: { runId, seq: 2, type: 'artifact', payload: { kind: 'pptx', filename: 'a.pptx', storageKey: `artifacts/t1/${runId}/x-a.pptx`, size: 3 }, ts: 3 } }));
+      res.write(encodeSse({ event: 'usage', data: { input: 1, output: 1, models: [{ model: 'mock', input: 1, output: 1 }] } }));
+      res.write(encodeSse({ event: 'done', data: { runId } }));
       res.end();
     });
   });
@@ -133,6 +178,7 @@ beforeAll(async () => {
       SessionsService,
       TasksService,
       ArtifactService,
+      { provide: BillingService, useValue: fakeBilling },
       { provide: PrismaService, useValue: fakePrisma },
       { provide: ARTIFACT_STORAGE, useValue: { getObjectStream: async () => { throw new Error('unused'); } } },
     ],
@@ -158,6 +204,8 @@ beforeEach(() => {
   upstreamMode = 'ok';
   failStepCreate = false;
   failRunUpdate = false;
+  billingCalls.length = 0;
+  beginRunError = null;
   escapedErrors.length = 0;
   lastRunsBody = '';
   process.env.AGENT_RUNTIME_URL = runtimeUrl;
@@ -336,5 +384,84 @@ describe('TasksController', () => {
       clearTimeout(timer);
     }
     expect(escapedErrors).toHaveLength(0);
+  });
+
+  it('收到 usage 后记录并结算预占', async () => {
+    const token = signToken({ sub: 'u1', tenantId: 't1' });
+    const res = await fetch(`${baseUrl}/api/sessions/${session.id}/tasks`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+      body: JSON.stringify({ goal: '写个总结' }),
+    });
+    await res.text();
+    expect(billingCalls[0]?.[0]).toBe('begin');
+    expect(billingCalls.some((c) => c[0] === 'record')).toBe(true);
+    expect(billingCalls.some((c) => c[0] === 'settle')).toBe(true);
+  });
+
+  it('上游无 usage 时只释放预占', async () => {
+    upstreamMode = 'nousage';
+    const token = signToken({ sub: 'u1', tenantId: 't1' });
+    const res = await fetch(`${baseUrl}/api/sessions/${session.id}/tasks`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+      body: JSON.stringify({ goal: '写个总结' }),
+    });
+    await res.text();
+    expect(billingCalls.some((c) => c[0] === 'settle')).toBe(false);
+    expect(billingCalls.some((c) => c[0] === 'release')).toBe(true);
+  });
+
+  it('可用积分不足返回 402', async () => {
+    beginRunError = new InsufficientCreditsError();
+    const token = signToken({ sub: 'u1', tenantId: 't1' });
+    const res = await fetch(`${baseUrl}/api/sessions/${session.id}/tasks`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+      body: JSON.stringify({ goal: '写个总结' }),
+    });
+    expect(res.status).toBe(402);
+    expect(await res.json()).toEqual({ error: 'insufficient_credits' });
+    // 预占失败发生在 hijack 之前，不应建 task/run。
+    expect(stored.messages).toHaveLength(0);
+  });
+
+  it('套餐过期返回 402，限流返回 429', async () => {
+    const token = signToken({ sub: 'u1', tenantId: 't1' });
+    beginRunError = new PlanExpiredError();
+    const r1 = await fetch(`${baseUrl}/api/sessions/${session.id}/tasks`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+      body: JSON.stringify({ goal: '写个总结' }),
+    });
+    expect(r1.status).toBe(402);
+    expect(await r1.json()).toEqual({ error: 'plan_expired' });
+
+    beginRunError = new RateLimitedError(30);
+    const r2 = await fetch(`${baseUrl}/api/sessions/${session.id}/tasks`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+      body: JSON.stringify({ goal: '写个总结' }),
+    });
+    expect(r2.status).toBe(429);
+    expect(r2.headers.get('retry-after')).toBe('30');
+    expect(await r2.json()).toEqual({ error: 'rate_limited', retryAfter: 30 });
+  });
+
+  it('客户端断开后仍继续排空上游并结算', async () => {
+    upstreamMode = 'slow';
+    const token = signToken({ sub: 'u1', tenantId: 't1' });
+    const ac = new AbortController();
+    const res = await fetch(`${baseUrl}/api/sessions/${session.id}/tasks`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+      body: JSON.stringify({ goal: '长任务' }),
+      signal: ac.signal,
+    });
+    const reader = res.body!.getReader();
+    await reader.read(); // 至少收到首帧后再断开
+    ac.abort();
+    await new Promise((r) => setTimeout(r, 300));
+    expect(billingCalls.some((c) => c[0] === 'settle')).toBe(true);
   });
 });

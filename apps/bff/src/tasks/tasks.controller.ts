@@ -1,9 +1,13 @@
+import { randomUUID } from 'node:crypto';
 import { Body, Controller, Logger, Param, Post, Res, UseGuards } from '@nestjs/common';
 import type { FastifyReply } from 'fastify';
-import type { ArtifactRef } from '@ai-office/shared';
-import { createSseParser, type AgentEvent, type CreateTaskRequest } from '@ai-office/shared';
+import type { AgentEvent, ArtifactRef, RunBilling, UsageEvent } from '@ai-office/shared';
+import { createSseParser, type CreateTaskRequest } from '@ai-office/shared';
 import { TasksService } from './tasks.service';
 import { ArtifactService } from '../artifacts/artifacts.service';
+import { BillingService } from '../billing/billing.service';
+import { InsufficientCreditsError, PlanExpiredError, RateLimitedError } from '../billing/billing.errors';
+import { parseUsageEvent } from '../billing/usage';
 import { JwtGuard } from '../auth/jwt.guard';
 import { CurrentUser } from '../auth/current-user';
 import type { JwtPayload } from '../auth/jwt';
@@ -17,6 +21,7 @@ export class TasksController {
   constructor(
     private readonly tasks: TasksService,
     private readonly artifacts: ArtifactService,
+    private readonly billing: BillingService,
   ) {}
 
   @Post(':id/tasks')
@@ -37,26 +42,51 @@ export class TasksController {
       return;
     }
 
-    // 先做归属校验与建 task/run（可能抛 NotFoundException）。
-    // 必须早于 hijack：一旦 hijack，Nest 的异常过滤器无法再写响应，请求会挂起。
-    const { taskId, runId, tenantId, userId, messages } = await this.tasks.prepare(
-      sessionId,
-      user.tenantId,
-      user.sub,
-      goal,
-    );
+    // 归属校验放在预占之前：404 不应留下 hold。
+    await this.tasks.assertOwned(sessionId, user.tenantId, user.sub);
+
+    // 预占额度并做限流；失败在 hijack 之前返回，Nest 可正常写响应。
+    const runId = randomUUID();
+    let billing: RunBilling;
+    try {
+      billing = await this.billing.beginRun(runId, user.tenantId);
+    } catch (err) {
+      if (err instanceof RateLimitedError) {
+        reply
+          .header('retry-after', String(err.retryAfter))
+          .status(429)
+          .send({ error: 'rate_limited', retryAfter: err.retryAfter });
+        return;
+      }
+      if (err instanceof InsufficientCreditsError) {
+        reply.status(402).send({ error: 'insufficient_credits' });
+        return;
+      }
+      if (err instanceof PlanExpiredError) {
+        reply.status(402).send({ error: 'plan_expired' });
+        return;
+      }
+      throw err;
+    }
+
+    let prepared: Awaited<ReturnType<TasksService['prepare']>>;
+    try {
+      prepared = await this.tasks.prepare(sessionId, user.tenantId, user.sub, goal, runId);
+    } catch (err) {
+      // 建 task/run 失败：归还预占（best-effort），再交给 Nest 处理原异常。
+      await this.billing.releaseHold(runId).catch(() => undefined);
+      throw err;
+    }
+    const { taskId, tenantId, userId, messages } = prepared;
 
     // 接管回复：本方法直接写 reply.raw，必须 hijack，否则 Nest/Fastify 会再自动发一次响应。
     reply.hijack();
 
-    // 客户端中断/套接字异常：停止拉流，且 socket error 无监听会崩进程，必须挂空处理器。
-    // reader 提前声明：close 一触发就主动 cancel 上游读取。否则若客户端在
-    // await reader.read() 期间断开，只能等上游把剩余数据发完才会 cancel，白白占住连接。
+    // 客户端断开后停止写回复，但**继续排空上游**：否则 usage 与产物会漏落库。
+    // socket error 无监听会崩进程，所以 error 也挂同一个处理器。
     let clientGone = false;
-    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
     const onClientGone = (): void => {
       clientGone = true;
-      reader?.cancel().catch(() => undefined);
     };
     reply.raw.on('error', onClientGone);
     reply.raw.on('close', onClientGone);
@@ -70,10 +100,11 @@ export class TasksController {
           // 配了共享密钥才带；不配时与未开启鉴权的 runtime 保持兼容。
           ...(runtimeToken ? { 'x-agent-runtime-token': runtimeToken } : {}),
         },
-        body: JSON.stringify({ runId, sessionId, tenantId, userId, goal, messages }),
+        body: JSON.stringify({ runId, sessionId, tenantId, userId, goal, messages, billing }),
       });
     } catch {
-      // 传输层失败：上游不可达，回 502 而不是未捕获的 500。
+      // 传输层失败：上游不可达，归还预占并回 502 而不是未捕获的 500。
+      await this.billing.releaseHold(runId).catch(() => undefined);
       await this.safeFinish(runId, taskId, 'failed', '', sessionId);
       writeHead(reply, 502, { 'content-type': 'application/json' });
       reply.raw.end(JSON.stringify({ error: 'upstream_unreachable' }));
@@ -81,7 +112,8 @@ export class TasksController {
     }
 
     if (!upstream.ok || !upstream.body) {
-      // 上游非 2xx：原样转发真实状态码与响应体，不伪装成 200 text/event-stream。
+      // 上游非 2xx：归还预占，原样转发真实状态码与响应体，不伪装成 200 text/event-stream。
+      await this.billing.releaseHold(runId).catch(() => undefined);
       await this.safeFinish(runId, taskId, 'failed', '', sessionId);
       const contentType = upstream.headers.get('content-type') ?? 'application/json';
       writeHead(reply, upstream.status, { 'content-type': contentType });
@@ -97,21 +129,17 @@ export class TasksController {
 
     const parse = createSseParser();
     const decoder = new TextDecoder();
-    reader = upstream.body.getReader();
+    const reader = upstream.body.getReader();
     const thinkTexts: string[] = [];
     let status: 'done' | 'failed' = 'done';
+    let latestUsage: UsageEvent | null = null;
 
     try {
       for (;;) {
-        if (clientGone) {
-          // 客户端已断开：停止拉流，避免对已销毁的 socket 继续 write。
-          await reader.cancel().catch(() => undefined);
-          break;
-        }
         const { done, value } = await reader.read();
         if (done) break;
         const chunk = decoder.decode(value, { stream: true });
-        reply.raw.write(chunk);
+        if (!clientGone) reply.raw.write(chunk);
         for (const m of parse(chunk)) {
           if (m.event === 'step') {
             const ev = m.data as AgentEvent;
@@ -120,6 +148,9 @@ export class TasksController {
             if (ev.type === 'artifact') {
               await this.safeRecordArtifact(runId, sessionId, tenantId, ev.payload);
             }
+          } else if (m.event === 'usage') {
+            const usage = parseUsageEvent(m.data);
+            if (usage) latestUsage = usage;
           } else if (m.event === 'error') {
             status = 'failed';
           }
@@ -131,8 +162,22 @@ export class TasksController {
       status = 'failed';
       this.logger.error(`run ${runId} 处理失败，标记为 failed: ${(err as Error).message}`);
     } finally {
-      // finish 可能因数据库写入失败而 reject；此时仍必须终止（已 hijack 的）响应，
-      // 否则客户端永远等不到流结束。finish 做 best-effort，end 无条件执行。
+      // 结算优先于 finish：即使 finish 失败，用量也已落账。
+      // 结算抛错时保留 hold 与 pending，由补偿任务重试。
+      if (latestUsage) {
+        try {
+          await this.billing.recordUsage(runId, { tenantId, userId, sessionId }, latestUsage);
+          await this.billing.settle(runId);
+        } catch (err) {
+          this.logger.error(`run ${runId} 计费结算失败（保留 pending 待补偿）: ${(err as Error).message}`);
+        }
+      } else {
+        try {
+          await this.billing.releaseHold(runId);
+        } catch (err) {
+          this.logger.error(`run ${runId} 释放预占失败: ${(err as Error).message}`);
+        }
+      }
       await this.safeFinish(runId, taskId, status, thinkTexts.join('\n'), sessionId);
       try {
         reply.raw.end();

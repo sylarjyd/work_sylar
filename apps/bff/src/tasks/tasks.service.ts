@@ -11,12 +11,18 @@ export class TasksService {
     private readonly sessions: SessionsService,
   ) {}
 
-  /** 建 task/run、落用户消息，并回传喂给模型的完整历史。 */
+  /** 只为归属校验：让控制器能在计费预占之前先做 404 判断。 */
+  async assertOwned(sessionId: string, tenantId: string, userId: string): Promise<void> {
+    await this.sessions.assertOwned(sessionId, tenantId, userId);
+  }
+
+  /** 建 task/run、落用户消息，并回传喂给模型的完整历史。runId 由控制器预生成（计费预占键）。 */
   async prepare(
     sessionId: string,
     tenantId: string,
     userId: string,
     goal: string,
+    runId: string,
   ): Promise<{ taskId: string; runId: string; tenantId: string; userId: string; messages: ChatMessage[] }> {
     await this.sessions.assertOwned(sessionId, tenantId, userId);
 
@@ -28,7 +34,7 @@ export class TasksService {
       data: { sessionId, goal, status: 'running' },
     });
     const run = await this.prisma.run.create({
-      data: { taskId: task.id, status: 'running' },
+      data: { id: runId, taskId: task.id, status: 'running' },
     });
     await this.prisma.message.create({
       data: { sessionId, role: 'user', content: goal, seq: prior.length },
