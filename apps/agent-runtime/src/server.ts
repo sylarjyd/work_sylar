@@ -305,12 +305,18 @@ export function resolveChunkConfig(
       ? raw
       : fallback;
 
-  const chunkSize = int(payload.chunkSize, 100, 4000, int(Number(env.KB_CHUNK_SIZE), 100, 4000, 800));
+  // Number('') === 0，空/空白 env 必须视为未设置，否则 KB_CHUNK_OVERLAP= 会静默变成 0。
+  const envInt = (name: string, min: number, max: number, fallback: number): number => {
+    const raw = env[name];
+    return raw === undefined || raw.trim() === '' ? fallback : int(Number(raw), min, max, fallback);
+  };
+
+  const chunkSize = int(payload.chunkSize, 100, 4000, envInt('KB_CHUNK_SIZE', 100, 4000, 800));
   const requestedOverlap = int(
     payload.chunkOverlap,
     0,
     1000,
-    int(Number(env.KB_CHUNK_OVERLAP), 0, 1000, 150),
+    envInt('KB_CHUNK_OVERLAP', 0, 1000, 150),
   );
   const chunkOverlap =
     requestedOverlap < chunkSize ? requestedOverlap : Math.min(150, Math.max(0, chunkSize - 1));

@@ -17,6 +17,8 @@ const created: Record<string, unknown>[] = [];
 const deleted: string[] = [];
 let searchBody: Record<string, unknown> | null = null;
 let lookupFail = false;
+// 非 null 时 SettingsService 桩的 getKbConfig 抛该错误，用于验证上传关键路径的降级。
+let kbConfigError: unknown = null;
 
 const fakePrisma = {
   user: {
@@ -71,7 +73,12 @@ beforeAll(async () => {
       { provide: KB_STORAGE, useValue: fakeStorage },
       {
         provide: SettingsService,
-        useValue: { getKbConfig: async () => ({ chunkSize: 600, chunkOverlap: 100 }) },
+        useValue: {
+          getKbConfig: async () => {
+            if (kbConfigError) throw kbConfigError;
+            return { chunkSize: 600, chunkOverlap: 100 };
+          },
+        },
       },
       // JwtGuard 依赖 PrismaService 查库，需与 useFactory 的 KbService 共用同一假库。
       { provide: PrismaService, useValue: fakePrisma },
@@ -92,6 +99,7 @@ beforeEach(() => {
   deleted.length = 0;
   searchBody = null;
   lookupFail = false;
+  kbConfigError = null;
 });
 
 const token = () => signToken({ sub: 'u1', tenantId: 't1' });
@@ -132,6 +140,25 @@ describe('KbController', () => {
       expect(spy.mock.calls[0][1]).toEqual({ chunkSize: 600, chunkOverlap: 100 });
     } finally {
       spy.mockRestore();
+    }
+  });
+
+  it('配置读取失败时上传仍 202，摄取降级为 undefined 且不标记 failed', async () => {
+    kbConfigError = new Error('settings db down');
+    const ingestSpy = vi.spyOn(KbService.prototype, 'ingest').mockResolvedValue(undefined);
+    const failSpy = vi.spyOn(KbService.prototype, 'markFailed').mockResolvedValue(undefined);
+    try {
+      const form = multipartForm('a.txt', 'hello');
+      const res = await app.inject({ method: 'POST', url: '/api/kb/docs', headers: { ...auth(), ...form.headers }, payload: form.body });
+      expect(res.statusCode).toBe(202);
+      expect(res.json()).toMatchObject({ filename: 'a.txt', status: 'pending' });
+      // 摄取链在响应后异步执行，等它跑完再断言。
+      await vi.waitFor(() => expect(ingestSpy).toHaveBeenCalledTimes(1));
+      expect(ingestSpy.mock.calls[0][1]).toBeUndefined();
+      expect(failSpy).not.toHaveBeenCalled();
+    } finally {
+      ingestSpy.mockRestore();
+      failSpy.mockRestore();
     }
   });
 

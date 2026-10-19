@@ -85,13 +85,20 @@ export class KbController {
       size: buffer.length,
       storageKey,
     });
-    // 每次上传读取当前管理端配置并随请求下发；runtime 再做防御性夹取。
-    const chunkConfig = await this.settings.getKbConfig();
-    // 异步摄取：不阻塞上传响应，前端轮询 status；失败置 failed + error。
-    void this.kb
-      .ingest(
-        { id: doc.id, tenantId: user.tenantId, userId: user.sub, filename: doc.filename, mime: doc.mime, storageKey },
-        chunkConfig,
+    // 配置读取放进异步摄取链：读失败降级为 undefined（runtime 回落到 env/默认值），
+    // 不能因调参配置读取失败把已成功的上传变成 500、留下永不摄取的 pending 文档。
+    void this.settings
+      .getKbConfig()
+      .catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.logger.warn(`读取 KB 切分配置失败，使用默认值: ${msg}`);
+        return undefined;
+      })
+      .then((chunkConfig) =>
+        this.kb.ingest(
+          { id: doc.id, tenantId: user.tenantId, userId: user.sub, filename: doc.filename, mime: doc.mime, storageKey },
+          chunkConfig,
+        ),
       )
       .catch(async (err: unknown) => {
         const msg = err instanceof Error ? err.message : String(err);

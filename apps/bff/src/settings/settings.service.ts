@@ -138,7 +138,9 @@ export class SettingsService {
     }
 
     if (spec.env) {
-      const envValue = Number(process.env[spec.env]);
+      // 空/空白 env 视为未设置：Number('') === 0，否则会把「清空变量」误解析为 0。
+      const raw = process.env[spec.env];
+      const envValue = raw === undefined || raw.trim() === '' ? Number.NaN : Number(raw);
       if (Number.isSafeInteger(envValue) && envValue >= spec.min && envValue <= spec.max) {
         return { value: envValue, source: 'env', updatedAt: null, updatedBy: null };
       }

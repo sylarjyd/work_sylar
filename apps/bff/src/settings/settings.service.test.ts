@@ -106,6 +106,20 @@ describe('SettingsService', () => {
     expect(item).toMatchObject({ value: 60000, source: 'env' });
   });
 
+  it('空白 KB_CHUNK_OVERLAP env 视为未设置，回落默认 150 而非 0', async () => {
+    const saved = process.env.KB_CHUNK_OVERLAP;
+    process.env.KB_CHUNK_OVERLAP = '   ';
+    try {
+      const { svc } = makeService();
+      const item = (await svc.getAll()).find((s) => s.key === 'kbChunkOverlap')!;
+      expect(item).toMatchObject({ value: 150, source: 'default' });
+      await expect(svc.getKbConfig()).resolves.toEqual({ chunkSize: 800, chunkOverlap: 150 });
+    } finally {
+      if (saved === undefined) delete process.env.KB_CHUNK_OVERLAP;
+      else process.env.KB_CHUNK_OVERLAP = saved;
+    }
+  });
+
   it('getRunConfig / getKbConfig 返回具体数值', async () => {
     const { svc } = makeService();
     await expect(svc.getRunConfig()).resolves.toEqual({
