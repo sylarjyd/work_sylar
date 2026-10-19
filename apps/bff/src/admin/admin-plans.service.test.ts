@@ -21,6 +21,11 @@ function makeService(prices = ['m1']) {
     monthlyBonusCredits: 0, maxCreditsPerRun: 10, rpm: 2,
     allowedModels: ['m1'], active: true, createdAt: new Date('2026-01-01T00:00:00Z'),
   });
+  plans.set('legacy', {
+    id: 'legacy', name: '旧版', priceCents: 100, monthlyBaseCredits: 10,
+    monthlyBonusCredits: 0, maxCreditsPerRun: 5, rpm: 1,
+    allowedModels: ['m1'], active: false, createdAt: new Date('2026-02-01T00:00:00Z'),
+  });
   const audits: unknown[] = [];
   const db = {
     plan: {
@@ -54,7 +59,9 @@ function makeService(prices = ['m1']) {
 describe('AdminPlansService', () => {
   it('listAll 返回含停用套餐', async () => {
     const { svc } = makeService();
-    await expect(svc.listAll()).resolves.toHaveLength(1);
+    const rows = await svc.listAll();
+    expect(rows.map((p) => p.id)).toEqual(['free', 'legacy']);
+    expect(rows.some((p) => !p.active)).toBe(true);
   });
 
   it('创建校验 slug 与数值', async () => {
@@ -62,6 +69,12 @@ describe('AdminPlansService', () => {
     await expect(
       svc.create({ id: 'Bad ID', name: 'x', priceCents: 0, monthlyBaseCredits: 0, monthlyBonusCredits: 0, maxCreditsPerRun: 0, rpm: 0, allowedModels: ['m1'], active: true }, actor),
     ).rejects.toBeInstanceOf(BadRequestException);
+    await expect(
+      svc.create({ id: 'pro', name: 'x', priceCents: -1, monthlyBaseCredits: 0, monthlyBonusCredits: 0, maxCreditsPerRun: 0, rpm: 0, allowedModels: ['m1'], active: true }, actor),
+    ).rejects.toMatchObject({ message: 'invalid_priceCents' });
+    await expect(
+      svc.create({ id: 'pro', name: 'x', priceCents: 0, monthlyBaseCredits: 1.5, monthlyBonusCredits: 0, maxCreditsPerRun: 0, rpm: 0, allowedModels: ['m1'], active: true }, actor),
+    ).rejects.toMatchObject({ message: 'invalid_monthlyBaseCredits' });
   });
 
   it('allowedModels 必须都有价格', async () => {
