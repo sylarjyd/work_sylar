@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import type {
   BillingSummaryDto,
@@ -28,7 +28,9 @@ const TYPE_LABEL: Record<string, string> = {
 };
 
 function money(cents: number): string {
-  return cents === 0 ? '免费' : `¥${(cents / 100).toFixed(0)}/月`;
+  if (cents === 0) return '免费';
+  const yuan = (cents / 100).toFixed(2).replace(/\.00$/, '').replace(/(\.\d)0$/, '$1');
+  return `¥${yuan}/月`;
 }
 
 function stamp(iso: string): string {
@@ -43,26 +45,58 @@ export default function BillingPage() {
   const [usage, setUsage] = useState<UsageAggregateDto[]>([]);
   const [groupBy, setGroupBy] = useState<'day' | 'model'>('day');
   const [error, setError] = useState('');
+  const [loadingBase, setLoadingBase] = useState(true);
+  const [loadingUsage, setLoadingUsage] = useState(true);
+  // 递增序号：只接受最新一次 usage 请求的结果，避免快速切换 tab 时旧响应覆盖新数据。
+  const usageSeq = useRef(0);
 
-  const load = useCallback(
+  const loadBase = useCallback(async () => {
+    setError('');
+    setLoadingBase(true);
+    try {
+      const [s, p, l] = await Promise.allSettled([
+        getBillingSummary(),
+        listPlans(),
+        listCreditLedger(30),
+      ]);
+      if (s.status === 'fulfilled') setSummary(s.value);
+      if (p.status === 'fulfilled') setPlans(p.value);
+      if (l.status === 'fulfilled') setLedger(l.value.items);
+
+      const failures = [s, p, l].filter(
+        (r): r is PromiseRejectedResult => r.status === 'rejected',
+      );
+      if (failures.length > 0) {
+        if (failures.some((f) => isUnauthorized(f.reason))) {
+          router.push('/login');
+          return;
+        }
+        // 多个接口同时失败时只展示第一条，避免错误横幅过长。
+        setError(errorText(failures[0].reason));
+      }
+    } finally {
+      setLoadingBase(false);
+    }
+  }, [router]);
+
+  const loadUsage = useCallback(
     async (group: 'day' | 'model') => {
+      const id = ++usageSeq.current;
+      setError('');
+      setLoadingUsage(true);
       try {
-        const [s, p, l, u] = await Promise.all([
-          getBillingSummary(),
-          listPlans(),
-          listCreditLedger(30),
-          getUsage(group),
-        ]);
-        setSummary(s);
-        setPlans(p);
-        setLedger(l.items);
+        const u = await getUsage(group);
+        if (id !== usageSeq.current) return;
         setUsage(u);
       } catch (err) {
+        if (id !== usageSeq.current) return;
         if (isUnauthorized(err)) {
           router.push('/login');
           return;
         }
         setError(errorText(err));
+      } finally {
+        if (id === usageSeq.current) setLoadingUsage(false);
       }
     },
     [router],
@@ -73,8 +107,14 @@ export default function BillingPage() {
       router.push('/login');
       return;
     }
-    void load(groupBy);
-  }, [load, router, groupBy]);
+    void loadBase();
+  }, [loadBase, router]);
+
+  useEffect(() => {
+    // 登录态检查由上面的挂载 effect 负责，这里只在已登录时拉取用量。
+    if (!getToken()) return;
+    void loadUsage(groupBy);
+  }, [loadUsage, router, groupBy]);
 
   const quota = summary
     ? summary.plan.monthlyBaseCredits + summary.plan.monthlyBonusCredits
@@ -113,7 +153,14 @@ export default function BillingPage() {
                 <div className="billing-sub">
                   周期 {stamp(summary.subscription.periodStart)} — {stamp(summary.subscription.periodEnd)}
                 </div>
-                <div className="billing-bar">
+                <div
+                  className="billing-bar"
+                  role="progressbar"
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={percent}
+                  aria-label="本周期剩余积分进度"
+                >
                   <div className="billing-bar-fill" style={{ width: `${percent}%` }} />
                 </div>
                 <div className="billing-sub">
@@ -158,9 +205,11 @@ export default function BillingPage() {
           <section className="billing-section">
             <div className="billing-section-head">
               <h2 className="billing-heading">用量</h2>
-              <div className="billing-tabs" role="tablist">
+              <div className="billing-tabs" role="tablist" aria-label="用量分组">
                 <button
                   type="button"
+                  role="tab"
+                  aria-selected={groupBy === 'day'}
                   className={`billing-tab${groupBy === 'day' ? ' active' : ''}`}
                   onClick={() => setGroupBy('day')}
                 >
@@ -168,6 +217,8 @@ export default function BillingPage() {
                 </button>
                 <button
                   type="button"
+                  role="tab"
+                  aria-selected={groupBy === 'model'}
                   className={`billing-tab${groupBy === 'model' ? ' active' : ''}`}
                   onClick={() => setGroupBy('model')}
                 >
@@ -175,10 +226,20 @@ export default function BillingPage() {
                 </button>
               </div>
             </div>
-            {usage.length === 0 ? (
+            {loadingUsage && usage.length > 0 && (
+              <div className="billing-sub" role="status" style={{ marginBottom: 8 }}>
+                加载中…
+              </div>
+            )}
+            {usage.length === 0 && loadingUsage ? (
+              <div className="billing-empty">加载中…</div>
+            ) : usage.length === 0 ? (
               <div className="billing-empty">暂无用量记录</div>
             ) : (
               <table className="billing-table">
+                <caption className="visually-hidden">
+                  用量统计（{groupBy === 'day' ? '按日' : '按模型'}）
+                </caption>
                 <thead>
                   <tr>
                     <th>{groupBy === 'day' ? '日期' : '模型'}</th>
@@ -205,10 +266,13 @@ export default function BillingPage() {
 
           <section className="billing-section">
             <h2 className="billing-heading">积分流水</h2>
-            {ledger.length === 0 ? (
+            {ledger.length === 0 && loadingBase ? (
+              <div className="billing-empty">加载中…</div>
+            ) : ledger.length === 0 ? (
               <div className="billing-empty">暂无流水</div>
             ) : (
               <table className="billing-table">
+                <caption className="visually-hidden">最近 30 条积分流水</caption>
                 <thead>
                   <tr>
                     <th>时间</th>
