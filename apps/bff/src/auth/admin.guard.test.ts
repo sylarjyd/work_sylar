@@ -2,40 +2,31 @@ import 'reflect-metadata';
 import { describe, it, expect } from 'vitest';
 import { ForbiddenException, type ExecutionContext } from '@nestjs/common';
 import { AdminGuard } from './admin.guard';
-import type { PrismaService } from '../db/prisma.service';
 
-function ctxFor(sub: string | undefined): ExecutionContext {
-  const req: { user?: { sub: string; tenantId: string } } = sub ? { user: { sub, tenantId: 't1' } } : {};
+function ctxWithUser(user?: { sub: string; tenantId: string; role?: string }): ExecutionContext {
+  const req: { user?: { sub: string; tenantId: string; role?: string } } = user ? { user } : {};
   return { switchToHttp: () => ({ getRequest: () => req }) } as unknown as ExecutionContext;
 }
 
-function guardWith(role: string | null) {
-  const prisma = {
-    user: { findUnique: async () => (role === null ? null : { role }) },
-  } as unknown as PrismaService;
-  return new AdminGuard(prisma);
-}
-
 describe('AdminGuard', () => {
-  it('角色为 admin 放行', async () => {
-    await expect(guardWith('admin').canActivate(ctxFor('u1'))).resolves.toBe(true);
+  it('req.user.role 为 admin 时放行', () => {
+    expect(new AdminGuard().canActivate(ctxWithUser({ sub: 'u1', tenantId: 't1', role: 'admin' }))).toBe(true);
   });
 
-  it('角色非 admin 抛 Forbidden not_admin', async () => {
-    const err = await guardWith('member').canActivate(ctxFor('u1')).catch((e) => e);
+  it('非管理员抛 Forbidden not_admin', () => {
+    const err = (() => {
+      try {
+        new AdminGuard().canActivate(ctxWithUser({ sub: 'u2', tenantId: 't1', role: 'member' }));
+        return undefined;
+      } catch (e) {
+        return e;
+      }
+    })();
     expect(err).toBeInstanceOf(ForbiddenException);
-    expect(err.message).toBe('not_admin');
+    expect((err as ForbiddenException).message).toBe('not_admin');
   });
 
-  it('用户不存在抛 Forbidden', async () => {
-    const err = await guardWith(null).canActivate(ctxFor('u1')).catch((e) => e);
-    expect(err).toBeInstanceOf(ForbiddenException);
-    expect(err.message).toBe('not_admin');
-  });
-
-  it('无 req.user（未过 JwtGuard）抛 Forbidden', async () => {
-    const err = await guardWith('admin').canActivate(ctxFor(undefined)).catch((e) => e);
-    expect(err).toBeInstanceOf(ForbiddenException);
-    expect(err.message).toBe('not_admin');
+  it('未经过 JwtGuard（无 req.user）抛 Forbidden', () => {
+    expect(() => new AdminGuard().canActivate(ctxWithUser())).toThrow(ForbiddenException);
   });
 });

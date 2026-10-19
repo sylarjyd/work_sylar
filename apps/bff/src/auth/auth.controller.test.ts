@@ -14,6 +14,7 @@ interface FakeUser {
   passwordHash: string;
   tenantId: string;
   role: string;
+  status: string;
 }
 const users = new Map<string, FakeUser>();
 const fakePrisma = {
@@ -21,7 +22,7 @@ const fakePrisma = {
     findFirst: async ({ where }: { where: { email: { equals: string } } }) =>
       users.get(where.email.equals.toLowerCase()) ?? null,
     create: async ({ data }: { data: { email: string; passwordHash: string; role: string } }) => {
-      const row = { id: `u${users.size + 1}`, tenantId: `t${users.size + 1}`, ...data };
+      const row = { id: `u${users.size + 1}`, tenantId: `t${users.size + 1}`, status: 'active', ...data };
       users.set(data.email, row);
       return row;
     },
@@ -37,6 +38,7 @@ async function seedUser(email: string, password: string): Promise<void> {
     email: email.toLowerCase(),
     passwordHash,
     role: 'member',
+    status: 'active',
   });
 }
 
@@ -96,6 +98,19 @@ describe('AuthController', () => {
       payload: { email: 'a@b.com', password: 'wrong' },
     });
     expect(res.statusCode).toBe(401);
+  });
+
+  it('禁用用户即使密码正确也返回 401', async () => {
+    await seedUser('disabled@b.com', 'pw123456');
+    const row = users.get('disabled@b.com')!;
+    users.set('disabled@b.com', { ...row, status: 'disabled' });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      payload: { email: 'disabled@b.com', password: 'pw123456' },
+    });
+    expect(res.statusCode).toBe(401);
+    expect(JSON.parse(res.payload).message).toBe('invalid_credentials');
   });
 
   it('凭据正确时登录返回 token 与用户信息', async () => {

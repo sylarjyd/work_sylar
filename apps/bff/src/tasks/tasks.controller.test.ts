@@ -79,6 +79,15 @@ class RecordingExceptionFilter extends BaseExceptionFilter {
 }
 
 const fakePrisma = {
+  user: {
+    // JwtGuard 会按 sub 查库校验 status/role；测试里按 token 中的 sub 返回对应租户。
+    findUnique: async ({ where }: { where: { id: string } }) => ({
+      status: 'active',
+      role: where.id === 'u2' ? 'member' : 'admin',
+      tenantId: where.id === 'u2' ? 't2' : 't1',
+      email: `${where.id}@test.local`,
+    }),
+  },
   session: {
     findFirst: async ({ where }: { where: { id: string; tenantId: string; userId: string } }) =>
       where.id === session.id && where.tenantId === session.tenantId && where.userId === session.userId

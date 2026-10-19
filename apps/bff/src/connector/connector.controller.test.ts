@@ -15,7 +15,13 @@ const created: Record<string, unknown>[] = [];
 let validateOk = true;
 
 const fakePrisma = {
-  user: { findUnique: async ({ where }: { where: { id: string } }) => (roles[where.id] ? { role: roles[where.id] } : null) },
+  user: {
+    // JwtGuard 会按 sub 查库校验 status/role；测试里按 token 中的 sub 返回对应角色。
+    findUnique: async ({ where }: { where: { id: string } }) =>
+      roles[where.id]
+        ? { status: 'active', role: roles[where.id], tenantId: 't1', email: `${where.id}@test.local` }
+        : null,
+  },
   connector: {
     findFirst: async () => null,
     findMany: async () => [],

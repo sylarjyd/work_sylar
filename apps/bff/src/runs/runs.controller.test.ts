@@ -19,6 +19,15 @@ let prismaFail = false;
 // 归属：仅 r1 属 t1/u1；嵌套关系过滤由假库按 where 结构模拟。
 const ownedRun = { id: 'r1' };
 const fakePrisma = {
+  user: {
+    // JwtGuard 会按 sub 查库校验 status/role；测试里按 token 中的 sub 返回对应租户。
+    findUnique: async ({ where }: { where: { id: string } }) => ({
+      status: 'active',
+      role: where.id === 'u2' ? 'member' : 'admin',
+      tenantId: where.id === 'u2' ? 't2' : 't1',
+      email: `${where.id}@test.local`,
+    }),
+  },
   run: {
     findFirst: async ({
       where,

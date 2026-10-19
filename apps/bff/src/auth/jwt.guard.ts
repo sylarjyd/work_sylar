@@ -1,5 +1,6 @@
 import { CanActivate, ExecutionContext, Injectable, UnauthorizedException } from '@nestjs/common';
 import type { FastifyRequest } from 'fastify';
+import { PrismaService } from '../db/prisma.service';
 import { verifyToken, type JwtPayload } from './jwt';
 
 export interface AuthedRequest extends FastifyRequest {
@@ -7,21 +8,40 @@ export interface AuthedRequest extends FastifyRequest {
 }
 
 /**
- * Bearer JWT 鉴权：验签成功后把 `{ sub, tenantId }` 挂到 req.user，供控制器与 AdminGuard 复用。
- * token 缺失或非法统一 401，不区分原因，避免给枚举者额外信号。
+ * Bearer JWT 鉴权：验签后按 sub 查库，要求用户存在且 status=active，
+ * 再把库中的 tenantId/role/email 挂到 req.user。
+ * 禁用立即生效（含已签发 token），角色变更无需重发 token。
  */
 @Injectable()
 export class JwtGuard implements CanActivate {
-  canActivate(context: ExecutionContext): boolean {
+  constructor(private readonly prisma: PrismaService) {}
+
+  async canActivate(context: ExecutionContext): Promise<boolean> {
     const req = context.switchToHttp().getRequest<AuthedRequest>();
     const header = req.headers.authorization ?? '';
     const [scheme, token] = header.split(' ');
     if (scheme !== 'Bearer' || !token) throw new UnauthorizedException('missing_token');
+
+    let payload: JwtPayload;
     try {
-      req.user = verifyToken(token);
+      payload = verifyToken(token);
     } catch {
       throw new UnauthorizedException('invalid_token');
     }
+
+    const user = await this.prisma.user.findUnique({
+      where: { id: payload.sub },
+      select: { status: true, role: true, tenantId: true, email: true },
+    });
+    // 不存在/禁用统一 invalid_token，避免给攻击者额外信号。
+    if (!user || user.status !== 'active') throw new UnauthorizedException('invalid_token');
+
+    req.user = {
+      sub: payload.sub,
+      tenantId: user.tenantId,
+      role: user.role,
+      email: user.email,
+    };
     return true;
   }
 }

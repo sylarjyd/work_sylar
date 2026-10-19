@@ -18,6 +18,15 @@ let searchBody: Record<string, unknown> | null = null;
 let lookupFail = false;
 
 const fakePrisma = {
+  user: {
+    // JwtGuard 会按 sub 查库校验 status/role；测试里按 token 中的 sub 返回对应租户。
+    findUnique: async ({ where }: { where: { id: string } }) => ({
+      status: 'active',
+      role: where.id === 'u2' ? 'member' : 'admin',
+      tenantId: where.id === 'u2' ? 't2' : 't1',
+      email: `${where.id}@test.local`,
+    }),
+  },
   kbDoc: {
     create: async ({ data }: { data: Record<string, unknown> }) => {
       const row = { id: 'd1', chunkCount: 0, error: null, status: 'pending', createdAt: new Date('2026-01-01T00:00:00Z'), ...data };
@@ -59,6 +68,8 @@ beforeAll(async () => {
           }),
       },
       { provide: KB_STORAGE, useValue: fakeStorage },
+      // JwtGuard 依赖 PrismaService 查库，需与 useFactory 的 KbService 共用同一假库。
+      { provide: PrismaService, useValue: fakePrisma },
     ],
   }).compile();
   app = moduleRef.createNestApplication<NestFastifyApplication>(new FastifyAdapter());

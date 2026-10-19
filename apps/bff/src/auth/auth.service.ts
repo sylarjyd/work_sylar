@@ -65,8 +65,9 @@ export class AuthService {
     const user = await this.prisma.user.findFirst({
       where: { email: { equals: email, mode: 'insensitive' } },
     });
-    // 邮箱不存在与密码错误返回同一个错误，避免账号枚举。
-    if (!user || !(await argon2.verify(user.passwordHash, req.password))) {
+    // 先验密码再看状态：邮箱不存在、密码错误、账号禁用统一 invalid_credentials，避免账号枚举。
+    const passwordOk = user ? await argon2.verify(user.passwordHash, req.password) : false;
+    if (!user || !passwordOk || user.status !== 'active') {
       throw new UnauthorizedException('invalid_credentials');
     }
     return this.issue(user.id, user.tenantId, user.email, user.role);
