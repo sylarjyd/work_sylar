@@ -559,7 +559,10 @@ export class BillingService implements OnModuleDestroy {
     }
   }
 
-  /** 清理超过 TTL 的预占：有 pending 用量先结算，否则释放；run 仍在跑则保留。 */
+  /**
+   * 清理超过 TTL 的预占：有 pending 用量先结算，否则释放。
+   * 预占已过期但 run 仍显示 running，说明持有进程已崩溃/失联，先补偿收尾再释放。
+   */
   async sweepOrphanHolds(now = new Date()): Promise<void> {
     const holds = await this.prisma.creditHold.findMany({
       where: { expiresAt: { lte: now } },
@@ -576,9 +579,22 @@ export class BillingService implements OnModuleDestroy {
       }
       const run = await this.prisma.run.findUnique({
         where: { id: hold.runId },
-        select: { status: true },
+        select: { status: true, taskId: true },
       });
-      if (!run || run.status !== 'running') await this.releaseHold(hold.runId);
+      if (run?.status === 'running') {
+        // 预占 TTL 已过期仍显示 running：说明持有进程已崩溃/失联，做补偿收尾。
+        // BFF 空闲超时仅 5 分钟，24h 后仍 running 必然异常，不应让 hold 永久占用。
+        await this.prisma.run.updateMany({
+          where: { id: hold.runId, status: 'running' },
+          data: { status: 'failed', endedAt: now },
+        });
+        await this.prisma.task.updateMany({
+          where: { id: run.taskId, status: 'running' },
+          data: { status: 'failed' },
+        });
+        this.logger.warn(`[billing] 回收陈旧运行 run=${hold.runId}（预占已过期）`);
+      }
+      await this.releaseHold(hold.runId);
     }
   }
 

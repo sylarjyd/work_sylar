@@ -18,6 +18,8 @@ function makeDb() {
     holds: [] as Row[],
     usages: [] as Row[],
     prices: [] as Row[],
+    runs: [] as Row[],
+    tasks: [] as Row[],
   };
 
   const apply = (row: Row, data: Row) => {
@@ -176,7 +178,28 @@ function makeDb() {
       },
     },
     modelPrice: { findMany: async () => [...db.prices] },
-    run: { findUnique: async () => ({ status: 'succeeded' }) },
+    run: {
+      findUnique: async ({ where }: any) => {
+        const row = db.runs.find((r) => r.id === where.id);
+        return row ? { status: row.status, taskId: row.taskId } : null;
+      },
+      updateMany: async ({ where, data }: any) => {
+        const targets = db.runs.filter(
+          (r) => r.id === where.id && (!where.status || r.status === where.status),
+        );
+        targets.forEach((r) => apply(r, data));
+        return { count: targets.length };
+      },
+    },
+    task: {
+      updateMany: async ({ where, data }: any) => {
+        const targets = db.tasks.filter(
+          (t) => t.id === where.id && (!where.status || t.status === where.status),
+        );
+        targets.forEach((t) => apply(t, data));
+        return { count: targets.length };
+      },
+    },
     $queryRaw: async () => [],
     // 真实 Prisma 事务失败会回滚；内存版用快照模拟，保证 beginRun 校验失败不残留预占。
     $transaction: async (fn: any) => {
@@ -189,6 +212,8 @@ function makeDb() {
         holds: structuredClone(db.holds),
         usages: structuredClone(db.usages),
         prices: structuredClone(db.prices),
+        runs: structuredClone(db.runs),
+        tasks: structuredClone(db.tasks),
       };
       try {
         return await fn(client);
@@ -310,6 +335,22 @@ describe('BillingService', () => {
     expect(ctx.db.lots[0].remaining).toBe(0);
     expect(ctx.db.credits[0].balance).toBe(0);
     expect(ctx.db.txs.some((t) => t.type === 'expire' && t.amount === -500)).toBe(true);
+  });
+
+  it('过期预占对应的 run 仍 running 时标记 failed 并释放', async () => {
+    await svc.summary('t1');
+    await svc.beginRun('r1', 't1');
+    ctx.db.runs.push({ id: 'r1', taskId: 'task1', status: 'running', endedAt: null });
+    ctx.db.tasks.push({ id: 'task1', status: 'running' });
+    ctx.db.holds[0].expiresAt = new Date('2026-10-18T00:00:00Z');
+
+    await svc.sweepOrphanHolds(NOW);
+
+    // 进程崩溃后 run/task 永远停在 running，补偿要在释放预占前收尾。
+    expect(ctx.db.runs[0]).toMatchObject({ status: 'failed', endedAt: NOW });
+    expect(ctx.db.tasks[0].status).toBe('failed');
+    expect(ctx.db.holds).toHaveLength(0);
+    expect(ctx.db.credits[0].reserved).toBe(0);
   });
 
   it('adjust 支持发放与收回，收回不得使可用余额为负', async () => {

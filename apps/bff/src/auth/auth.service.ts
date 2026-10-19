@@ -2,10 +2,13 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
+  Optional,
   UnauthorizedException,
 } from '@nestjs/common';
 import * as argon2 from 'argon2';
 import { PrismaService } from '../db/prisma.service';
+import { BillingService } from '../billing/billing.service';
 import { signToken } from './jwt';
 import type { AuthResponse, LoginRequest, RegisterRequest } from '@ai-office/shared';
 
@@ -19,7 +22,12 @@ function normalizeEmail(value: unknown): string {
 
 @Injectable()
 export class AuthService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly logger = new Logger(AuthService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional() private readonly billing?: BillingService,
+  ) {}
 
   async register(req: RegisterRequest): Promise<AuthResponse> {
     const email = normalizeEmail(req.email);
@@ -41,6 +49,14 @@ export class AuthService {
         tenant: { create: { type: 'personal', name: email } },
       },
     });
+    // 预建 free 订阅；失败不阻断注册——首次访问计费入口时会懒建兜底。
+    try {
+      await this.billing?.ensureSubscription(user.tenantId);
+    } catch (err) {
+      this.logger.warn(
+        `[billing] 注册开通免费套餐失败 tenant=${user.tenantId}: ${(err as Error).message}`,
+      );
+    }
     return this.issue(user.id, user.tenantId, user.email, user.role);
   }
 
