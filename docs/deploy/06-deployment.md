@@ -1,8 +1,8 @@
 # AI 办公智能体 · 部署文档（Deployment Guide）
 
-- 版本：v1.0
-- 日期：2026-10-16
-- 状态：随 M2 交付更新
+- 版本：v1.1
+- 日期：2026-10-19
+- 状态：随 M5a 交付更新
 - 关联：`docs/design/02-architecture.md`、`docs/db/schema.sql`
 
 > 本文覆盖**本地开发**与**生产部署**两套流程。当前代码已具备生产级安全边界，但生产化项（密钥托管、队列、可观测、CI/CD）见 §10 与开发计划 §6。
@@ -228,7 +228,7 @@ server {
 
 ## 8. 启动顺序
 
-1. **基础设施**：Postgres、对象存储（+ Redis，若 M5 引入）。
+1. **基础设施**：Postgres、对象存储、Redis（M5a 限流，生产必配）。
 2. **数据库迁移**：`prisma migrate deploy`（或首次执行 `docs/db/schema.sql`）。
 3. **agent-runtime**：启动并确认 `ensureBucket` 成功、`/health` 返回 ok。
 4. **bff**：启动（依赖 runtime 与 DB）。
@@ -282,7 +282,7 @@ server {
 - [ ] 数据库仅内网可达、最小权限账号、连接加密。
 - [ ] 对象存储桶**私有**（当前下载经 BFF 代理，桶不公开）。
 - [ ] 容器镜像**钉版本/digest**（当前 MinIO 为 `:latest`，见开发计划 P3）。
-- [ ] 加请求限流与租户配额（P7）。
+- [ ] 补齐按 IP/全局滥用防护与限流指标告警（RPM 限流与积分额度已在 M5a 落地，P7）。
 - [ ] 日志脱敏（不记录令牌、密码、密钥）。
 - [ ] 为 BFF 增加 `/health` 并配置探针。
 - [ ] `code.exec` 沙箱为「受限计算」而非强隔离：无 fs/网络/子进程已被 harness + Node 权限模型收口；若需更强隔离（防进程内 V8 漏洞），升级为容器沙箱。
@@ -291,10 +291,10 @@ server {
 
 ## 11. Docker 参考（可选）
 
-本地依赖（数据库 + 对象存储）：
+本地依赖（Postgres + MinIO + Redis，compose 文件位于 `apps/bff`）：
 
 ```bash
-pnpm --filter @ai-office/bff db:up      # 等价于在 apps/bff 下 docker compose up -d
+pnpm --filter @ai-office/bff db:up      # 等价于在 apps/bff 下执行 docker compose up -d
 ```
 
 生产容器化建议（**要点**，非最终清单）：
@@ -318,8 +318,8 @@ pnpm --filter @ai-office/bff db:up      # 等价于在 apps/bff 下 docker compo
 | SDK 版本偏斜 | 统一版本 | 开发计划 P4 |
 | CORS 未收敛 | 域名白名单 | 开发计划 P5 |
 | 无 CI/CD、无覆盖率门槛 | 补 CI | 开发计划 P6 |
-| 无限流/配额 | 网关 + 租户配额 | 开发计划 P7 |
-| runtime 无内置鉴权 | 强制 token + 网络隔离 | 开发计划 P8 |
+| 请求限流仅覆盖 RPM 与积分额度 | 补按 IP/全局滥用防护与限流指标告警 | 开发计划 P7 |
+| runtime 鉴权默认可选 | 生产强制 `AGENT_RUNTIME_TOKEN` + 网络隔离 | 开发计划 P8 |
 | 无备份演练/生命周期 | 备份 + 演练 + S3 策略 | 开发计划 P9 |
 | 长任务无队列/续传 | 队列化 + checkpoint | 开发计划 P10 |
 
@@ -330,28 +330,56 @@ pnpm --filter @ai-office/bff db:up      # 等价于在 apps/bff 下 docker compo
 ### 13.1 依赖
 
 - PostgreSQL（已有）、Redis（限流用，可选但生产必配）。
-- `docker compose up -d` 会同时启动 `redis:7.4-alpine`（本地 compose 还含 `pgvector/pgvector:pg16` 与 MinIO）。
+- `pnpm --filter @ai-office/bff db:up` 是初始化基础设施的第一步：该脚本实际执行 `docker compose up -d`，compose 文件位于 `apps/bff`，会启动 `pgvector/pgvector:pg16`、MinIO 与 `redis:7.4-alpine`。
 
 ### 13.2 初始化
 
 ```bash
-pnpm --filter @ai-office/bff db:push
-pnpm --filter @ai-office/bff db:seed:billing
+pnpm --filter @ai-office/bff db:up            # 1. 起 Postgres + MinIO + Redis
+pnpm --filter @ai-office/bff db:push          # 2. 同步表结构
+pnpm --filter @ai-office/bff db:seed:billing  # 3. 写入套餐与模型价格
 ```
 
 `db:seed:billing` 幂等写入 4 个套餐与模型价格；调价改该脚本后重跑即可。
+
+初始化后验证（需 BFF 已启动，如 `pnpm dev` 或 `pnpm --filter @ai-office/bff start`）：
+
+```bash
+# 注册账号（已注册可跳过）
+curl -s -X POST http://localhost:4000/api/auth/register \
+  -H "content-type: application/json" \
+  -d '{"email":"demo@example.com","password":"demo-password"}'
+
+# 登录并提取 token
+TOKEN=$(curl -s -X POST http://localhost:4000/api/auth/login \
+  -H "content-type: application/json" \
+  -d '{"email":"demo@example.com","password":"demo-password"}' \
+  | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>process.stdout.write(JSON.parse(s).token))")
+
+# 预期 plan.id=free、balance=500、subscription.status=active
+curl -s http://localhost:4000/api/billing/summary -H "authorization: Bearer $TOKEN"
+```
 
 ### 13.3 关键环境变量
 
 | 变量 | 说明 |
 |---|---|
-| `REDIS_URL` | 留空退化为进程内限流（仅单实例）；生产必须配置 |
-| `MODEL_PROVIDERS` | runtime 多模型路由，JSON 数组声明模型、baseUrl、apiKeyEnv；未配置回退 `MODEL_BASE_URL` + `MODEL_NAME` |
-| `BILLING_SWEEP_MS` | 补偿扫描间隔，默认 60000；0 关闭 |
+| `REDIS_URL` | 留空时使用进程内固定窗口限流（仅单实例）。已配置 Redis 但连接/命令失败时是 **fail-open（放行请求）** 并限频告警（10 秒最多一次），不会退化为内存限流。生产必须配 Redis 并为该告警建立监控；多实例不配 Redis 会各自独立计数，限流实际失效 |
+| `MODEL_PROVIDERS` | runtime 多模型路由，JSON 数组声明模型、baseUrl、apiKeyEnv；未配置回退 `MODEL_BASE_URL` + `MODEL_NAME`。`DEEPSEEK_API_KEY` 为空时 runtime 走 mock 模型（仍产生 usage，可验证结算链路，但不可用于生产） |
+| `BILLING_SWEEP_MS` | 补偿扫描间隔（毫秒），默认 60000；`<=0` 或非数字会**完全禁用**补偿扫描（不会夹到下限）。禁用后 pending 用量不会自动结算、预占不会释放、过期批次不会清理；**生产禁止设为 0** |
 
 ### 13.4 运营操作（管理员 JWT）
 
 ```bash
+# 注册后先提权为管理员（沿用 13.2 注册的账号；已有管理员可跳过）
+pnpm --filter @ai-office/bff admin:promote demo@example.com
+
+# 登录获取 TOKEN：请求字段为 email/password，响应为 { token, user }
+TOKEN=$(curl -s -X POST http://localhost:4000/api/auth/login \
+  -H "content-type: application/json" \
+  -d '{"email":"demo@example.com","password":"demo-password"}' \
+  | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>process.stdout.write(JSON.parse(s).token))")
+
 # 开通/续期付费套餐
 curl -X POST http://localhost:4000/api/billing/admin/subscribe \
   -H "authorization: Bearer $TOKEN" -H "content-type: application/json" \
@@ -368,10 +396,14 @@ curl -X POST http://localhost:4000/api/billing/admin/credits \
 - `insufficient_balance`：管理员收回积分超过可用余额。
 - 运行 402 `insufficient_credits`：可用积分不足 1。
 - 运行 429：超过套餐 RPM；响应头 `retry-after` 给出等待秒数。
-- 结算失败：`UsageRecord` 保持 `pending`，`CreditHold` 保留，补偿任务每分钟重试。
+- 日志出现 `Redis 限流器不可用，已放行请求`：限流处于 fail-open，请求未被限流；应尽快恢复 Redis 并对该告警建立监控。
+- 结算失败：`UsageRecord` 保持 `pending`，`CreditHold` 保留。补偿扫描间隔默认 60s，且只处理创建超过 60s 的陈旧记录，最坏约 2 分钟完成补偿；补偿依赖 BFF 常驻运行，进程停止则补偿停止。
 
 ### 13.6 安全边界（生产必读）
 
 - **BFF 是计费与预算的唯一裁决方**；runtime 信任 BFF 下发的 `billing` 参数，**runtime 不得直接暴露到公网**。
-- 生产必须：为 runtime 配置 `AGENT_RUNTIME_TOKEN`（BFF 自动携带）；仅允许 BFF 所在网段访问；容器/主机层面隔离 4001 端口。
+- **单机部署**：保持 `AGENT_RUNTIME_HOST=127.0.0.1`（默认值），runtime 只监听回环地址。
+- **跨机部署**：设置 `AGENT_RUNTIME_HOST=<内网 IP>`，并在主机防火墙/安全组拒绝公网访问 4001 端口；BFF 经内网地址访问。
+- **容器部署**：runtime 只加入内部网络，不把 4001 端口映射到宿主机公网。
+- **共享 token**：生产必须设置 `AGENT_RUNTIME_TOKEN`（强随机），BFF 调用时自动携带 `x-agent-runtime-token` 头；未设置时 runtime 仅放行回环来源。
 - 若 runtime 可被外部直接调用，调用方可伪造预算绕过计费；此项列入 M5c 上线准备。

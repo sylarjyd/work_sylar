@@ -104,7 +104,7 @@ apps/agent-runtime/
 apps/bff/
 ├─ package.json                # dev=nest start --watch；build=nest build；db:* 脚本
 ├─ nest-cli.json
-├─ docker-compose.yml          # Postgres 16 + MinIO（本地依赖）
+├─ docker-compose.yml          # Postgres 16 + MinIO + Redis（本地依赖）
 ├─ prisma/schema.prisma        # 数据模型（见 §6）
 └─ src/
    ├─ main.ts                  # 引导：loadRootEnv→create→CORS→listen
@@ -167,7 +167,7 @@ apps/web/
 ```bash
 pnpm install                                   # 安装依赖（pnpm 10 需放行构建脚本，见 workspace.yaml）
 cp .env.example .env                           # 填 DEEPSEEK_API_KEY（缺省走 Mock）
-pnpm --filter @ai-office/bff db:up             # docker compose 起 Postgres + MinIO
+pnpm --filter @ai-office/bff db:up             # docker compose 起 Postgres + MinIO + Redis
 pnpm --filter @ai-office/bff db:push           # 同步表结构到数据库
 ```
 
