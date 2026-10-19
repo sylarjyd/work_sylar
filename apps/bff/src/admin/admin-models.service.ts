@@ -110,20 +110,20 @@ export class AdminModelsService {
     body: { inputMilliCreditsPer1k?: unknown; outputMilliCreditsPer1k?: unknown },
     actor: AdminActor,
   ): Promise<AdminModelPriceDto> {
-    const data: { inputMilliCreditsPer1k?: number; outputMilliCreditsPer1k?: number } = {};
-    if (body?.inputMilliCreditsPer1k !== undefined) {
-      data.inputMilliCreditsPer1k = priceInt(body.inputMilliCreditsPer1k);
-    }
-    if (body?.outputMilliCreditsPer1k !== undefined) {
-      data.outputMilliCreditsPer1k = priceInt(body.outputMilliCreditsPer1k);
-    }
-    if (Object.keys(data).length === 0) throw new BadRequestException('invalid_patch');
-
     try {
       const row = await this.prisma.$transaction(async (tx) => {
         // before 快照与更新同事务读取，避免审计记录与实际变更不一致。
         const before = await tx.modelPrice.findUnique({ where: { model } });
         if (!before) throw new NotFoundException('model_price_not_found');
+
+        const data: { inputMilliCreditsPer1k?: number; outputMilliCreditsPer1k?: number } = {};
+        if (body?.inputMilliCreditsPer1k !== undefined) {
+          data.inputMilliCreditsPer1k = priceInt(body.inputMilliCreditsPer1k);
+        }
+        if (body?.outputMilliCreditsPer1k !== undefined) {
+          data.outputMilliCreditsPer1k = priceInt(body.outputMilliCreditsPer1k);
+        }
+        if (Object.keys(data).length === 0) throw new BadRequestException('invalid_patch');
 
         const updated = await tx.modelPrice.update({ where: { model }, data });
         await this.audit.write(tx, actor, {

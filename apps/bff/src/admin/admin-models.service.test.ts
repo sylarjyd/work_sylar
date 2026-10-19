@@ -100,6 +100,8 @@ describe('AdminModelsService', () => {
     await expect(
       svc.update('missing', { inputMilliCreditsPer1k: 1 }, actor),
     ).rejects.toBeInstanceOf(NotFoundException);
+    // 存在性优先于请求体校验，避免用 400/404 差异探测模型是否存在。
+    await expect(svc.update('missing', {}, actor)).rejects.toBeInstanceOf(NotFoundException);
     await expect(svc.remove('missing', actor)).rejects.toBeInstanceOf(NotFoundException);
   });
 });
