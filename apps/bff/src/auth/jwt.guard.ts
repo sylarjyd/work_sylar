@@ -6,6 +6,10 @@ export interface AuthedRequest extends FastifyRequest {
   user: JwtPayload;
 }
 
+/**
+ * Bearer JWT 鉴权：验签成功后把 `{ sub, tenantId }` 挂到 req.user，供控制器与 AdminGuard 复用。
+ * token 缺失或非法统一 401，不区分原因，避免给枚举者额外信号。
+ */
 @Injectable()
 export class JwtGuard implements CanActivate {
   canActivate(context: ExecutionContext): boolean {

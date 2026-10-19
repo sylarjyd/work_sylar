@@ -19,6 +19,7 @@ export function contentDisposition(filename: string): string {
   return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
 }
 
+/** 产物入口：列表与下载均按 tenant/user 校验归属；下载走流式代理，不在 BFF 落盘。 */
 @Controller('api')
 @UseGuards(JwtGuard)
 export class ArtifactController {

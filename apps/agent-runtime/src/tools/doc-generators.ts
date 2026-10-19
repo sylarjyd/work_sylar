@@ -15,6 +15,7 @@ export interface PptxInput {
   slides: { title?: string; bullets: string[] }[];
 }
 
+/** 生成 Word 文档：title 作文档标题，sections 依次输出为一级标题 + 段落。 */
 export async function buildDocx(input: DocxInput): Promise<Buffer> {
   const children: Paragraph[] = [];
   if (input.title) {
@@ -32,6 +33,7 @@ export async function buildDocx(input: DocxInput): Promise<Buffer> {
   return Packer.toBuffer(doc);
 }
 
+/** 生成 Excel 工作簿：每个 sheet 对应一个工作表，行数据按二维数组原样写入。 */
 export async function buildXlsx(input: XlsxInput): Promise<Buffer> {
   const wb = new ExcelJS.Workbook();
   for (const sheet of input.sheets) {
@@ -41,6 +43,7 @@ export async function buildXlsx(input: XlsxInput): Promise<Buffer> {
   return Buffer.from(await wb.xlsx.writeBuffer());
 }
 
+/** 生成 PPT：每页一个标题（可选）+ 一组项目符号；版式固定为 16:9 常规布局。 */
 export async function buildPptx(input: PptxInput): Promise<Buffer> {
   const pptx = new PptxGenJS();
   for (const s of input.slides) {

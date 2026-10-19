@@ -13,6 +13,7 @@ import { ARTIFACT_STORAGE, createArtifactStorage } from './artifacts/storage';
 import { KbModule } from './kb/kb.module';
 import { ConnectorModule } from './connector/connector.module';
 
+/** 应用装配根：数据库、知识库、连接器模块在此汇合；产物存储按需实例化（只读下载代理）。 */
 @Module({
   imports: [PrismaModule, KbModule, ConnectorModule],
   controllers: [AuthController, SessionsController, TasksController, RunsController, ArtifactController],

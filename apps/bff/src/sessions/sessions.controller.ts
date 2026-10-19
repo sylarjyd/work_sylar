@@ -9,6 +9,7 @@ import type {
   SessionSummary,
 } from '@ai-office/shared';
 
+/** 会话入口：所有读写都带 tenantId + userId 过滤，跨用户访问由 service 层按 404 处理。 */
 @Controller('api/sessions')
 @UseGuards(JwtGuard)
 export class SessionsController {

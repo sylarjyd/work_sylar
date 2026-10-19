@@ -20,6 +20,10 @@ import { CurrentUser } from '../auth/current-user';
 import type { JwtPayload } from '../auth/jwt';
 import { ConnectorService, ValidateFailedError, type ConnectorInput, type ConnectorPatch } from './connector.service';
 
+/**
+ * 连接器管理：仅管理员可增删改查；所有操作限定在当前租户内。
+ * 创建/改运行参数时先经 runtime 试启动校验，失败统一映射为 400。
+ */
 @Controller('api/connectors')
 @UseGuards(JwtGuard, AdminGuard)
 export class ConnectorController {

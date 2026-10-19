@@ -7,6 +7,7 @@ export interface KbStorage {
   putObject(key: string, body: Buffer, contentType: string): Promise<void>;
 }
 
+/** MinIO 需 path-style 寻址（bucket 作为路径段），否则会把 bucket 当子域名解析失败。 */
 export function createKbStorage(env: NodeJS.ProcessEnv = process.env): KbStorage {
   const bucket = env.S3_BUCKET ?? 'artifacts';
   const client = new S3Client({
