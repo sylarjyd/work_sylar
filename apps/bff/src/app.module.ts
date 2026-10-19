@@ -13,10 +13,12 @@ import { ARTIFACT_STORAGE, createArtifactStorage } from './artifacts/storage';
 import { KbModule } from './kb/kb.module';
 import { ConnectorModule } from './connector/connector.module';
 import { BillingModule } from './billing/billing.module';
+import { AdminModule } from './admin/admin.module';
+import { SettingsModule } from './settings/settings.module';
 
-/** 应用装配根：数据库、知识库、连接器模块在此汇合；产物存储按需实例化（只读下载代理）。 */
+/** 应用装配根：数据库、知识库、连接器、计费、管理端模块在此汇合。 */
 @Module({
-  imports: [PrismaModule, BillingModule, KbModule, ConnectorModule],
+  imports: [PrismaModule, BillingModule, KbModule, ConnectorModule, SettingsModule, AdminModule],
   controllers: [AuthController, SessionsController, TasksController, RunsController, ArtifactController],
   providers: [
     AuthService,
