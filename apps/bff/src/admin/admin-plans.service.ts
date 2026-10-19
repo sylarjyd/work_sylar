@@ -141,7 +141,12 @@ export class AdminPlansService {
         // before 快照与更新同事务读取，避免审计记录与实际变更不一致。
         const before = await tx.plan.findUnique({ where: { id } });
         if (!before) throw new NotFoundException('plan_not_found');
-        if (patch.allowedModels) await this.assertModelsPriced(tx, patch.allowedModels);
+        if (patch.allowedModels) {
+          await this.assertModelsPriced(tx, patch.allowedModels);
+        } else if (patch.active === true && !before.active) {
+          // 停用期间模型价格可能已被删除，重新启用前需复核现有模型仍然有价。
+          await this.assertModelsPriced(tx, before.allowedModels);
+        }
 
         const updated = await tx.plan.update({ where: { id }, data: patch });
         // 审计记录变更前后快照，便于追溯定价/额度调整。

@@ -124,6 +124,13 @@ describe('AdminPlansService', () => {
     await expect(svc.update('free', { active: false }, actor)).rejects.toBeInstanceOf(BadRequestException);
   });
 
+  it('重新启用套餐时复核模型价格', async () => {
+    const { svc } = makeService([]);
+    await expect(svc.update('legacy', { active: true }, actor)).rejects.toMatchObject({
+      message: 'model_price_missing',
+    });
+  });
+
   it('更新写 plan.update 审计', async () => {
     const { svc, audits } = makeService();
     const out = await svc.update('free', { name: '基础版' }, actor);
