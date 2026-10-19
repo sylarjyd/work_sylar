@@ -72,4 +72,17 @@ describe('decodeSseFrames', () => {
     expect(out).toEqual([{ event: 'step', data: ev }]);
     expect((out[0]!.data as AgentEvent).type).toBe('confirm_request');
   });
+
+  it('notice 步骤帧可往返（预算超限提示）', () => {
+    const ev: AgentEvent = {
+      runId: 'r1',
+      seq: 9,
+      type: 'notice',
+      payload: { code: 'budget_exceeded', message: '本次运行已达到积分预算上限，已停止' },
+      ts: 0,
+    };
+    const out = decodeSseFrames(encodeSse({ event: 'step', data: ev }));
+    expect(out).toEqual([{ event: 'step', data: ev }]);
+    expect((out[0]!.data as AgentEvent).type).toBe('notice');
+  });
 });

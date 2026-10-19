@@ -18,6 +18,8 @@ export interface RunRequest {
   userId: string;
   goal: string;
   messages: ChatMessage[];
+  /** 预占额度、允许模型与价格；缺省表示不限预算（测试/兼容）。 */
+  billing?: RunBilling;
 }
 
 export interface RegisterRequest {
@@ -152,4 +154,75 @@ export interface McpToolInfo {
   description: string;
   /** MCP 工具的入参 JSON-Schema，直接用作 `Tool.parameters`。 */
   inputSchema: Record<string, unknown>;
+}
+
+// ---------------------------------------------------------------------------
+// M5a 计费与网关
+// ---------------------------------------------------------------------------
+
+/** 模型价格：每千 token 的毫积分费率（1 积分 = 1000 毫积分）。 */
+export interface ModelPriceDto {
+  inputMilliCreditsPer1k: number;
+  outputMilliCreditsPer1k: number;
+}
+
+/** BFF 下发给 runtime 的计费约束；缺省时不限预算（仅测试/兼容）。 */
+export interface RunBilling {
+  maxCredits: number;
+  allowedModels: string[];
+  prices: Record<string, ModelPriceDto>;
+}
+
+/** `usage` SSE 事件的 data：截至当前的累计用量，按模型拆分。 */
+export interface UsageEvent {
+  input: number;
+  output: number;
+  models: { model: string; input: number; output: number }[];
+}
+
+/** 套餐目录项。 */
+export interface PlanDto {
+  id: string;
+  name: string;
+  priceCents: number;
+  monthlyBaseCredits: number;
+  monthlyBonusCredits: number;
+  maxCreditsPerRun: number;
+  rpm: number;
+  allowedModels: string[];
+}
+
+/** `/api/billing/summary` 响应。 */
+export interface BillingSummaryDto {
+  plan: PlanDto;
+  subscription: { status: string; periodStart: string; periodEnd: string };
+  /** 可用积分 = balance - reserved。 */
+  balance: number;
+  reserved: number;
+  nextExpiry: { amount: number; expiresAt: string } | null;
+}
+
+/** 积分流水项。 */
+export interface CreditLedgerItemDto {
+  id: string;
+  type: string;
+  amount: number;
+  source: string | null;
+  runId: string | null;
+  note: string | null;
+  createdAt: string;
+}
+
+export interface CreditLedgerPageDto {
+  items: CreditLedgerItemDto[];
+  nextCursor: string | null;
+}
+
+/** `/api/billing/usage` 聚合项：key 为日期（YYYY-MM-DD）或模型名。 */
+export interface UsageAggregateDto {
+  key: string;
+  credits: number;
+  inputTokens: number;
+  outputTokens: number;
+  runs: number;
 }

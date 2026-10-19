@@ -1,7 +1,13 @@
 export const SSE_EVENT_NAMES = ['step', 'usage', 'done', 'error'] as const;
 export type SseEventName = (typeof SSE_EVENT_NAMES)[number];
 
-export type StepType = 'think' | 'tool_call' | 'tool_result' | 'artifact' | 'confirm_request';
+export type StepType = 'think' | 'tool_call' | 'tool_result' | 'artifact' | 'confirm_request' | 'notice';
+
+/** `notice` step 的 payload：目前只有预算超限，后续可扩展。 */
+export interface NoticePayload {
+  code: 'budget_exceeded';
+  message: string;
+}
 
 export interface AgentEvent {
   runId: string;
