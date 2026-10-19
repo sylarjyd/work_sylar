@@ -24,7 +24,7 @@ describe('端到端：接入 MCP Server 后其工具可用', () => {
       heartbeatMs: 60_000, backoffBaseMs: 500, backoffMaxMs: 1000,
       initTimeoutMs: 20_000, callTimeoutMs: 20_000,
     });
-    const tools = await buildMcpTools([cfg], host);
+    const tools = await buildMcpTools('t1', [cfg], host);
     expect(tools.map((t) => t.name)).toEqual(['mcp.echo.echo']);
     expect(tools[0].permission).toBe('confirm');
 

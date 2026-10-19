@@ -319,8 +319,10 @@ function defaultExtraTools(host: McpHost): (tenantId: string) => Promise<Tool[]>
         },
         tenantId,
       );
-      await host.retain(new Set(connectors.filter((c) => c.enabled).map((c) => c.name)));
-      return await buildMcpTools(connectors, host);
+      // 只回收本租户的进程：池按 (tenantId, name) 隔离，避免一个租户的 run
+      // 关闭其他租户正在使用的 MCP 子进程。
+      await host.retain(tenantId, new Set(connectors.filter((c) => c.enabled).map((c) => c.name)));
+      return await buildMcpTools(tenantId, connectors, host);
     } catch {
       // 拉取失败退化为无 MCP 工具，不中断本次 run。
       return [];

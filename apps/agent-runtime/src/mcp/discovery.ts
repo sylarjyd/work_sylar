@@ -7,6 +7,7 @@ import type { ConnectorConfig } from './transport';
  * 单个 Server 拉起失败只跳过它，不影响其他工具与 agent loop。
  */
 export async function buildMcpTools(
+  tenantId: string,
   connectors: ConnectorConfig[],
   host: McpHost,
 ): Promise<Tool[]> {
@@ -16,7 +17,7 @@ export async function buildMcpTools(
     if (!cfg.enabled) continue;
     let infos;
     try {
-      infos = await host.ensure(cfg);
+      infos = await host.ensure(tenantId, cfg);
     } catch (err) {
       console.warn(`[mcp] 连接器 "${cfg.name}" 拉起失败，跳过其工具`, err);
       continue;
@@ -35,7 +36,7 @@ export async function buildMcpTools(
         permission: 'confirm',
         async execute(args): Promise<unknown> {
           try {
-            const out = await host.call(cfg.name, info.name, args);
+            const out = await host.call(tenantId, cfg.name, info.name, args);
             return { ok: !out.isError, tool: name, text: out.text };
           } catch {
             // 调用失败不中断 loop：回结构化失败，模型据此说明。

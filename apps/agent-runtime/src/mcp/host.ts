@@ -7,6 +7,11 @@ function envKey(env: Record<string, string>): string {
   return Object.keys(env).sort().map((k) => `${k}\u0000${env[k]}`).join('\u0001');
 }
 
+/** 池内键带租户前缀：不同租户可用同名连接器，retain 也只回收本租户的条目。 */
+function entryKey(tenantId: string, name: string): string {
+  return `${tenantId}\u0000${name}`;
+}
+
 export interface McpHostOptions {
   heartbeatMs: number;
   backoffBaseMs: number;
@@ -21,6 +26,8 @@ type State = 'starting' | 'ready' | 'error';
 
 interface Entry {
   cfg: ConnectorConfig;
+  /** 持有者租户；退避重拉时用于重建带前缀的键。 */
+  tenantId: string;
   transport: McpTransport | null;
   state: State;
   tools: McpToolInfo[];
@@ -32,7 +39,7 @@ interface Entry {
 }
 
 /**
- * MCP 子进程守护池：按 serverName 复用常驻子进程，心跳巡检，
+ * MCP 子进程守护池：按 (tenantId, serverName) 复用常驻子进程，心跳巡检，
  * 崩溃后指数退避重拉。实例随 runtime 进程存活（见 server.ts closeAll）。
  */
 export class McpHost {
@@ -58,18 +65,19 @@ export class McpHost {
   }
 
   /** 关闭并从池中移除某连接器（清定时器、回收子进程）；不存在则无操作。 */
-  private async dispose(name: string): Promise<void> {
-    const entry = this.entries.get(name);
+  private async dispose(key: string): Promise<void> {
+    const entry = this.entries.get(key);
     if (!entry) return;
-    this.entries.delete(name);
+    this.entries.delete(key);
     if (entry.heartbeatTimer) clearInterval(entry.heartbeatTimer);
     if (entry.retryTimer) clearTimeout(entry.retryTimer);
     await entry.transport?.close().catch(() => undefined);
   }
 
-  /** 确保某连接器子进程就绪并返回其工具；失败抛错并安排退避重拉。 */
-  async ensure(cfg: ConnectorConfig): Promise<McpToolInfo[]> {
-    const existing = this.entries.get(cfg.name);
+  /** 确保某租户的连接器子进程就绪并返回其工具；失败抛错并安排退避重拉。 */
+  async ensure(tenantId: string, cfg: ConnectorConfig): Promise<McpToolInfo[]> {
+    const key = entryKey(tenantId, cfg.name);
+    const existing = this.entries.get(key);
     if (existing?.state === 'ready' && this.sameConfig(existing.cfg, cfg)) {
       return existing.tools;
     }
@@ -78,32 +86,34 @@ export class McpHost {
       return existing.connectPromise;
     }
     const prevBackoff = existing?.backoffMs ?? this.opts.backoffBaseMs;
-    if (existing) await this.dispose(cfg.name); // 配置变更 / error 态：先回收旧连接
+    if (existing) await this.dispose(key); // 配置变更 / error 态：先回收旧连接
 
     const transport = this.factory(cfg);
     const entry: Entry = {
-      cfg, transport, state: 'starting', tools: [], backoffMs: prevBackoff,
+      cfg, tenantId, transport, state: 'starting', tools: [], backoffMs: prevBackoff,
     };
-    const promise = this.spawn(cfg.name, entry);
+    const promise = this.spawn(key, entry);
     entry.connectPromise = promise;
-    this.entries.set(cfg.name, entry);
+    this.entries.set(key, entry);
     return promise;
   }
 
-  /** 关闭并移除不在 names 中的连接器（已删除/停用），回收其常驻子进程。 */
-  async retain(names: Set<string>): Promise<void> {
-    for (const name of [...this.entries.keys()]) {
-      if (!names.has(name)) await this.dispose(name);
+  /** 关闭并移除该租户下不在 names 中的连接器（已删除/停用），不影响其他租户。 */
+  async retain(tenantId: string, names: Set<string>): Promise<void> {
+    const prefix = `${tenantId}\u0000`;
+    for (const key of [...this.entries.keys()]) {
+      if (!key.startsWith(prefix)) continue;
+      if (!names.has(key.slice(prefix.length))) await this.dispose(key);
     }
   }
 
-  private async spawn(name: string, entry: Entry): Promise<McpToolInfo[]> {
+  private async spawn(key: string, entry: Entry): Promise<McpToolInfo[]> {
     const transport = entry.transport!;
     try {
       await transport.connect();
       const tools = await transport.listTools();
       // 期间若 host 已关闭或该 entry 被替换（并发/关闭），回收本次连接并放弃。
-      if (this.closed || this.entries.get(name) !== entry) {
+      if (this.closed || this.entries.get(key) !== entry) {
         await transport.close().catch(() => undefined);
         throw new Error('mcp_host_closed');
       }
@@ -111,22 +121,23 @@ export class McpHost {
       entry.tools = tools;
       entry.backoffMs = this.opts.backoffBaseMs; // 成功后重置退避
       entry.connectPromise = undefined;
-      this.startHeartbeat(name, entry);
+      this.startHeartbeat(key, entry);
       return tools;
     } catch (err) {
       await transport.close().catch(() => undefined);
       entry.connectPromise = undefined;
-      if (!this.closed && this.entries.get(name) === entry) this.markError(name, entry);
+      if (!this.closed && this.entries.get(key) === entry) this.markError(key, entry);
       throw err;
     }
   }
 
   async call(
+    tenantId: string,
     server: string,
     tool: string,
     args: Record<string, unknown>,
   ): Promise<{ text: string; isError: boolean }> {
-    const entry = this.entries.get(server);
+    const entry = this.entries.get(entryKey(tenantId, server));
     if (!entry || entry.state !== 'ready' || !entry.transport) {
       throw new Error('mcp_server_unavailable');
     }
@@ -143,16 +154,16 @@ export class McpHost {
     this.entries.clear();
   }
 
-  private startHeartbeat(name: string, entry: Entry): void {
+  private startHeartbeat(key: string, entry: Entry): void {
     if (entry.heartbeatTimer) clearInterval(entry.heartbeatTimer);
     entry.heartbeatTimer = setInterval(
-      () => void this.beat(name, entry).catch(() => undefined),
+      () => void this.beat(key, entry).catch(() => undefined),
       this.opts.heartbeatMs,
     );
     entry.heartbeatTimer.unref?.();
   }
 
-  private async beat(name: string, entry: Entry): Promise<void> {
+  private async beat(key: string, entry: Entry): Promise<void> {
     if (entry.state !== 'ready' || !entry.transport) return;
     try {
       await entry.transport.ping();
@@ -161,12 +172,12 @@ export class McpHost {
       const transport = entry.transport;
       entry.transport = null;
       await transport.close().catch(() => undefined);
-      if (!this.closed && this.entries.get(name) === entry) this.markError(name, entry);
+      if (!this.closed && this.entries.get(key) === entry) this.markError(key, entry);
     }
   }
 
   /** 置 error 并安排一次指数退避重拉；已 closed 或 entry 已被替换则不再排期。 */
-  private markError(name: string, entry: Entry): void {
+  private markError(key: string, entry: Entry): void {
     if (this.closed) return;
     if (entry.heartbeatTimer) clearInterval(entry.heartbeatTimer);
     if (entry.retryTimer) clearTimeout(entry.retryTimer);
@@ -175,7 +186,10 @@ export class McpHost {
     const delay = Math.min(entry.backoffMs, this.opts.backoffMaxMs);
     entry.backoffMs = Math.min(entry.backoffMs * 2, this.opts.backoffMaxMs);
     const cfg = entry.cfg;
-    entry.retryTimer = setTimeout(() => void this.ensure(cfg).catch(() => undefined), delay);
+    entry.retryTimer = setTimeout(
+      () => void this.ensure(entry.tenantId, cfg).catch(() => undefined),
+      delay,
+    );
     entry.retryTimer.unref?.();
   }
 }
