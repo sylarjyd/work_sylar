@@ -187,9 +187,10 @@ describe('AdminTasksService', () => {
     expect(done.total).toBe(1);
   });
 
-  it('list 非法 status 抛 400', async () => {
+  it('list 接受 queued 并拒绝非法 status', async () => {
     const { svc } = makeService();
-    await expect(svc.list({ status: 'queued' })).rejects.toBeInstanceOf(BadRequestException);
+    await expect(svc.list({ status: 'queued' })).resolves.toMatchObject({ total: 0 });
+    await expect(svc.list({ status: 'archived' })).rejects.toBeInstanceOf(BadRequestException);
   });
 
   it('detail 返回运行与积分', async () => {

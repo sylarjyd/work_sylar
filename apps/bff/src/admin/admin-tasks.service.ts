@@ -25,9 +25,9 @@ const LATEST_RUN_INCLUDE = {
 
 type TaskWithLatestRun = Prisma.TaskGetPayload<{ include: typeof LATEST_RUN_INCLUDE }>;
 
-/** 任务状态实际只写 running/done/failed（见 TasksService）。 */
-function isTaskStatus(v: unknown): v is 'running' | 'done' | 'failed' {
-  return v === 'running' || v === 'done' || v === 'failed';
+/** TasksService 写 running/done/failed；queued 是 schema 默认值，留给队列期。 */
+function isTaskStatus(v: unknown): v is 'queued' | 'running' | 'done' | 'failed' {
+  return v === 'queued' || v === 'running' || v === 'done' || v === 'failed';
 }
 
 function toItem(row: TaskWithLatestRun): AdminTaskItemDto {
