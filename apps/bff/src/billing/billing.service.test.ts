@@ -1,5 +1,5 @@
 import 'reflect-metadata';
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { BillingService } from './billing.service';
 import { InsufficientCreditsError } from './billing.errors';
 import { PrismaService } from '../db/prisma.service';
@@ -130,13 +130,48 @@ function makeDb() {
     },
     usageRecord: {
       findUnique: async ({ where }: any) => db.usages.find((u) => u.runId === where.runId) ?? null,
-      findMany: async () => [...db.usages],
+      findMany: async ({ where = {}, orderBy, take }: any = {}) => {
+        let rows = db.usages.filter((u) => {
+          if (where.runId?.gt !== undefined && !(u.runId > where.runId.gt)) return false;
+          if (where.tenantId !== undefined && u.tenantId !== where.tenantId) return false;
+          if (where.status !== undefined && u.status !== where.status) return false;
+          if (where.createdAt?.lt && !(u.createdAt < where.createdAt.lt)) return false;
+          if (where.createdAt?.lte && !(u.createdAt <= where.createdAt.lte)) return false;
+          if (where.createdAt?.gte && !(u.createdAt >= where.createdAt.gte)) return false;
+          return true;
+        });
+        const clauses = orderBy ? (Array.isArray(orderBy) ? orderBy : [orderBy]) : [];
+        for (const clause of [...clauses].reverse()) {
+          for (const [key, dir] of Object.entries(clause)) {
+            rows = [...rows].sort((a, b) => {
+              const av = a[key] instanceof Date ? a[key].getTime() : a[key];
+              const bv = b[key] instanceof Date ? b[key].getTime() : b[key];
+              if (av === bv) return 0;
+              return (av < bv ? -1 : 1) * (dir === 'desc' ? -1 : 1);
+            });
+          }
+        }
+        if (take !== undefined) rows = rows.slice(0, take);
+        return rows;
+      },
       create: async ({ data }: any) => {
+        if (db.usages.some((u) => u.runId === data.runId)) {
+          const err: any = new Error('unique');
+          err.code = 'P2002';
+          throw err;
+        }
         const row = { id: `u${db.usages.length + 1}`, createdAt: NOW, credits: null, settledAt: null, ...data };
         db.usages.push(row);
         return row;
       },
       update: async ({ where, data }: any) => apply(db.usages.find((u) => u.runId === where.runId)!, data),
+      updateMany: async ({ where, data }: any) => {
+        const targets = db.usages.filter(
+          (u) => u.runId === where.runId && (!where.status || u.status === where.status),
+        );
+        targets.forEach((u) => apply(u, data));
+        return { count: targets.length };
+      },
     },
     modelPrice: { findMany: async () => [...db.prices] },
     run: { findUnique: async () => ({ status: 'succeeded' }) },
@@ -231,6 +266,33 @@ describe('BillingService', () => {
     expect(ctx.db.credits[0].balance).toBe(499);
   });
 
+  it('settle 之后 recordUsage 不得把已结算记录改回 pending', async () => {
+    await svc.summary('t1');
+    await svc.beginRun('r1', 't1');
+    const meta = { tenantId: 't1', userId: 'u1', sessionId: 's1' };
+    await svc.recordUsage('r1', meta, {
+      input: 1000,
+      output: 1000,
+      models: [{ model: 'mock', input: 1000, output: 1000 }],
+    });
+    await svc.settle('r1');
+    const balance = ctx.db.credits[0].balance;
+
+    await svc.recordUsage('r1', meta, {
+      input: 9000,
+      output: 9000,
+      models: [{ model: 'mock', input: 9000, output: 9000 }],
+    });
+
+    expect(ctx.db.usages[0]).toMatchObject({
+      status: 'settled',
+      credits: 1,
+      inputTokens: 1000,
+      outputTokens: 1000,
+    });
+    expect(ctx.db.credits[0].balance).toBe(balance);
+  });
+
   it('releaseHold 归还预占', async () => {
     await svc.summary('t1');
     await svc.beginRun('r1', 't1');
@@ -250,11 +312,79 @@ describe('BillingService', () => {
 
   it('adjust 支持发放与收回，收回不得使可用余额为负', async () => {
     await svc.summary('t1');
+    await expect(svc.adjust('t1', 0, '零调整', null)).rejects.toThrow('amount_required');
     await svc.adjust('t1', 100, '补偿', null);
     expect(ctx.db.credits[0].balance).toBe(600);
     await svc.adjust('t1', -600, '收回', null);
     expect(ctx.db.credits[0].balance).toBe(0);
     await expect(svc.adjust('t1', -1, '收回', null)).rejects.toThrow('insufficient_balance');
+  });
+
+  it('管理员开通套餐时月末日期夹到目标月最后一天', async () => {
+    ctx.db.plans.push({
+      id: 'pro',
+      name: '专业版',
+      priceCents: 990,
+      monthlyBaseCredits: 10000,
+      monthlyBonusCredits: 0,
+      maxCreditsPerRun: 200,
+      rpm: 60,
+      allowedModels: ['mock'],
+      active: true,
+    });
+    const year = new Date().getUTCFullYear() + 1;
+    const summary = await svc.adminSubscribe('t1', 'pro', new Date(Date.UTC(year, 0, 31, 8)));
+    const lastFeb = new Date(Date.UTC(year, 2, 0)).getUTCDate();
+    expect(summary.plan.id).toBe('pro');
+    expect(summary.subscription.periodEnd).toBe(new Date(Date.UTC(year, 1, lastFeb)).toISOString());
+  });
+
+  it('settleStalePending 单条失败不阻断后续', async () => {
+    await svc.summary('t1');
+    const stale = new Date('2026-10-18T00:00:00Z');
+    ctx.db.usages.push(
+      {
+        id: 'u1',
+        runId: 'bad1',
+        tenantId: 't1',
+        userId: 'u1',
+        sessionId: 's1',
+        models: [{ model: 'mock', input: 1000, output: 0 }],
+        inputTokens: 1000,
+        outputTokens: 0,
+        status: 'pending',
+        credits: null,
+        settledAt: null,
+        createdAt: stale,
+      },
+      {
+        id: 'u2',
+        runId: 'good1',
+        tenantId: 't1',
+        userId: 'u1',
+        sessionId: 's1',
+        models: [{ model: 'mock', input: 1000, output: 0 }],
+        inputTokens: 1000,
+        outputTokens: 0,
+        status: 'pending',
+        credits: null,
+        settledAt: null,
+        createdAt: stale,
+      },
+    );
+    const original = svc.settle.bind(svc);
+    const calls: string[] = [];
+    vi.spyOn(svc, 'settle').mockImplementation(async (runId: string) => {
+      calls.push(runId);
+      if (runId === 'bad1') throw new Error('boom');
+      return original(runId);
+    });
+
+    await svc.settleStalePending(NOW);
+
+    expect(calls).toEqual(['bad1', 'good1']);
+    expect(ctx.db.usages.find((u) => u.runId === 'bad1')!.status).toBe('pending');
+    expect(ctx.db.usages.find((u) => u.runId === 'good1')!.status).toBe('settled');
   });
 
   it('允许模型缺少价格时拒绝预占', async () => {

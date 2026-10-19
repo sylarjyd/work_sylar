@@ -1,4 +1,4 @@
-import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import type { Plan, Subscription } from '@prisma/client';
 import type {
@@ -27,9 +27,12 @@ export function currentPeriod(now: Date): { start: Date; end: Date } {
   return { start, end };
 }
 
-/** 从 now 起一个月（UTC），用于管理员开通付费套餐。 */
+/** 从 now 起一个月（UTC），用于管理员开通付费套餐；月末日期夹到目标月最后一天。 */
 function addMonth(now: Date): Date {
-  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, now.getUTCDate()));
+  const y = now.getUTCFullYear();
+  const m = now.getUTCMonth();
+  const lastDay = new Date(Date.UTC(y, m + 2, 0)).getUTCDate();
+  return new Date(Date.UTC(y, m + 1, Math.min(now.getUTCDate(), lastDay)));
 }
 
 function toPlanDto(p: Plan): PlanDto {
@@ -51,6 +54,8 @@ function toPlanDto(p: Plan): PlanDto {
  */
 @Injectable()
 export class BillingService {
+  private readonly logger = new Logger(BillingService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     @Inject(RATE_LIMITER) private readonly limiter: RateLimiter,
@@ -202,7 +207,7 @@ export class BillingService {
     });
   }
 
-  /** 记录累计用量；已存在则仅在 pending 时更新（保持幂等）。 */
+  /** 记录累计用量；只在 pending 时更新，已结算记录不可被流式事件改写。 */
   async recordUsage(
     runId: string,
     meta: { tenantId: string; userId: string; sessionId: string },
@@ -212,16 +217,30 @@ export class BillingService {
       models: usage.models as unknown as Prisma.InputJsonValue,
       inputTokens: usage.input,
       outputTokens: usage.output,
-      status: 'pending',
     };
-    const existing = await this.prisma.usageRecord.findUnique({ where: { runId } });
-    if (existing) {
-      if (existing.status === 'pending') {
-        await this.prisma.usageRecord.update({ where: { runId }, data });
-      }
-      return;
+    // 只更新仍处于 pending 的记录：已结算的用量不可被流式事件改写回未结算。
+    const updated = await this.prisma.usageRecord.updateMany({
+      where: { runId, status: 'pending' },
+      data,
+    });
+    if (updated.count > 0) return;
+    const existing = await this.prisma.usageRecord.findUnique({
+      where: { runId },
+      select: { runId: true },
+    });
+    if (existing) return;
+    try {
+      await this.prisma.usageRecord.create({
+        data: { runId, ...meta, status: 'pending', ...data },
+      });
+    } catch (err) {
+      // 并发首个事件同时创建：P2002 说明另一方已建好，按 pending 条件补写最新用量。
+      if ((err as { code?: string }).code !== 'P2002') throw err;
+      await this.prisma.usageRecord.updateMany({
+        where: { runId, status: 'pending' },
+        data,
+      });
     }
-    await this.prisma.usageRecord.create({ data: { runId, ...meta, ...data } });
   }
 
   /** 结算：按价格折算积分，按到期顺序扣批次，释放预占；runId 唯一保证幂等。 */
@@ -230,23 +249,28 @@ export class BillingService {
     if (!usage || usage.status !== 'pending') return;
 
     await this.prisma.$transaction(async (tx) => {
+      // 行锁认领：并发 settle 时后到者在此等待，复查发现已结算后静默返回。
+      await tx.$queryRaw`SELECT "runId" FROM "UsageRecord" WHERE "runId" = ${runId} FOR UPDATE`;
+      const current = await tx.usageRecord.findUnique({ where: { runId } });
+      if (!current || current.status !== 'pending') return;
+
       await tx.tenantCredit.upsert({
-        where: { tenantId: usage.tenantId },
-        create: { tenantId: usage.tenantId },
+        where: { tenantId: current.tenantId },
+        create: { tenantId: current.tenantId },
         update: {},
       });
-      await this.lockCredit(tx, usage.tenantId);
+      await this.lockCredit(tx, current.tenantId);
 
       const hold = await tx.creditHold.findUnique({ where: { runId } });
-      const models = parseModels(usage.models);
+      const models = parseModels(current.models);
       const prices = await this.loadPrices(tx);
       // 有 hold 时封顶在预占额度；无 hold（异常兜底）则按实际用量。
       const credits = computeCredits(models, prices, hold?.amount ?? Number.MAX_SAFE_INTEGER);
 
       const now = new Date();
-      await this.expireDueLots(tx, usage.tenantId, now);
+      await this.expireDueLots(tx, current.tenantId, now);
       const lots = await tx.creditLot.findMany({
-        where: { tenantId: usage.tenantId, remaining: { gt: 0 } },
+        where: { tenantId: current.tenantId, remaining: { gt: 0 } },
       });
       const { allocations, deducted } = allocate(lots, credits);
       for (const a of allocations) {
@@ -257,7 +281,7 @@ export class BillingService {
       }
       await tx.creditTx.create({
         data: {
-          tenantId: usage.tenantId,
+          tenantId: current.tenantId,
           type: 'consume',
           amount: -deducted,
           source: 'usage',
@@ -266,7 +290,7 @@ export class BillingService {
         },
       });
       await tx.tenantCredit.update({
-        where: { tenantId: usage.tenantId },
+        where: { tenantId: current.tenantId },
         data: {
           balance: { decrement: deducted },
           ...(hold ? { reserved: { decrement: hold.amount } } : {}),
@@ -278,7 +302,7 @@ export class BillingService {
         data: { credits: deducted, status: 'settled', settledAt: now },
       });
       if (deducted < credits) {
-        console.warn(`[billing] run ${runId} 可用积分不足：应扣 ${credits}，实扣 ${deducted}`);
+        this.logger.warn(`[billing] run ${runId} 可用积分不足：应扣 ${credits}，实扣 ${deducted}`);
       }
     });
   }
@@ -416,6 +440,7 @@ export class BillingService {
     note: string,
     expiresAt: Date | null,
   ): Promise<BillingSummaryDto> {
+    if (amount === 0) throw new BadRequestException('amount_required');
     await this.prisma.$transaction(async (tx) => {
       await tx.tenantCredit.upsert({ where: { tenantId }, create: { tenantId }, update: {} });
       await this.lockCredit(tx, tenantId);
@@ -462,23 +487,37 @@ export class BillingService {
   }
 
   // ------------------------------------------------------------------ 补偿
-  /** 结算超过 olderThan 仍 pending 的用量；单条失败不阻断其余。 */
+  /** 结算超过 olderThan 仍 pending 的用量；单条失败不阻断其余，按 runId 游标分页。 */
   async settleStalePending(olderThan: Date): Promise<void> {
-    const rows = await this.prisma.usageRecord.findMany({
-      where: { status: 'pending', createdAt: { lt: olderThan } },
-      select: { runId: true },
-      take: 100,
-    });
-    for (const row of rows) {
-      try {
-        await this.settle(row.runId);
-      } catch (err) {
-        console.error(`[billing] 补偿结算失败 run=${row.runId}: ${(err as Error).message}`);
+    const failed = new Set<string>();
+    let cursor: string | undefined;
+    for (let page = 0; page < 10; page++) {
+      const rows = await this.prisma.usageRecord.findMany({
+        where: {
+          status: 'pending',
+          createdAt: { lt: olderThan },
+          ...(cursor ? { runId: { gt: cursor } } : {}),
+        },
+        select: { runId: true },
+        orderBy: { runId: 'asc' },
+        take: 100,
+      });
+      if (rows.length === 0) break;
+      cursor = rows[rows.length - 1].runId;
+      for (const row of rows) {
+        if (failed.has(row.runId)) continue;
+        try {
+          await this.settle(row.runId);
+        } catch (err) {
+          failed.add(row.runId);
+          this.logger.error(`[billing] 补偿结算失败 run=${row.runId}: ${(err as Error).message}`);
+        }
       }
+      if (rows.length < 100) break;
     }
   }
 
-  /** 扫描所有租户的过期批次并清零。 */
+  /** 扫描所有租户的过期批次并清零；单租户失败不影响其余租户。 */
   async sweepExpired(now = new Date()): Promise<void> {
     const tenants = await this.prisma.creditLot.findMany({
       where: { expiresAt: { lte: now }, remaining: { gt: 0 } },
@@ -486,10 +525,14 @@ export class BillingService {
       select: { tenantId: true },
     });
     for (const { tenantId } of tenants) {
-      await this.prisma.$transaction(async (tx) => {
-        await this.lockCredit(tx, tenantId);
-        await this.expireDueLots(tx, tenantId, now);
-      });
+      try {
+        await this.prisma.$transaction(async (tx) => {
+          await this.lockCredit(tx, tenantId);
+          await this.expireDueLots(tx, tenantId, now);
+        });
+      } catch (err) {
+        this.logger.error(`[billing] 过期清理失败 tenant=${tenantId}: ${(err as Error).message}`);
+      }
     }
   }
 
@@ -504,7 +547,7 @@ export class BillingService {
         try {
           await this.settle(hold.runId);
         } catch (err) {
-          console.error(`[billing] 孤儿预占结算失败 run=${hold.runId}: ${(err as Error).message}`);
+          this.logger.error(`[billing] 孤儿预占结算失败 run=${hold.runId}: ${(err as Error).message}`);
         }
         continue;
       }
