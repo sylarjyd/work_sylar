@@ -91,6 +91,16 @@ export function AppShell({
               <span className="nav-label">{label}</span>
             </Link>
           ))}
+          {role === 'admin' && (
+            <Link
+              className="nav-item"
+              href="/admin/users"
+              aria-label="管理后台"
+              title="管理后台"
+            >
+              <span className="nav-label">管理后台</span>
+            </Link>
+          )}
         </nav>
 
         {sessions !== undefined && (
