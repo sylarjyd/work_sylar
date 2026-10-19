@@ -19,18 +19,25 @@ export function parseProviders(raw: string | undefined): ProviderConfig[] {
     throw new Error('invalid_MODEL_PROVIDERS');
   }
   if (!Array.isArray(parsed)) throw new Error('invalid_MODEL_PROVIDERS');
-  return parsed.map((item) => {
+  const providers = parsed.map((item) => {
     if (item === null || typeof item !== 'object') throw new Error('invalid_MODEL_PROVIDERS');
     const p = item as Record<string, unknown>;
     if (
       typeof p.model !== 'string' ||
       typeof p.baseUrl !== 'string' ||
-      typeof p.apiKeyEnv !== 'string'
+      typeof p.apiKeyEnv !== 'string' ||
+      p.model.length === 0 ||
+      p.baseUrl.length === 0 ||
+      p.apiKeyEnv.length === 0
     ) {
       throw new Error('invalid_MODEL_PROVIDERS');
     }
     return { model: p.model, baseUrl: p.baseUrl, apiKeyEnv: p.apiKeyEnv };
   });
+  if (new Set(providers.map((p) => p.model)).size !== providers.length) {
+    throw new Error('invalid_MODEL_PROVIDERS');
+  }
+  return providers;
 }
 
 /**

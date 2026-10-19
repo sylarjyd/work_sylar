@@ -29,6 +29,24 @@ describe('createGateway', () => {
     );
   });
 
+  it('MODEL_PROVIDERS 字段为空或模型重复时启动失败', () => {
+    expect(() =>
+      createGateway({
+        MODEL_PROVIDERS: JSON.stringify([{ model: '', baseUrl: 'https://x/v1', apiKeyEnv: 'K' }]),
+        K: 'sk-1',
+      } as NodeJS.ProcessEnv),
+    ).toThrow('invalid_MODEL_PROVIDERS');
+    expect(() =>
+      createGateway({
+        MODEL_PROVIDERS: JSON.stringify([
+          { model: 'a', baseUrl: 'https://x/v1', apiKeyEnv: 'K' },
+          { model: 'a', baseUrl: 'https://y/v1', apiKeyEnv: 'K' },
+        ]),
+        K: 'sk-1',
+      } as NodeJS.ProcessEnv),
+    ).toThrow('invalid_MODEL_PROVIDERS');
+  });
+
   it('MODEL_BASE_URL / MODEL_NAME 覆盖生效（打到 <base>/chat/completions 且带 model 名）', async () => {
     let path = '';
     let body: { model?: string } = {};
