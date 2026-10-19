@@ -109,6 +109,7 @@ export function createRuntimeServer(deps: RuntimeDeps = {}): Server {
               tools: runTools,
               confirm,
               confirmTimeoutMs,
+              billing: runReq.billing,
               onUsage: (u) => res.write(encodeSse({ event: 'usage', data: u })),
             })) {
               res.write(encodeSse({ event: 'step', data: ev }));

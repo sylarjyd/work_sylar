@@ -1,18 +1,21 @@
 import { randomUUID } from 'node:crypto';
-import type { AgentEvent, RunRequest } from '@ai-office/shared';
+import type { AgentEvent, RunBilling, RunRequest, UsageEvent } from '@ai-office/shared';
 import type { ModelGateway, ModelMessage } from './model/types';
 import type { ConfirmGate } from './confirm/broker';
 import type { RunContext, Tool } from './tools/types';
+import { milliCreditsFor, toUsageEvent } from './billing';
 
 export interface RunDeps {
   gateway: ModelGateway;
   tools: Tool[];
   maxRounds?: number;
-  onUsage?: (usage: { input: number; output: number }) => void;
+  onUsage?: (usage: UsageEvent) => void;
   /** 确认闸门：confirm 级工具执行前挂起等待用户决策；未注入时按拒绝处理（fail-safe）。 */
   confirm?: ConfirmGate;
   /** 确认等待上限（毫秒）。 */
   confirmTimeoutMs?: number;
+  /** 预占额度、允许模型与价格；缺省时不限预算。 */
+  billing?: RunBilling;
 }
 
 const DEFAULT_MAX_ROUNDS = 8;
@@ -37,7 +40,7 @@ export async function* runAgent(req: RunRequest, deps: RunDeps): AsyncGenerator<
     runId: req.runId,
   };
   let seq = 0;
-  let usage = { input: 0, output: 0 };
+  const usageByModel = new Map<string, { input: number; output: number }>();
   const step = (type: AgentEvent['type'], payload: Record<string, unknown>): AgentEvent => ({
     runId: req.runId,
     seq: seq++,
@@ -49,8 +52,32 @@ export async function* runAgent(req: RunRequest, deps: RunDeps): AsyncGenerator<
   // 注：M1 下耗尽 maxRounds 会静默结束（客户端只看到 done），
   // “轮次耗尽”这一信号留待后续里程碑；此处不新增事件、不改变输出契约。
   for (let round = 0; round < maxRounds; round++) {
-    const resp = await deps.gateway.chat({ messages, tools: schemas });
-    usage = { input: usage.input + resp.usage.input, output: usage.output + resp.usage.output };
+    // 预算在发起下一轮之前判断：超限立即刹车，不再浪费一次模型调用。
+    // 首轮不做判断——预占额度已保证至少可跑一轮。
+    if (round > 0 && deps.billing) {
+      const milli = milliCreditsFor(
+        [...usageByModel].map(([model, u]) => ({ model, ...u })),
+        deps.billing.prices,
+      );
+      if (milli >= deps.billing.maxCredits * 1000) {
+        yield step('notice', {
+          code: 'budget_exceeded',
+          message: '本次运行已达到积分预算上限，已停止',
+        });
+        break;
+      }
+    }
+
+    const resp = await deps.gateway.chat({
+      messages,
+      tools: schemas,
+      models: deps.billing?.allowedModels,
+    });
+    const prev = usageByModel.get(resp.model) ?? { input: 0, output: 0 };
+    usageByModel.set(resp.model, {
+      input: prev.input + resp.usage.input,
+      output: prev.output + resp.usage.output,
+    });
 
     if (resp.content) {
       yield step('think', { text: resp.content });
@@ -124,7 +151,7 @@ export async function* runAgent(req: RunRequest, deps: RunDeps): AsyncGenerator<
     }
   }
 
-  deps.onUsage?.(usage);
+  deps.onUsage?.(toUsageEvent(usageByModel));
 }
 
 function preview(value: unknown): unknown {

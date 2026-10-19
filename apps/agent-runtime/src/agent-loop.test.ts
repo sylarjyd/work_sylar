@@ -54,7 +54,38 @@ describe('runAgent', () => {
     );
     expect(events.map((e) => e.type)).toEqual(['think', 'tool_call', 'tool_result', 'think']);
     expect(events.map((e) => e.seq)).toEqual([0, 1, 2, 3]);
-    expect(usages).toEqual([{ input: 3, output: 3 }]);
+    expect(usages).toEqual([
+      { input: 3, output: 3, models: [{ model: 'mock', input: 3, output: 3 }] },
+    ]);
+  });
+
+  it('超出积分预算时发 notice 并停止，且不再调用模型', async () => {
+    let calls = 0;
+    const gateway: ModelGateway = {
+      async chat() {
+        calls++;
+        return {
+          content: '继续',
+          toolCalls: [{ id: 'c', name: 'web.search', args: { query: 'x' } }],
+          usage: { input: 1000, output: 0 },
+          model: 'mock',
+        };
+      },
+    };
+    const events = await collect(
+      runAgent(req, {
+        gateway,
+        tools: [echoTool],
+        billing: {
+          maxCredits: 1,
+          allowedModels: ['mock'],
+          prices: { mock: { inputMilliCreditsPer1k: 2000, outputMilliCreditsPer1k: 0 } },
+        },
+      }),
+    );
+    expect(calls).toBe(1);
+    const notice = events.find((e) => e.type === 'notice');
+    expect(notice?.payload).toMatchObject({ code: 'budget_exceeded' });
   });
 
   it('无工具调用即结束（单轮）', async () => {
