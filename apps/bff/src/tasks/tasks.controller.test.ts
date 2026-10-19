@@ -87,6 +87,7 @@ const fakePrisma = {
   },
   message: {
     findMany: async () => [],
+    findFirst: async () => null,
     count: async () => 1,
     create: async ({ data }: { data: unknown }) => {
       stored.messages.push(data);
@@ -125,6 +126,8 @@ const fakePrisma = {
       return data;
     },
   },
+  // 测试不需要事务隔离，直接把同一个 fake 交给回调。
+  $transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn(fakePrisma),
 } as unknown as PrismaService;
 
 beforeAll(async () => {

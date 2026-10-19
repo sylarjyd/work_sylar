@@ -4,6 +4,9 @@ import { PrismaService } from '../db/prisma.service';
 import { SessionsService } from '../sessions/sessions.service';
 import type { AgentEvent, ChatMessage } from '@ai-office/shared';
 
+/** 并发抢占同一 seq 时的最大尝试次数。 */
+const MAX_SEQ_RETRIES = 5;
+
 @Injectable()
 export class TasksService {
   constructor(
@@ -26,25 +29,40 @@ export class TasksService {
   ): Promise<{ taskId: string; runId: string; tenantId: string; userId: string; messages: ChatMessage[] }> {
     await this.sessions.assertOwned(sessionId, tenantId, userId);
 
-    const prior = await this.prisma.message.findMany({
-      where: { sessionId },
-      orderBy: { seq: 'asc' },
-    });
-    const task = await this.prisma.task.create({
-      data: { sessionId, goal, status: 'running' },
-    });
-    const run = await this.prisma.run.create({
-      data: { id: runId, taskId: task.id, status: 'running' },
-    });
-    await this.prisma.message.create({
-      data: { sessionId, role: 'user', content: goal, seq: prior.length },
-    });
+    // 并发请求会同时读到相同的 max(seq)，进而撞 (sessionId, seq) 唯一键。
+    // 整段放进同一事务：重试时前一次的 task/run 已回滚，不会留下孤儿。
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await this.prisma.$transaction(async (tx) => {
+          const prior = await tx.message.findMany({
+            where: { sessionId },
+            orderBy: { seq: 'asc' },
+          });
+          const task = await tx.task.create({
+            data: { sessionId, goal, status: 'running' },
+          });
+          const run = await tx.run.create({
+            data: { id: runId, taskId: task.id, status: 'running' },
+          });
+          // 用当前最大 seq + 1 而不是长度：历史消息删除后 seq 会有空洞。
+          const nextSeq = prior.length > 0 ? prior[prior.length - 1].seq + 1 : 0;
+          await tx.message.create({
+            data: { sessionId, role: 'user', content: goal, seq: nextSeq },
+          });
 
-    const messages: ChatMessage[] = [
-      ...prior.map((m) => ({ role: m.role as ChatMessage['role'], content: m.content })),
-      { role: 'user', content: goal },
-    ];
-    return { taskId: task.id, runId: run.id, tenantId, userId, messages };
+          const messages: ChatMessage[] = [
+            ...prior.map((m) => ({ role: m.role as ChatMessage['role'], content: m.content })),
+            { role: 'user', content: goal },
+          ];
+          return { taskId: task.id, runId: run.id, tenantId, userId, messages };
+        });
+      } catch (err) {
+        // 非唯一键冲突说明不是并发抢占 seq，立即抛出；仅 P2002 值得重试。
+        if ((err as { code?: string }).code !== 'P2002' || attempt >= MAX_SEQ_RETRIES - 1) {
+          throw err;
+        }
+      }
+    }
   }
 
   async recordStep(runId: string, ev: AgentEvent): Promise<void> {
@@ -63,10 +81,34 @@ export class TasksService {
     await this.prisma.run.update({ where: { id: runId }, data: { status, endedAt: new Date() } });
     await this.prisma.task.update({ where: { id: taskId }, data: { status } });
     if (assistantText) {
-      const count = await this.prisma.message.count({ where: { sessionId } });
-      await this.prisma.message.create({
-        data: { sessionId, role: 'assistant', content: assistantText, seq: count },
+      await this.appendMessage(sessionId, 'assistant', assistantText);
+    }
+  }
+
+  /**
+   * 写入消息：序号取当前最大 seq + 1；并发抢占同一序号时重算重试。
+   * run/task 状态更新已提交，不能因这里重试而回退。
+   */
+  private async appendMessage(
+    sessionId: string,
+    role: 'user' | 'assistant',
+    content: string,
+  ): Promise<void> {
+    for (let attempt = 0; ; attempt++) {
+      const last = await this.prisma.message.findFirst({
+        where: { sessionId },
+        orderBy: { seq: 'desc' },
+        select: { seq: true },
       });
+      const seq = last ? last.seq + 1 : 0;
+      try {
+        await this.prisma.message.create({ data: { sessionId, role, content, seq } });
+        return;
+      } catch (err) {
+        if ((err as { code?: string }).code !== 'P2002' || attempt >= MAX_SEQ_RETRIES - 1) {
+          throw err;
+        }
+      }
     }
   }
 
