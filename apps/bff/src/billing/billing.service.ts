@@ -278,6 +278,11 @@ export class BillingService implements OnModuleDestroy {
       });
       await this.lockCredit(tx, current.tenantId);
 
+      const now = new Date();
+      // 先清理过期批次再计算 cap：否则恰好过期的额度会抬高可用余额上限，
+      // 导致无 hold 路径多扣其他运行的预占。
+      await this.expireDueLots(tx, current.tenantId, now);
+
       const hold = await tx.creditHold.findUnique({ where: { runId } });
       const models = parseModels(current.models);
       const prices = await this.loadPrices(tx);
@@ -287,8 +292,6 @@ export class BillingService implements OnModuleDestroy {
       const cap = hold ? hold.amount : Math.max(0, (credit?.balance ?? 0) - (credit?.reserved ?? 0));
       const credits = computeCredits(models, prices, cap);
 
-      const now = new Date();
-      await this.expireDueLots(tx, current.tenantId, now);
       const lots = await tx.creditLot.findMany({
         where: { tenantId: current.tenantId, remaining: { gt: 0 } },
       });
@@ -606,7 +609,12 @@ export class BillingService implements OnModuleDestroy {
           this.logger.warn(`[billing] 回收陈旧运行 run=${hold.runId}（预占已过期）`);
         }
       }
-      await this.releaseHold(hold.runId);
+      try {
+        await this.releaseHold(hold.runId);
+      } catch (err) {
+        // 单个 hold 释放失败不应中断本轮其余 hold 的清理。
+        this.logger.error(`[billing] 释放孤儿预占失败 run=${hold.runId}: ${(err as Error).message}`);
+      }
     }
   }
 

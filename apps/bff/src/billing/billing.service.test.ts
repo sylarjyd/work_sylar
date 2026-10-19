@@ -320,8 +320,7 @@ describe('BillingService', () => {
     expect(ctx.db.credits[0].balance).toBe(balance);
   });
 
-  it('无 hold 结算最多扣到可用余额，不吃掉其他运行的预占', async () => {
-    await svc.summary('t1');
+  it('无 hold 结算最多扣到可用余额，不吃掉其他运行的预占', async () => {    await svc.summary('t1');
     // r2 先预占 50，余额 500 中可用只剩 450。
     const billing = await svc.beginRun('r2', 't1');
     expect(billing.maxCredits).toBe(50);
@@ -353,6 +352,31 @@ describe('BillingService', () => {
     expect(credit.reserved).toBeLessThanOrEqual(credit.balance);
     // r2 的预占仍然存在。
     expect(ctx.db.holds).toHaveLength(1);
+  });
+
+  it('无 hold 且可用余额为 0 时不扣费但标记结算', async () => {
+    await svc.summary('t1');
+    // 单次上限拉到 500，让 r2 把余额全部预占，r1 可用额度为 0。
+    ctx.db.plans[0].maxCreditsPerRun = 500;
+    await svc.beginRun('r2', 't1');
+    expect(ctx.db.credits[0].reserved).toBe(500);
+
+    // r1 没有 hold，且此刻没有任何可用余额。
+    await svc.recordUsage(
+      'r1',
+      { tenantId: 't1', userId: 'u1', sessionId: 's1' },
+      { input: 1000, output: 1000, models: [{ model: 'mock', input: 1000, output: 1000 }] },
+    );
+    await svc.settle('r1');
+
+    const credit = ctx.db.credits[0];
+    const usage = ctx.db.usages.find((u) => u.runId === 'r1')!;
+    expect(usage).toMatchObject({ status: 'settled', credits: 0 });
+    // 没有实扣就不写 r1 的 consume 流水，余额与预占保持不变。
+    expect(ctx.db.txs.filter((t) => t.type === 'consume' && t.runId === 'r1')).toHaveLength(0);
+    expect(credit.balance).toBe(500);
+    expect(credit.reserved).toBe(500);
+    expect(credit.reserved).toBeLessThanOrEqual(credit.balance);
   });
 
   it('releaseHold 归还预占', async () => {

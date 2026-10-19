@@ -47,6 +47,10 @@ describe('BillingSweeper.tick', () => {
 
     release();
     await first;
+
+    // 上一轮结束后 running 已复位，下一次 tick 应再次触发扫描。
+    await sweeper.tick();
+    expect(staleCalls).toBe(2);
   });
 
   it('单个扫描失败不向外抛', async () => {
