@@ -20,6 +20,8 @@ export interface RunRequest {
   messages: ChatMessage[];
   /** 预占额度、允许模型与价格；缺省表示不限预算（测试/兼容）。 */
   billing?: RunBilling;
+  /** 管理端参数配置；缺省或非法值由 runtime 夹取。 */
+  config?: RunConfig;
 }
 
 export interface RegisterRequest {
@@ -225,4 +227,201 @@ export interface UsageAggregateDto {
   inputTokens: number;
   outputTokens: number;
   runs: number;
+}
+
+// ---------------------------------------------------------------------------
+// M5b-1 管理端
+// ---------------------------------------------------------------------------
+
+/** 管理端统一 offset 分页响应。 */
+export interface PageDto<T> {
+  items: T[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+export type UserStatus = 'active' | 'disabled';
+export type UserRole = 'member' | 'admin';
+
+export interface AdminUserItemDto {
+  id: string;
+  email: string;
+  tenantId: string;
+  tenantName: string;
+  role: UserRole;
+  status: UserStatus;
+  createdAt: string;
+}
+
+export interface AdminUserDetailDto extends AdminUserItemDto {
+  planId: string | null;
+  planName: string | null;
+  subscriptionStatus: string | null;
+  balance: number;
+  reserved: number;
+  sessionCount: number;
+}
+
+export interface AdminUserPatch {
+  status?: UserStatus;
+  role?: UserRole;
+}
+
+export interface AdminTenantItemDto {
+  id: string;
+  name: string;
+  type: string;
+  planId: string;
+  planName: string;
+  subscriptionStatus: string;
+  balance: number;
+  reserved: number;
+  userCount: number;
+  createdAt: string;
+}
+
+export interface AdminTenantDetailDto extends AdminTenantItemDto {
+  sessionCount: number;
+  billing: BillingSummaryDto;
+}
+
+export interface AdminPlanDto extends PlanDto {
+  active: boolean;
+  createdAt: string;
+}
+
+export interface AdminPlanInput {
+  id: string;
+  name: string;
+  priceCents: number;
+  monthlyBaseCredits: number;
+  monthlyBonusCredits: number;
+  maxCreditsPerRun: number;
+  rpm: number;
+  allowedModels: string[];
+  active: boolean;
+}
+
+export type AdminPlanPatch = Partial<Omit<AdminPlanInput, 'id'>>;
+
+export interface AdminSessionItemDto {
+  id: string;
+  title: string;
+  status: string;
+  tenantId: string;
+  userEmail: string;
+  messageCount: number;
+  taskCount: number;
+  createdAt: string;
+}
+
+export interface AdminSessionDetailDto extends AdminSessionItemDto {
+  artifactCount: number;
+}
+
+export interface AdminMessageDto extends MessageDto {
+  createdAt: string;
+}
+
+export interface AdminTaskItemDto {
+  id: string;
+  sessionId: string;
+  goal: string;
+  status: string;
+  latestRunStatus: string | null;
+  createdAt: string;
+}
+
+export interface AdminRunItemDto {
+  id: string;
+  status: string;
+  startedAt: string;
+  endedAt: string | null;
+  credits: number | null;
+}
+
+export interface AdminTaskDetailDto extends AdminTaskItemDto {
+  runs: AdminRunItemDto[];
+}
+
+export interface AdminStepDto {
+  id: string;
+  seq: number;
+  type: string;
+  payload: Record<string, unknown>;
+  ts: string;
+}
+
+export interface AdminRunDetailDto {
+  id: string;
+  taskId: string;
+  status: string;
+  startedAt: string;
+  endedAt: string | null;
+  steps: PageDto<AdminStepDto>;
+  usage: {
+    inputTokens: number;
+    outputTokens: number;
+    credits: number | null;
+    status: string;
+    models: unknown;
+  } | null;
+}
+
+export interface AdminModelProviderDto {
+  /** provider 标识（取 apiKeyEnv 名；单模型配置为 default）；不含任何密钥。 */
+  name: string;
+  models: string[];
+}
+
+export interface AdminModelPriceDto extends ModelPriceDto {
+  model: string;
+  updatedAt: string;
+}
+
+export interface AdminModelsDto {
+  providers: AdminModelProviderDto[];
+  prices: AdminModelPriceDto[];
+}
+
+export type SettingSource = 'db' | 'env' | 'default';
+
+export interface AdminSettingDto {
+  key: string;
+  value: number;
+  source: SettingSource;
+  updatedAt: string | null;
+  updatedBy: string | null;
+  min: number;
+  max: number;
+}
+
+export interface AdminAuditItemDto {
+  id: string;
+  actorId: string;
+  actorEmail: string;
+  action: string;
+  targetType: string;
+  targetId: string | null;
+  summary: Record<string, unknown> | null;
+  ip: string | null;
+  createdAt: string;
+}
+
+export interface AdminSubscribeRequest {
+  planId: string;
+}
+
+export interface AdminCreditsRequest {
+  amount: number;
+  note?: string;
+  expiresAt?: string | null;
+}
+
+/** 运行参数（BFF → runtime）；缺省或非法值由 runtime 夹取。 */
+export interface RunConfig {
+  maxRounds?: number;
+  confirmTimeoutMs?: number;
+  codeExecTimeoutMs?: number;
 }

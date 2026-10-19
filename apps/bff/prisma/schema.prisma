@@ -15,6 +15,8 @@ model Tenant {
   createdAt DateTime @default(now())
   users     User[]
   sessions  Session[]
+  subscription Subscription?
+  credit       TenantCredit?
 }
 
 model User {
@@ -191,6 +193,7 @@ model Subscription {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
   plan        Plan     @relation(fields: [planId], references: [id])
+  tenant      Tenant   @relation(fields: [tenantId], references: [id])
 
   @@index([planId])
 }
@@ -227,6 +230,7 @@ model TenantCredit {
   balance   Int      @default(0)
   reserved  Int      @default(0)
   updatedAt DateTime @updatedAt
+  tenant    Tenant   @relation(fields: [tenantId], references: [id])
 }
 
 model CreditHold {
@@ -263,4 +267,27 @@ model ModelPrice {
   inputMilliCreditsPer1k  Int
   outputMilliCreditsPer1k Int
   updatedAt               DateTime @updatedAt
+}
+
+model Setting {
+  key       String   @id
+  value     Json
+  updatedBy String?
+  updatedAt DateTime @updatedAt
+}
+
+model AdminAuditLog {
+  id         String   @id @default(uuid())
+  actorId    String
+  actorEmail String
+  action     String
+  targetType String
+  targetId   String?
+  summary    Json?
+  ip         String?
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([targetType, targetId])
+  @@index([actorId, createdAt])
 }
