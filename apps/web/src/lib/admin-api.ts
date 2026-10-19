@@ -35,10 +35,9 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (!res.ok) {
     let code = '';
     try {
-      const body = (await res.json()) as { message?: unknown; error?: unknown };
-      // Nest 默认异常体把业务码放在 message；error 仅是 HTTP reason phrase。
-      const raw = typeof body.message === 'string' ? body.message : body.error;
-      if (typeof raw === 'string') code = raw;
+      const body = (await res.json()) as { message?: unknown };
+      // Nest 默认异常体把业务码放在 message；校验错误时 message 是数组，按无业务码处理。
+      if (typeof body.message === 'string') code = body.message;
     } catch {
       // 错误体不一定是 JSON。
     }
@@ -71,7 +70,15 @@ export function adminErrorText(err: unknown): string {
     'admin_failed_404_setting_not_found': '参数不存在',
   };
   if (map[msg]) return map[msg];
-  return msg.startsWith('admin_failed_') ? '操作失败，请检查输入' : errorText(err);
+  const failed = /^admin_failed_(\d{3})(?:_(.*))?$/.exec(msg);
+  if (failed) {
+    const status = Number(failed[1]);
+    // 5xx 是服务端问题，不能引导用户改输入；4xx 才视为输入/状态问题。
+    if (status >= 500) return '服务暂时不可用，请稍后重试';
+    if (status === 404) return '请求的资源不存在';
+    return '操作失败，请检查输入';
+  }
+  return errorText(err);
 }
 
 // ------------------------------------------------------------------ 用户
