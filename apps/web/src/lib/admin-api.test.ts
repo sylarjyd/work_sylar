@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { adminErrorText, isForbidden, listAdminUsers } from './admin-api';
+import { adminErrorText, createModelPrice, isForbidden, listAdminUsers } from './admin-api';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -34,6 +34,44 @@ describe('admin-api', () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 403 })));
     const err = await listAdminUsers({ page: 1 }).catch((e) => e);
     expect(isForbidden(err)).toBe(true);
+  });
+
+  it('按 Nest 异常体从 message 解析业务码并映射文案', async () => {
+    stubWindow();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({ statusCode: 400, message: 'last_admin', error: 'Bad Request' }),
+            { status: 400, headers: { 'content-type': 'application/json' } },
+          ),
+      ),
+    );
+    const err = await listAdminUsers({ page: 1 }).catch((e) => e);
+    expect(err.message).toBe('admin_failed_400_last_admin');
+    expect(adminErrorText(err)).toBe('系统必须保留至少一个启用的管理员');
+  });
+
+  it('409 冲突业务码从 message 解析并映射文案', async () => {
+    stubWindow();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({ statusCode: 409, message: 'model_exists', error: 'Conflict' }),
+            { status: 409, headers: { 'content-type': 'application/json' } },
+          ),
+      ),
+    );
+    const err = await createModelPrice({
+      model: 'gpt-test',
+      inputMilliCreditsPer1k: 1,
+      outputMilliCreditsPer1k: 2,
+    }).catch((e) => e);
+    expect(err.message).toBe('admin_failed_409_model_exists');
+    expect(adminErrorText(err)).toBe('该模型价格已存在');
   });
 
   it('错误码可读文案', () => {

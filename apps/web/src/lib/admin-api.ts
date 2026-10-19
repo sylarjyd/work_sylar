@@ -35,8 +35,10 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (!res.ok) {
     let code = '';
     try {
-      const body = (await res.json()) as { error?: unknown };
-      if (typeof body.error === 'string') code = body.error;
+      const body = (await res.json()) as { message?: unknown; error?: unknown };
+      // Nest 默认异常体把业务码放在 message；error 仅是 HTTP reason phrase。
+      const raw = typeof body.message === 'string' ? body.message : body.error;
+      if (typeof raw === 'string') code = raw;
     } catch {
       // 错误体不一定是 JSON。
     }
