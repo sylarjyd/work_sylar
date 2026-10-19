@@ -5,9 +5,9 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useState, type ReactNode } from 'react';
 import type { SessionSummary } from '@ai-office/shared';
 import { clearToken, getRole } from '../lib/api';
-import { IconBook, IconChat, IconLogout, IconPlug, IconPlus, IconSpark } from './icons';
+import { IconBook, IconChat, IconLogout, IconPlug, IconPlus, IconSpark, IconWallet } from './icons';
 
-type ActiveNav = 'workbench' | 'kb' | 'connectors';
+type ActiveNav = 'workbench' | 'kb' | 'connectors' | 'billing';
 
 interface AppShellProps {
   active: ActiveNav;
@@ -23,6 +23,7 @@ const NAV: { key: ActiveNav; href: string; label: string; icon: typeof IconChat 
   { key: 'workbench', href: '/', label: '工作台', icon: IconChat },
   { key: 'kb', href: '/kb', label: '知识库', icon: IconBook },
   { key: 'connectors', href: '/connectors', label: '连接器', icon: IconPlug },
+  { key: 'billing', href: '/billing', label: '套餐与用量', icon: IconWallet },
 ];
 
 export function AppShell({

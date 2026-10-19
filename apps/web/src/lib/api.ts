@@ -1,6 +1,16 @@
 'use client';
 
-import type { ArtifactDto, AuthResponse, ConnectorDto, KbDocDto, SessionSummary } from '@ai-office/shared';
+import type {
+  ArtifactDto,
+  AuthResponse,
+  BillingSummaryDto,
+  ConnectorDto,
+  CreditLedgerPageDto,
+  KbDocDto,
+  PlanDto,
+  SessionSummary,
+  UsageAggregateDto,
+} from '@ai-office/shared';
 
 const BFF_URL = process.env.NEXT_PUBLIC_BFF_URL ?? 'http://localhost:4000';
 const TOKEN_KEY = 'ai_office_token';
@@ -204,4 +214,37 @@ export async function updateConnector(
 export async function deleteConnector(id: string): Promise<void> {
   const res = await authFetch(`/api/connectors/${id}`, { method: 'DELETE' });
   if (!res.ok) throw new Error(`connector_delete_failed_${res.status}`);
+}
+
+export async function listPlans(): Promise<PlanDto[]> {
+  const res = await authFetch('/api/billing/plans');
+  if (!res.ok) throw new Error(`plans_failed_${res.status}`);
+  return (await res.json()) as PlanDto[];
+}
+
+export async function getBillingSummary(): Promise<BillingSummaryDto> {
+  const res = await authFetch('/api/billing/summary');
+  if (!res.ok) throw new Error(`billing_summary_failed_${res.status}`);
+  return (await res.json()) as BillingSummaryDto;
+}
+
+export async function listCreditLedger(limit = 20, cursor?: string): Promise<CreditLedgerPageDto> {
+  const qs = new URLSearchParams({ limit: String(limit) });
+  if (cursor) qs.set('cursor', cursor);
+  const res = await authFetch(`/api/billing/ledger?${qs.toString()}`);
+  if (!res.ok) throw new Error(`billing_ledger_failed_${res.status}`);
+  return (await res.json()) as CreditLedgerPageDto;
+}
+
+export async function getUsage(
+  groupBy: 'day' | 'model',
+  from?: string,
+  to?: string,
+): Promise<UsageAggregateDto[]> {
+  const qs = new URLSearchParams({ groupBy });
+  if (from) qs.set('from', from);
+  if (to) qs.set('to', to);
+  const res = await authFetch(`/api/billing/usage?${qs.toString()}`);
+  if (!res.ok) throw new Error(`billing_usage_failed_${res.status}`);
+  return (await res.json()) as UsageAggregateDto[];
 }

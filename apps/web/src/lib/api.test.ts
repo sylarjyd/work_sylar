@@ -1,5 +1,13 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { authErrorMessage, confirmRun, isUnauthorized, listConnectors, createConnector } from './api';
+import {
+  authErrorMessage,
+  confirmRun,
+  isUnauthorized,
+  listConnectors,
+  createConnector,
+  getBillingSummary,
+  getUsage,
+} from './api';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -101,5 +109,27 @@ describe('connectors api', () => {
     const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(init.method).toBe('POST');
     expect(JSON.parse(init.body as string)).toEqual({ name: 'echo', command: 'node', args: ['s.mjs'], env: { K: 'v' } });
+  });
+});
+
+describe('billing api', () => {
+  it('summary 走 /api/billing/summary', async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ balance: 10, reserved: 0 }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const out = await getBillingSummary();
+    expect(out.balance).toBe(10);
+    expect(String((fetchMock.mock.calls[0] as unknown[])[0])).toContain('/api/billing/summary');
+  });
+
+  it('usage 透传 groupBy', async () => {
+    const fetchMock = vi.fn(async () => new Response('[]', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    await getUsage('model');
+    expect(String((fetchMock.mock.calls[0] as unknown[])[0])).toContain('groupBy=model');
   });
 });

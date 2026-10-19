@@ -71,4 +71,16 @@ describe('renderStep', () => {
     const out = renderStep(ev('tool_result', { tool: 'kb.retrieve', ok: false, display: { sources: [] } }));
     expect(out).toContain('失败');
   });
+
+  it('notice 渲染为提示文本', () => {
+    expect(
+      renderStep({
+        runId: 'r1',
+        seq: 1,
+        type: 'notice',
+        payload: { code: 'budget_exceeded', message: '预算已用完' },
+        ts: 0,
+      }),
+    ).toBe('提示：预算已用完');
+  });
 });

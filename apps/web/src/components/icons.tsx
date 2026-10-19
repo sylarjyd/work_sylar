@@ -154,3 +154,13 @@ export function IconLock(props: IconProps) {
     </Svg>
   );
 }
+
+export function IconWallet(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H19v14H5.5A2.5 2.5 0 0 1 3 16.5v-9z" />
+      <path d="M3 8h16" />
+      <path d="M16 12.5h2.5v3H16a1.5 1.5 0 0 1 0-3z" />
+    </Svg>
+  );
+}

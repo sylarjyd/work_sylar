@@ -1619,3 +1619,187 @@ a {
     display: none;
   }
 }
+
+/* ================================ 计费页 ================================ */
+
+.billing-grid {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.billing-card {
+  padding: 18px 20px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-1);
+}
+
+.billing-card-main {
+  background: linear-gradient(140deg, #ffffff 0%, var(--mint-soft) 100%);
+  border-color: #cfeee2;
+}
+
+.billing-card.current {
+  border-color: var(--mint);
+  box-shadow: 0 0 0 1px var(--mint) inset;
+}
+
+.billing-label {
+  color: var(--ink-3);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+}
+
+.billing-plan {
+  margin-top: 4px;
+  font-size: 20px;
+  font-weight: 650;
+}
+
+.billing-price {
+  margin-top: 2px;
+  color: var(--mint-ink);
+  font-weight: 600;
+}
+
+.billing-stat {
+  margin-top: 4px;
+  font-size: 28px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.billing-sub {
+  margin-top: 6px;
+  color: var(--ink-2);
+  font-size: 12px;
+}
+
+.billing-bar {
+  height: 8px;
+  margin-top: 12px;
+  overflow: hidden;
+  background: rgba(0, 201, 141, 0.14);
+  border-radius: 999px;
+}
+
+.billing-bar-fill {
+  height: 100%;
+  background: var(--mint);
+  border-radius: 999px;
+  transition: width 0.3s ease;
+}
+
+.billing-section {
+  margin-bottom: 24px;
+}
+
+.billing-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.billing-heading {
+  margin-bottom: 10px;
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.billing-plans {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+}
+
+.billing-list {
+  margin: 10px 0 0;
+  padding-left: 18px;
+  color: var(--ink-2);
+  font-size: 12px;
+}
+
+.billing-list li {
+  margin-bottom: 2px;
+}
+
+.billing-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 3px;
+  background: var(--bg-deep);
+  border-radius: var(--radius-sm);
+}
+
+.billing-tab {
+  padding: 4px 12px;
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  color: var(--ink-2);
+  cursor: pointer;
+}
+
+.billing-tab.active {
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: var(--shadow-1);
+}
+
+.billing-table {
+  width: 100%;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  border-collapse: separate;
+  border-spacing: 0;
+  overflow: hidden;
+  font-size: 13px;
+}
+
+.billing-table th,
+.billing-table td {
+  padding: 10px 14px;
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+}
+
+.billing-table th {
+  color: var(--ink-3);
+  font-size: 12px;
+  font-weight: 500;
+  background: var(--surface-2);
+}
+
+.billing-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.billing-positive {
+  color: var(--mint-ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.billing-negative {
+  color: var(--danger);
+  font-variant-numeric: tabular-nums;
+}
+
+.billing-empty {
+  padding: 28px;
+  color: var(--ink-3);
+  text-align: center;
+  background: var(--surface);
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-md);
+}
+
+@media (max-width: 900px) {
+  .billing-grid {
+    grid-template-columns: 1fr;
+  }
+}
