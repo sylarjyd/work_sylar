@@ -6,6 +6,7 @@ import { createSseParser, type CreateTaskRequest } from '@ai-office/shared';
 import { TasksService } from './tasks.service';
 import { ArtifactService } from '../artifacts/artifacts.service';
 import { BillingService } from '../billing/billing.service';
+import { SettingsService } from '../settings/settings.service';
 import { InsufficientCreditsError, PlanExpiredError, RateLimitedError } from '../billing/billing.errors';
 import { parseUsageEvent } from '../billing/usage';
 import { JwtGuard } from '../auth/jwt.guard';
@@ -69,6 +70,7 @@ export class TasksController {
     private readonly tasks: TasksService,
     private readonly artifacts: ArtifactService,
     private readonly billing: BillingService,
+    private readonly settings: SettingsService,
   ) {}
 
   @Post(':id/tasks')
@@ -92,6 +94,9 @@ export class TasksController {
     // 归属校验放在预占之前：404 不应留下 hold。
     // 与 prepare 内的归属校验重复一次查询，换取「404 早于预占」。
     await this.tasks.assertOwned(sessionId, user.tenantId, user.sub);
+
+    // 配置读取放在预占之前：读失败不应留下 hold。
+    const config = await this.settings.getRunConfig();
 
     // 预占额度并做限流；失败在 hijack 之前返回，Nest 可正常写响应。
     const runId = randomUUID();
@@ -151,7 +156,16 @@ export class TasksController {
           // 配了共享密钥才带；不配时与未开启鉴权的 runtime 保持兼容。
           ...(runtimeToken ? { 'x-agent-runtime-token': runtimeToken } : {}),
         },
-        body: JSON.stringify({ runId, sessionId, tenantId, userId, goal, messages, billing }),
+        body: JSON.stringify({
+          runId,
+          sessionId,
+          tenantId,
+          userId,
+          goal,
+          messages,
+          billing,
+          config,
+        }),
         signal: connectController.signal,
       });
     } catch {

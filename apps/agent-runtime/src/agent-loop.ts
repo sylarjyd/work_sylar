@@ -14,6 +14,8 @@ export interface RunDeps {
   confirm?: ConfirmGate;
   /** 确认等待上限（毫秒）。 */
   confirmTimeoutMs?: number;
+  /** 本次运行的代码执行上限（毫秒），经 RunContext 传给 code.exec。 */
+  codeExecTimeoutMs?: number;
   /** 预占额度、允许模型与价格；缺省时不限预算。 */
   billing?: RunBilling;
 }
@@ -38,6 +40,7 @@ export async function* runAgent(req: RunRequest, deps: RunDeps): AsyncGenerator<
     userId: req.userId,
     sessionId: req.sessionId,
     runId: req.runId,
+    codeExecTimeoutMs: deps.codeExecTimeoutMs,
   };
   let seq = 0;
   const usageByModel = new Map<string, { input: number; output: number }>();

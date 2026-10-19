@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import { encodeSse } from '@ai-office/shared';
 import type { RunRequest } from '@ai-office/shared';
 import { runAgent } from './agent-loop';
+import { resolveRunConfig } from './run-config';
 import { createGateway } from './model/create-gateway';
 import type { ModelGateway } from './model/types';
 import { createTools } from './tools/registry';
@@ -55,7 +56,6 @@ export function createRuntimeServer(deps: RuntimeDeps = {}): Server {
   const validateConn = deps.validateConnector ?? defaultValidateConnector;
   // runtime 单实例持有一份确认闸门；连接 close 时按 runId 取消挂起。
   const confirm = new ConfirmBroker();
-  const confirmTimeoutMs = Number(process.env.CONFIRM_TIMEOUT_MS ?? 120000);
 
   // BFF→runtime 共享密钥：设置 AGENT_RUNTIME_TOKEN 后强制校验；
   // 未设置时失败关闭，仅放行回环来源——即使误绑 0.0.0.0，远程也无法触发
@@ -104,11 +104,14 @@ export function createRuntimeServer(deps: RuntimeDeps = {}): Server {
             const runTools = extraTools
               ? [...baseTools, ...(await extraTools(runReq.tenantId))]
               : baseTools;
+            const config = resolveRunConfig(runReq.config, process.env);
             for await (const ev of runAgent(runReq, {
               gateway,
               tools: runTools,
               confirm,
-              confirmTimeoutMs,
+              maxRounds: config.maxRounds,
+              confirmTimeoutMs: config.confirmTimeoutMs,
+              codeExecTimeoutMs: config.codeExecTimeoutMs,
               billing: runReq.billing,
               onUsage: (u) => res.write(encodeSse({ event: 'usage', data: u })),
             })) {

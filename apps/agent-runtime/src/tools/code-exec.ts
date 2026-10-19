@@ -138,6 +138,22 @@ function runSandboxed(spawn: Spawn, code: string, limits: Limits): Promise<CodeE
   });
 }
 
+/** 解析单次执行上限：请求值 ≤ 运行级上限 ≤ 服务端硬上限（60s）。 */
+export function resolveTimeLimit(
+  requested: unknown,
+  ctxLimit: unknown,
+  serverLimit: number,
+): number {
+  const server = Math.min(Math.max(serverLimit, 100), 60000);
+  const ctxMax =
+    typeof ctxLimit === 'number' && Number.isFinite(ctxLimit) && ctxLimit > 0
+      ? Math.min(ctxLimit, server)
+      : server;
+  return typeof requested === 'number' && Number.isFinite(requested) && requested > 0
+    ? Math.min(requested, ctxMax)
+    : ctxMax;
+}
+
 export function createCodeExecTool(
   env: NodeJS.ProcessEnv = process.env,
   spawn: Spawn = nodeSpawn,
@@ -160,14 +176,10 @@ export function createCodeExecTool(
       },
       required: ['code'],
     },
-    async execute(args) {
+    async execute(args, ctx) {
       const code = String(args.code ?? '');
-      const requested = args.timeoutMs;
-      // 调用方只能收紧、不能放宽服务端上限。
-      const limit =
-        typeof requested === 'number' && requested > 0
-          ? Math.min(requested, limits.timeoutMs)
-          : limits.timeoutMs;
+      // 调用方只能收紧、不能放宽；运行级上限再收紧一次。
+      const limit = resolveTimeLimit(args.timeoutMs, ctx?.codeExecTimeoutMs, limits.timeoutMs);
       return runSandboxed(spawn, code, { ...limits, timeoutMs: limit });
     },
   };

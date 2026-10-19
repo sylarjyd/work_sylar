@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createCodeExecTool } from './code-exec';
+import { createCodeExecTool, resolveTimeLimit } from './code-exec';
 
 const tool = (env: NodeJS.ProcessEnv = {}) => createCodeExecTool(env);
 
@@ -53,5 +53,23 @@ describe('code.exec 沙箱', () => {
     expect(t.name).toBe('code.exec');
     expect(t.permission).toBe('confirm');
     expect(JSON.stringify(t.parameters)).toContain('code');
+  });
+});
+
+describe('resolveTimeLimit', () => {
+  it('调用方只能收紧，不能放宽服务端上限', () => {
+    expect(resolveTimeLimit(999999, undefined, 5000)).toBe(5000);
+    expect(resolveTimeLimit(1000, undefined, 5000)).toBe(1000);
+  });
+
+  it('运行级上限进一步收紧服务端上限', () => {
+    expect(resolveTimeLimit(undefined, 2000, 5000)).toBe(2000);
+    expect(resolveTimeLimit(4000, 2000, 5000)).toBe(2000);
+    expect(resolveTimeLimit(500, 2000, 5000)).toBe(500);
+  });
+
+  it('服务端上限硬夹到 60s', () => {
+    expect(resolveTimeLimit(undefined, undefined, 120000)).toBe(60000);
+    expect(resolveTimeLimit(undefined, 90000, 5000)).toBe(5000);
   });
 });

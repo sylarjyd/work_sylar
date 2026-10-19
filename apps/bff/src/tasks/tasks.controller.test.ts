@@ -15,6 +15,7 @@ import { SessionsService } from '../sessions/sessions.service';
 import { PrismaService } from '../db/prisma.service';
 import { signToken } from '../auth/jwt';
 import { BillingService } from '../billing/billing.service';
+import { SettingsService } from '../settings/settings.service';
 import { InsufficientCreditsError, PlanExpiredError, RateLimitedError } from '../billing/billing.errors';
 
 let upstream: Server;
@@ -200,6 +201,16 @@ beforeAll(async () => {
       TasksService,
       ArtifactService,
       { provide: BillingService, useValue: fakeBilling },
+      {
+        provide: SettingsService,
+        useValue: {
+          getRunConfig: async () => ({
+            maxRounds: 3,
+            confirmTimeoutMs: 1000,
+            codeExecTimeoutMs: 1234,
+          }),
+        },
+      },
       { provide: PrismaService, useValue: fakePrisma },
       { provide: ARTIFACT_STORAGE, useValue: { getObjectStream: async () => { throw new Error('unused'); } } },
     ],
@@ -273,6 +284,11 @@ describe('TasksController', () => {
     });
     expect(res.statusCode).toBe(200);
     expect(JSON.parse(lastRunsBody).userId).toBe('u1');
+    expect(JSON.parse(lastRunsBody).config).toEqual({
+      maxRounds: 3,
+      confirmTimeoutMs: 1000,
+      codeExecTimeoutMs: 1234,
+    });
   });
 
   it('SSE 里的 artifact step 触发产物落库', async () => {
