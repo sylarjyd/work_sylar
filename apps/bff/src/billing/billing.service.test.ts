@@ -112,6 +112,8 @@ function makeDb() {
       findMany: async () => [...db.txs],
       findUnique: async ({ where }: any) =>
         db.txs.find((t) => (where.id ? t.id === where.id : t.runId === where.runId)) ?? null,
+      findFirst: async ({ where }: any) =>
+        db.txs.find((t) => t.id === where.id && t.tenantId === where.tenantId) ?? null,
     },
     creditHold: {
       create: async ({ data }: any) => {

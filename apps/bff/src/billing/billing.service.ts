@@ -70,7 +70,12 @@ export class BillingService implements OnModuleDestroy {
 
   /** 应用关闭时释放限流器的 Redis 连接，避免进程退出前残留连接。 */
   async onModuleDestroy(): Promise<void> {
-    await this.limiter.close?.();
+    try {
+      await this.limiter.close?.();
+    } catch (err) {
+      // 关闭限流器失败不应让 app.close() reject。
+      this.logger.warn(`[billing] 关闭限流器失败：${(err as Error).message}`);
+    }
   }
 
   // ------------------------------------------------------------------ 套餐与发放
@@ -371,8 +376,9 @@ export class BillingService implements OnModuleDestroy {
 
   async ledger(tenantId: string, limit: number, cursor?: string): Promise<CreditLedgerPageDto> {
     const take = Math.min(Math.max(Math.trunc(limit) || 20, 1), 100);
+    // 游标必须限定在当前租户，避免跨租户游标成为存在性侧信道。
     const cursorRow = cursor
-      ? await this.prisma.creditTx.findUnique({ where: { id: cursor } })
+      ? await this.prisma.creditTx.findFirst({ where: { id: cursor, tenantId } })
       : null;
     const rows = await this.prisma.creditTx.findMany({
       where: {
