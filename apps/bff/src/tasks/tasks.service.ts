@@ -4,8 +4,8 @@ import { PrismaService } from '../db/prisma.service';
 import { SessionsService } from '../sessions/sessions.service';
 import type { AgentEvent, ChatMessage } from '@ai-office/shared';
 
-/** 并发抢占同一 seq 时的最大尝试次数。 */
-const MAX_SEQ_RETRIES = 5;
+/** 并发抢占同一 seq 时的最大尝试次数（首次 + 最多 4 次重试）。 */
+const MAX_SEQ_ATTEMPTS = 5;
 
 @Injectable()
 export class TasksService {
@@ -58,7 +58,7 @@ export class TasksService {
         });
       } catch (err) {
         // 非唯一键冲突说明不是并发抢占 seq，立即抛出；仅 P2002 值得重试。
-        if ((err as { code?: string }).code !== 'P2002' || attempt >= MAX_SEQ_RETRIES - 1) {
+        if ((err as { code?: string }).code !== 'P2002' || attempt >= MAX_SEQ_ATTEMPTS - 1) {
           throw err;
         }
       }
@@ -105,7 +105,7 @@ export class TasksService {
         await this.prisma.message.create({ data: { sessionId, role, content, seq } });
         return;
       } catch (err) {
-        if ((err as { code?: string }).code !== 'P2002' || attempt >= MAX_SEQ_RETRIES - 1) {
+        if ((err as { code?: string }).code !== 'P2002' || attempt >= MAX_SEQ_ATTEMPTS - 1) {
           throw err;
         }
       }

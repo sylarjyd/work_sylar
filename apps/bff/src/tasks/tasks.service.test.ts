@@ -97,7 +97,7 @@ describe('TasksService', () => {
 
     const result = await svc.prepare('s1', 't1', 'u1', '新目标', 'run1');
 
-    // 首次冲突（seq 1 已被占用）后重试成功，仍写 seq 1，不出现空洞或重复。
+    // 首次 create 被注入 P2002 异常后重试成功，仍写 seq 1，不出现空洞或重复。
     expect(result.taskId).toBeTruthy();
     expect(result.runId).toBe('run1');
     expect(ctx.db.messageCreateCalls).toBe(2);
