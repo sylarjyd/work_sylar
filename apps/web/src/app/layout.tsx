@@ -1,11 +1,12 @@
 import type { ReactNode } from 'react';
+import './globals.css';
 
-export const metadata = { title: 'AI 办公智能体' };
+export const metadata = { title: 'AI 办公智能体 · 智能工作台' };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="zh-CN">
-      <body style={{ fontFamily: 'system-ui, sans-serif', margin: 24 }}>{children}</body>
+      <body>{children}</body>
     </html>
   );
 }
