@@ -178,7 +178,7 @@ export default function BillingPage() {
                 <div className="billing-label">最近到期</div>
                 <div className="billing-stat">{summary.nextExpiry ? summary.nextExpiry.amount : 0}</div>
                 <div className="billing-sub">
-                  {summary.nextExpiry ? stamp(summary.nextExpiry.expiresAt) : '暂无积分'}
+                  {summary.nextExpiry ? stamp(summary.nextExpiry.expiresAt) : '无到期积分'}
                 </div>
               </div>
             </section>
