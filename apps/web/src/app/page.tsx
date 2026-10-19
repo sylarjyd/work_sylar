@@ -421,7 +421,7 @@ export default function Home() {
                     <div className="artifact-name">{a.filename}</div>
                     <div className="artifact-meta">
                       {formatBytes(a.size)} · v{a.version || 0} ·{' '}
-                      {new Date(a.createdAt).toLocaleString()}
+                      {new Date(a.createdAt).toLocaleString('zh-CN')}
                     </div>
                     <div className="artifact-actions">
                       {a.id ? (

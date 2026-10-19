@@ -231,7 +231,7 @@ export default function ConnectorsPage() {
                           <div key={i} className="env-row">
                             <input
                               className="input"
-                              placeholder="KEY"
+                              placeholder="变量名"
                               value={row.key}
                               onChange={(e) =>
                                 setEnvRows((p) =>
@@ -241,7 +241,7 @@ export default function ConnectorsPage() {
                             />
                             <input
                               className="input"
-                              placeholder="VALUE"
+                              placeholder="变量值"
                               type="password"
                               value={row.value}
                               onChange={(e) =>

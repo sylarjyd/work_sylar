@@ -1209,6 +1209,16 @@ a {
   font-size: 12.5px;
 }
 
+.fallback-page {
+  max-width: 460px;
+  margin: 120px auto;
+  padding: 0 24px;
+}
+
+.fallback-actions {
+  margin-top: 16px;
+}
+
 .notice {
   display: flex;
   gap: 14px;

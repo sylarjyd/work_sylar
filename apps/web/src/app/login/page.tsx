@@ -93,7 +93,7 @@ export default function LoginPage() {
                 type="email"
                 required
                 autoComplete="email"
-                placeholder="you@company.com"
+                placeholder="请输入邮箱地址"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
               />

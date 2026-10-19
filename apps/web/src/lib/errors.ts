@@ -12,6 +12,7 @@ export function errorText(err: unknown): string {
     if (status === '403') return '没有权限执行该操作';
     if (status === '404') return '请求的资源不存在';
     if (status === '413') return '文件过大，请压缩后重试';
+    if (status.startsWith('4')) return '请求无效，请检查输入后重试';
     if (status.startsWith('5')) return '服务暂时不可用，请稍后重试';
   }
   return msg;

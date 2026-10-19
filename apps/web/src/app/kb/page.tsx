@@ -167,7 +167,7 @@ export default function KbPage() {
                       <span className="dot-sep" />
                       <span>{formatBytes(d.size)}</span>
                       <span className="dot-sep" />
-                      <span>{new Date(d.createdAt).toLocaleString()}</span>
+                      <span>{new Date(d.createdAt).toLocaleString('zh-CN')}</span>
                       {d.error && <span style={{ color: 'var(--danger)' }}>{d.error}</span>}
                     </div>
                   </div>
