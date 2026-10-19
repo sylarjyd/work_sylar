@@ -281,8 +281,11 @@ export class BillingService implements OnModuleDestroy {
       const hold = await tx.creditHold.findUnique({ where: { runId } });
       const models = parseModels(current.models);
       const prices = await this.loadPrices(tx);
-      // 有 hold 时封顶在预占额度；无 hold（异常兜底）则按实际用量。
-      const credits = computeCredits(models, prices, hold?.amount ?? Number.MAX_SAFE_INTEGER);
+      const credit = await tx.tenantCredit.findUnique({ where: { tenantId: current.tenantId } });
+      // 有 hold 时封顶在预占额度；无 hold（孤儿/超时兜底）时最多扣到可用余额，
+      // 不得吃掉其他运行已预占的额度。
+      const cap = hold ? hold.amount : Math.max(0, (credit?.balance ?? 0) - (credit?.reserved ?? 0));
+      const credits = computeCredits(models, prices, cap);
 
       const now = new Date();
       await this.expireDueLots(tx, current.tenantId, now);
@@ -290,30 +293,36 @@ export class BillingService implements OnModuleDestroy {
         where: { tenantId: current.tenantId, remaining: { gt: 0 } },
       });
       const { allocations, deducted } = allocate(lots, credits);
-      for (const a of allocations) {
-        await tx.creditLot.update({
-          where: { id: a.lotId },
-          data: { remaining: { decrement: a.amount } },
+      // 没有实扣时不写 consume 流水、不动余额，仅做 hold 释放与结算标记。
+      if (deducted > 0) {
+        for (const a of allocations) {
+          await tx.creditLot.update({
+            where: { id: a.lotId },
+            data: { remaining: { decrement: a.amount } },
+          });
+        }
+        await tx.creditTx.create({
+          data: {
+            tenantId: current.tenantId,
+            type: 'consume',
+            amount: -deducted,
+            source: 'usage',
+            runId,
+            note: `run:${runId}`,
+          },
+        });
+        await tx.tenantCredit.update({
+          where: { tenantId: current.tenantId },
+          data: { balance: { decrement: deducted } },
         });
       }
-      await tx.creditTx.create({
-        data: {
-          tenantId: current.tenantId,
-          type: 'consume',
-          amount: -deducted,
-          source: 'usage',
-          runId,
-          note: `run:${runId}`,
-        },
-      });
-      await tx.tenantCredit.update({
-        where: { tenantId: current.tenantId },
-        data: {
-          balance: { decrement: deducted },
-          ...(hold ? { reserved: { decrement: hold.amount } } : {}),
-        },
-      });
-      if (hold) await tx.creditHold.delete({ where: { runId } });
+      if (hold) {
+        await tx.tenantCredit.update({
+          where: { tenantId: current.tenantId },
+          data: { reserved: { decrement: hold.amount } },
+        });
+        await tx.creditHold.delete({ where: { runId } });
+      }
       await tx.usageRecord.update({
         where: { runId },
         data: { credits: deducted, status: 'settled', settledAt: now },
@@ -584,15 +593,18 @@ export class BillingService implements OnModuleDestroy {
       if (run?.status === 'running') {
         // 预占 TTL 已过期仍显示 running：说明持有进程已崩溃/失联，做补偿收尾。
         // BFF 空闲超时仅 5 分钟，24h 后仍 running 必然异常，不应让 hold 永久占用。
-        await this.prisma.run.updateMany({
+        const finalized = await this.prisma.run.updateMany({
           where: { id: hold.runId, status: 'running' },
           data: { status: 'failed', endedAt: now },
         });
-        await this.prisma.task.updateMany({
-          where: { id: run.taskId, status: 'running' },
-          data: { status: 'failed' },
-        });
-        this.logger.warn(`[billing] 回收陈旧运行 run=${hold.runId}（预占已过期）`);
+        // 条件更新可能落空（run 已被正常收尾），此时无需再动 task、也不应告警。
+        if (finalized.count > 0) {
+          await this.prisma.task.updateMany({
+            where: { id: run.taskId, status: 'running' },
+            data: { status: 'failed' },
+          });
+          this.logger.warn(`[billing] 回收陈旧运行 run=${hold.runId}（预占已过期）`);
+        }
       }
       await this.releaseHold(hold.runId);
     }

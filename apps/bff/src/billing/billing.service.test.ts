@@ -320,6 +320,41 @@ describe('BillingService', () => {
     expect(ctx.db.credits[0].balance).toBe(balance);
   });
 
+  it('无 hold 结算最多扣到可用余额，不吃掉其他运行的预占', async () => {
+    await svc.summary('t1');
+    // r2 先预占 50，余额 500 中可用只剩 450。
+    const billing = await svc.beginRun('r2', 't1');
+    expect(billing.maxCredits).toBe(50);
+    expect(ctx.db.credits[0].reserved).toBe(50);
+
+    // r1 没有 hold（异常/超时兜底路径），用量远超余额。
+    await svc.recordUsage(
+      'r1',
+      { tenantId: 't1', userId: 'u1', sessionId: 's1' },
+      {
+        input: 10_000_000,
+        output: 10_000_000,
+        models: [{ model: 'mock', input: 10_000_000, output: 10_000_000 }],
+      },
+    );
+    await svc.settle('r1');
+
+    const credit = ctx.db.credits[0];
+    const usage = ctx.db.usages.find((u) => u.runId === 'r1')!;
+    const consumed = ctx.db.txs.filter((t) => t.type === 'consume');
+    expect(usage).toMatchObject({ status: 'settled', credits: 450 });
+    expect(consumed).toHaveLength(1);
+    expect(consumed[0].amount).toBe(-450);
+    expect(credit.balance).toBe(50);
+    expect(credit.reserved).toBe(50);
+    expect(credit.balance).toBeGreaterThanOrEqual(0);
+    // 不变量：实扣 + 仍预占不超过结算前余额（等价于结算后余额 >= 预占）。
+    expect(usage.credits + credit.reserved).toBeLessThanOrEqual(credit.balance + 450);
+    expect(credit.reserved).toBeLessThanOrEqual(credit.balance);
+    // r2 的预占仍然存在。
+    expect(ctx.db.holds).toHaveLength(1);
+  });
+
   it('releaseHold 归还预占', async () => {
     await svc.summary('t1');
     await svc.beginRun('r1', 't1');
