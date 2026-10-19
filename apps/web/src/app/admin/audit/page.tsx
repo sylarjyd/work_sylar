@@ -91,24 +91,28 @@ export default function AdminAuditPage() {
           <input
             className="admin-input"
             placeholder="动作（如 user.update）"
+            aria-label="动作"
             value={action}
             onChange={(e) => { setPage(1); setAction(e.target.value); }}
           />
           <input
             className="admin-input"
             placeholder="对象类型"
+            aria-label="对象类型"
             value={targetType}
             onChange={(e) => { setPage(1); setTargetType(e.target.value); }}
           />
           <input
             className="admin-input"
             placeholder="对象 ID"
+            aria-label="对象 ID"
             value={targetId}
             onChange={(e) => { setPage(1); setTargetId(e.target.value); }}
           />
           <input
             className="admin-input"
             placeholder="操作人 ID"
+            aria-label="操作人 ID"
             value={actorId}
             onChange={(e) => { setPage(1); setActorId(e.target.value); }}
           />

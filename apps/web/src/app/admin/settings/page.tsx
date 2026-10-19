@@ -33,6 +33,16 @@ export default function AdminSettingsPage() {
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const loadSeq = useRef(0);
   const inFlight = useRef(false);
+  // 有未保存输入的参数 key：刷新时保留其草稿，避免被服务端值静默覆盖。
+  const dirtyRef = useRef<Set<string>>(new Set());
+
+  function markDirty(key: string): void {
+    dirtyRef.current.add(key);
+  }
+
+  function clearDirty(key: string): void {
+    dirtyRef.current.delete(key);
+  }
 
   const handleErr = useCallback(
     (err: unknown): boolean => {
@@ -59,7 +69,14 @@ export default function AdminSettingsPage() {
       // 过期响应不写状态
       if (id !== loadSeq.current) return true;
       setItems(rows);
-      setDraft(Object.fromEntries(rows.map((r) => [r.key, String(r.value)])));
+      // 仅保留有未保存修改的行，其余以服务端值为准。
+      setDraft((prev) => {
+        const next: Record<string, string> = {};
+        for (const r of rows) {
+          next[r.key] = dirtyRef.current.has(r.key) ? (prev[r.key] ?? String(r.value)) : String(r.value);
+        }
+        return next;
+      });
       return true;
     } catch (err) {
       if (id !== loadSeq.current) return true;
@@ -102,6 +119,8 @@ export default function AdminSettingsPage() {
     setBusyKey(item.key);
     try {
       await updateAdminSetting(item.key, value);
+      // 保存成功后才清除 dirty；失败时保留未保存的输入。
+      clearDirty(item.key);
       await refreshAfterWrite();
     } catch (err) {
       handleErr(err);
@@ -120,6 +139,8 @@ export default function AdminSettingsPage() {
     setNotice('');
     try {
       await resetAdminSetting(item.key);
+      // 恢复默认成功后清除 dirty；失败时保留未保存的输入。
+      clearDirty(item.key);
       await refreshAfterWrite();
     } catch (err) {
       handleErr(err);
@@ -180,11 +201,18 @@ export default function AdminSettingsPage() {
                   <td>{item.key}</td>
                   <td>
                     <input
+                      type="number"
+                      min={item.min}
+                      max={item.max}
+                      step={1}
                       className="admin-input"
                       style={{ width: 120 }}
                       value={draft[item.key] ?? ''}
                       disabled={busy}
-                      onChange={(e) => setDraft({ ...draft, [item.key]: e.target.value })}
+                      onChange={(e) => {
+                        markDirty(item.key);
+                        setDraft({ ...draft, [item.key]: e.target.value });
+                      }}
                     />
                   </td>
                   <td>{SOURCE_LABEL[item.source] ?? item.source}</td>
