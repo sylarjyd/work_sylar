@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { milliCreditsFor, toUsageEvent } from './billing';
+import { milliCreditsFor, scaledValue, toUsageEvent } from './billing';
 
 const prices = {
   mock: { inputMilliCreditsPer1k: 100, outputMilliCreditsPer1k: 300 },
@@ -21,6 +21,15 @@ describe('milliCreditsFor', () => {
 
   it('未知模型按 0 计，不抛错', () => {
     expect(milliCreditsFor([{ model: 'nope', input: 9999, output: 9999 }], prices)).toBe(0);
+  });
+});
+
+describe('scaledValue', () => {
+  it('返回未折算的整数分子，便于与 maxCredits × 1_000_000 精确比较', () => {
+    // 1000 tokens × 100 毫积分/1K = 100000
+    expect(scaledValue([{ model: 'mock', input: 1000, output: 0 }], prices)).toBe(100000);
+    // 未知模型不计入
+    expect(scaledValue([{ model: 'nope', input: 1000, output: 1000 }], prices)).toBe(0);
   });
 });
 

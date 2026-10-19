@@ -6,18 +6,26 @@ export interface ModelUsage {
   output: number;
 }
 
+/** 未折算的整数分子：Σ tokens × 费率；与 maxCredits × 1_000_000 比较可避免浮点误差。 */
+export function scaledValue(
+  models: ModelUsage[],
+  prices: Record<string, ModelPriceDto>,
+): number {
+  let scaled = 0;
+  for (const m of models) {
+    const p = prices[m.model];
+    if (!p) continue;
+    scaled += m.input * p.inputMilliCreditsPer1k + m.output * p.outputMilliCreditsPer1k;
+  }
+  return scaled;
+}
+
 /** 累计用量换算成毫积分：tokens × 毫积分/1K ÷ 1000。 */
 export function milliCreditsFor(
   models: ModelUsage[],
   prices: Record<string, ModelPriceDto>,
 ): number {
-  let milli = 0;
-  for (const m of models) {
-    const p = prices[m.model];
-    if (!p) continue;
-    milli += (m.input * p.inputMilliCreditsPer1k + m.output * p.outputMilliCreditsPer1k) / 1000;
-  }
-  return milli;
+  return scaledValue(models, prices) / 1000;
 }
 
 /** Map<model, usage> → usage 事件（累计值）。 */

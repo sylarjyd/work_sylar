@@ -3,7 +3,7 @@ import { runAgent } from './agent-loop';
 import type { ModelGateway } from './model/types';
 import type { Tool } from './tools/types';
 import type { ConfirmGate } from './confirm/broker';
-import type { AgentEvent, RunRequest } from '@ai-office/shared';
+import type { AgentEvent, RunRequest, UsageEvent } from '@ai-office/shared';
 
 function collect(gen: AsyncGenerator<AgentEvent>): Promise<AgentEvent[]> {
   return (async () => {
@@ -56,6 +56,36 @@ describe('runAgent', () => {
     expect(events.map((e) => e.seq)).toEqual([0, 1, 2, 3]);
     expect(usages).toEqual([
       { input: 3, output: 3, models: [{ model: 'mock', input: 3, output: 3 }] },
+    ]);
+  });
+
+  it('模型调用中途抛错时仍上报已产生的用量', async () => {
+    let round = 0;
+    const gateway: ModelGateway = {
+      async chat() {
+        round++;
+        if (round === 1) {
+          return {
+            content: '先搜索',
+            toolCalls: [{ id: 'c1', name: 'web.search', args: { query: 'x' } }],
+            usage: { input: 1, output: 0 }, model: 'mock',
+          };
+        }
+        throw new Error('boom');
+      },
+    };
+    const usages: UsageEvent[] = [];
+    const gen = runAgent(req, { gateway, tools: [echoTool], onUsage: (u) => usages.push(u) });
+    // 手动消费：collect helper 在异常时会直接向上抛，无法在此断言 finally 的上报。
+    await expect(
+      (async () => {
+        for await (const _ of gen) {
+          /* drain */
+        }
+      })(),
+    ).rejects.toThrow('boom');
+    expect(usages).toEqual([
+      { input: 1, output: 0, models: [{ model: 'mock', input: 1, output: 0 }] },
     ]);
   });
 
