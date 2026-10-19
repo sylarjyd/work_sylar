@@ -26,7 +26,11 @@ export default function AdminSessionsPage() {
   const [messages, setMessages] = useState<AdminMessageDto[]>([]);
   const [messageTotal, setMessageTotal] = useState(0);
   const [messagePage, setMessagePage] = useState(1);
+  // 消息归属的会话；仅当其与当前详情一致时才展示消息，避免旧消息挂到新详情下
+  const [messagesFor, setMessagesFor] = useState<string | null>(null);
+  const [messagesLoading, setMessagesLoading] = useState(false);
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const [loading, setLoading] = useState(true);
 
   const handleErr = useCallback(
@@ -81,6 +85,7 @@ export default function AdminSessionsPage() {
   const loadMessages = useCallback(
     async (id: string, targetPage: number): Promise<boolean> => {
       const seq = ++messageSeq.current;
+      setMessagesLoading(true);
       try {
         const data = await listAdminMessages(id, { page: targetPage, pageSize: 50 });
         // 过期响应不写状态（切换会话或翻页已产生新请求）
@@ -88,10 +93,13 @@ export default function AdminSessionsPage() {
         setMessages(data.items);
         setMessageTotal(data.total);
         setMessagePage(targetPage);
+        setMessagesFor(id);
         return true;
       } catch (err) {
         if (seq !== messageSeq.current) return true;
         return !handleErr(err);
+      } finally {
+        if (seq === messageSeq.current) setMessagesLoading(false);
       }
     },
     [handleErr],
@@ -99,12 +107,19 @@ export default function AdminSessionsPage() {
 
   async function openDetail(id: string) {
     const seq = ++detailSeq.current;
+    // 作废旧会话的在途消息请求，并清空消息区，避免「新详情 + 旧消息」
+    messageSeq.current++;
+    setMessages([]);
+    setMessageTotal(0);
+    setMessagePage(1);
+    setMessagesFor(null);
+    setMessagesLoading(false);
     setError('');
     try {
       const data = await getAdminSession(id);
       if (seq !== detailSeq.current) return;
       setDetail(data);
-      await loadMessages(id, 1);
+      void loadMessages(id, 1);
     } catch (err) {
       if (seq !== detailSeq.current) return;
       handleErr(err);
@@ -119,6 +134,8 @@ export default function AdminSessionsPage() {
     setMessages([]);
     setMessageTotal(0);
     setMessagePage(1);
+    setMessagesFor(null);
+    setMessagesLoading(false);
   }
 
   const inFlight = useRef(false);
@@ -130,11 +147,15 @@ export default function AdminSessionsPage() {
     inFlight.current = true;
     setBusy(true);
     setError('');
+    setNotice('');
     try {
       await archiveAdminSession(item.id);
       // 功能性更新：只更新当前详情，避免旧闭包覆盖用户随后打开的其它会话。
       setDetail((d) => (d && d.id === item.id ? { ...d, status: 'archived' } : d));
-      await loadRef.current();
+      // 写操作已成功，先给出明确提示，避免补刷新失败被误判为写失败而重复提交
+      setNotice('操作已成功，正在刷新数据…');
+      const ok = await loadRef.current();
+      setNotice(ok ? '操作已成功。' : '操作已成功，但数据刷新失败，请勿重复提交；稍后可刷新页面确认。');
     } catch (err) {
       handleErr(err);
     } finally {
@@ -159,6 +180,16 @@ export default function AdminSessionsPage() {
           </div>
         )}
 
+        {notice && (
+          <div
+            className="banner"
+            role="status"
+            style={{ marginBottom: 16, background: 'var(--surface-2)', border: '1px solid var(--line)' }}
+          >
+            {notice}
+          </div>
+        )}
+
         <div className="admin-toolbar">
           <input className="admin-input" placeholder="标题" value={q} onChange={(e) => { setPage(1); setQ(e.target.value); }} />
           <input className="admin-input" placeholder="租户 ID" value={tenantId} onChange={(e) => { setPage(1); setTenantId(e.target.value); }} />
@@ -177,48 +208,56 @@ export default function AdminSessionsPage() {
             <p className="admin-muted">
               {detail.userEmail} · 状态 {detail.status} · 消息 {detail.messageCount} · 任务 {detail.taskCount} · 产物 {detail.artifactCount}
             </p>
-            {messages.length === 0 ? (
-              <div className="admin-empty">暂无消息</div>
-            ) : (
-              <table className="admin-table">
-                <thead>
-                  <tr>
-                    <th>seq</th>
-                    <th>角色</th>
-                    <th>内容</th>
-                    <th>时间</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {messages.map((m) => (
-                    <tr key={m.id}>
-                      <td className="numeric">{m.seq}</td>
-                      <td>{m.role}</td>
-                      <td style={{ whiteSpace: 'pre-wrap' }}>{m.content}</td>
-                      <td>{new Date(m.createdAt).toLocaleString('zh-CN', { hour12: false })}</td>
+            {messagesFor === detail.id ? (
+              messages.length === 0 ? (
+                <div className="admin-empty">暂无消息</div>
+              ) : (
+                <table className="admin-table">
+                  <thead>
+                    <tr>
+                      <th>seq</th>
+                      <th>角色</th>
+                      <th>内容</th>
+                      <th>时间</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {messages.map((m) => (
+                      <tr key={m.id}>
+                        <td className="numeric">{m.seq}</td>
+                        <td>{m.role}</td>
+                        <td style={{ whiteSpace: 'pre-wrap' }}>{m.content}</td>
+                        <td>{new Date(m.createdAt).toLocaleString('zh-CN', { hour12: false })}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )
+            ) : (
+              <div className="admin-empty">{messagesLoading ? '消息加载中…' : '消息加载失败，请重试'}</div>
             )}
             <div className="admin-pager">
-              <button
-                type="button"
-                className="admin-btn"
-                disabled={messagePage <= 1}
-                onClick={() => void loadMessages(detail.id, messagePage - 1)}
-              >
-                上一页
-              </button>
-              <span>第 {messagePage} 页 / 共 {messageTotal} 条</span>
-              <button
-                type="button"
-                className="admin-btn"
-                disabled={messagePage * 50 >= messageTotal}
-                onClick={() => void loadMessages(detail.id, messagePage + 1)}
-              >
-                下一页
-              </button>
+              {messagesFor === detail.id && (
+                <>
+                  <button
+                    type="button"
+                    className="admin-btn"
+                    disabled={messagePage <= 1}
+                    onClick={() => void loadMessages(detail.id, messagePage - 1)}
+                  >
+                    上一页
+                  </button>
+                  <span>第 {messagePage} 页 / 共 {messageTotal} 条</span>
+                  <button
+                    type="button"
+                    className="admin-btn"
+                    disabled={messagePage * 50 >= messageTotal}
+                    onClick={() => void loadMessages(detail.id, messagePage + 1)}
+                  >
+                    下一页
+                  </button>
+                </>
+              )}
               <button type="button" className="admin-btn" disabled={busy} onClick={closeDetail}>
                 关闭
               </button>

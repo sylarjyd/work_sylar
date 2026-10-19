@@ -31,6 +31,7 @@ export default function AdminPlansPage() {
   const [modelsText, setModelsText] = useState('');
   const [editing, setEditing] = useState<string | null>(null);
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const [loading, setLoading] = useState(true);
 
   const handleErr = useCallback(
@@ -106,6 +107,7 @@ export default function AdminPlansPage() {
   async function save() {
     if (inFlight.current) return;
     setError('');
+    setNotice('');
     const payload: AdminPlanInput = {
       ...form,
       allowedModels: modelsText.split(',').map((m) => m.trim()).filter(Boolean),
@@ -136,7 +138,10 @@ export default function AdminPlansPage() {
         await createAdminPlan(payload);
       }
       resetForm();
-      await loadRef.current();
+      // 写操作已成功，先给出明确提示，避免补刷新失败被误判为写失败而重复提交
+      setNotice('操作已成功，正在刷新数据…');
+      const ok = await loadRef.current();
+      setNotice(ok ? '操作已成功。' : '操作已成功，但数据刷新失败，请勿重复提交；稍后可刷新页面确认。');
     } catch (err) {
       handleErr(err);
     } finally {
@@ -151,9 +156,14 @@ export default function AdminPlansPage() {
     inFlight.current = true;
     setBusy(true);
     setError('');
+    setNotice('');
     try {
       await updateAdminPlan(plan.id, { active: false });
-      await loadRef.current();
+      // 表单若正编辑该套餐，需重置，避免残留的 active: true 在后续保存时把套餐重新启用
+      if (editing === plan.id) resetForm();
+      setNotice('操作已成功，正在刷新数据…');
+      const ok = await loadRef.current();
+      setNotice(ok ? '操作已成功。' : '操作已成功，但数据刷新失败，请勿重复提交；稍后可刷新页面确认。');
     } catch (err) {
       handleErr(err);
     } finally {
@@ -178,6 +188,16 @@ export default function AdminPlansPage() {
           </div>
         )}
 
+        {notice && (
+          <div
+            className="banner"
+            role="status"
+            style={{ marginBottom: 16, background: 'var(--surface-2)', border: '1px solid var(--line)' }}
+          >
+            {notice}
+          </div>
+        )}
+
         <section className="admin-panel">
           <h2 className="billing-heading">{editing ? `编辑 ${editing}` : '新建套餐'}</h2>
           <div className="admin-form">
@@ -196,23 +216,23 @@ export default function AdminPlansPage() {
             </label>
             <label className="admin-field">
               价格（分/月）
-              <input className="admin-input" type="number" value={form.priceCents} disabled={busy} onChange={(e) => setForm({ ...form, priceCents: Number(e.target.value) })} />
+              <input className="admin-input" type="number" min={0} step={1} value={form.priceCents} disabled={busy} onChange={(e) => setForm({ ...form, priceCents: Number(e.target.value) })} />
             </label>
             <label className="admin-field">
               月度基础积分
-              <input className="admin-input" type="number" value={form.monthlyBaseCredits} disabled={busy} onChange={(e) => setForm({ ...form, monthlyBaseCredits: Number(e.target.value) })} />
+              <input className="admin-input" type="number" min={0} step={1} value={form.monthlyBaseCredits} disabled={busy} onChange={(e) => setForm({ ...form, monthlyBaseCredits: Number(e.target.value) })} />
             </label>
             <label className="admin-field">
               月度赠送积分
-              <input className="admin-input" type="number" value={form.monthlyBonusCredits} disabled={busy} onChange={(e) => setForm({ ...form, monthlyBonusCredits: Number(e.target.value) })} />
+              <input className="admin-input" type="number" min={0} step={1} value={form.monthlyBonusCredits} disabled={busy} onChange={(e) => setForm({ ...form, monthlyBonusCredits: Number(e.target.value) })} />
             </label>
             <label className="admin-field">
               单次上限
-              <input className="admin-input" type="number" value={form.maxCreditsPerRun} disabled={busy} onChange={(e) => setForm({ ...form, maxCreditsPerRun: Number(e.target.value) })} />
+              <input className="admin-input" type="number" min={0} step={1} value={form.maxCreditsPerRun} disabled={busy} onChange={(e) => setForm({ ...form, maxCreditsPerRun: Number(e.target.value) })} />
             </label>
             <label className="admin-field">
               RPM
-              <input className="admin-input" type="number" value={form.rpm} disabled={busy} onChange={(e) => setForm({ ...form, rpm: Number(e.target.value) })} />
+              <input className="admin-input" type="number" min={0} step={1} value={form.rpm} disabled={busy} onChange={(e) => setForm({ ...form, rpm: Number(e.target.value) })} />
             </label>
             <label className="admin-field">
               允许模型（逗号分隔）

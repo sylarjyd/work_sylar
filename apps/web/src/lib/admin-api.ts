@@ -66,6 +66,11 @@ export function adminErrorText(err: unknown): string {
     'admin_failed_400_free_not_deactivatable': '免费套餐不可停用',
     'admin_failed_400_model_price_missing': '套餐中的模型必须先配置价格',
     'admin_failed_400_model_in_use': '模型正被启用套餐引用，无法删除',
+    'admin_failed_400_invalid_plan_id': '套餐标识不合法（仅支持小写字母、数字与连字符）',
+    'admin_failed_400_invalid_name': '套餐名称不能为空',
+    'admin_failed_400_invalid_allowedModels': '允许模型不能为空',
+    'admin_failed_400_invalid_priceCents': '价格必须是非负整数',
+    'admin_failed_409_plan_exists': '套餐标识已存在，请更换标识',
     'admin_failed_409_model_exists': '该模型价格已存在',
     'admin_failed_404_setting_not_found': '参数不存在',
   };
