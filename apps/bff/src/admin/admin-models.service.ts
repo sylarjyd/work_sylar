@@ -39,9 +39,9 @@ export function listProviders(env: NodeJS.ProcessEnv): AdminModelProviderDto[] {
   return [{ name: 'default', models: [env.MODEL_NAME ?? 'deepseek-chat'] }];
 }
 
-/** 价格必须是非负安全整数，避免浮点或溢出导致计费失真。 */
+/** 价格必须是非负的 Int32 整数，避免浮点或溢出导致计费失真。 */
 function priceInt(raw: unknown): number {
-  if (typeof raw !== 'number' || !Number.isSafeInteger(raw) || raw < 0) {
+  if (typeof raw !== 'number' || !Number.isSafeInteger(raw) || raw < 0 || raw > 2_147_483_647) {
     throw new BadRequestException('invalid_price');
   }
   return raw;
@@ -110,10 +110,12 @@ export class AdminModelsService {
     body: { inputMilliCreditsPer1k?: unknown; outputMilliCreditsPer1k?: unknown },
     actor: AdminActor,
   ): Promise<AdminModelPriceDto> {
+    // 路径参数可能带空白，统一归一化后再查询/更新/审计。
+    const name = modelName(model);
     try {
       const row = await this.prisma.$transaction(async (tx) => {
         // before 快照与更新同事务读取，避免审计记录与实际变更不一致。
-        const before = await tx.modelPrice.findUnique({ where: { model } });
+        const before = await tx.modelPrice.findUnique({ where: { model: name } });
         if (!before) throw new NotFoundException('model_price_not_found');
 
         const data: { inputMilliCreditsPer1k?: number; outputMilliCreditsPer1k?: number } = {};
@@ -125,11 +127,11 @@ export class AdminModelsService {
         }
         if (Object.keys(data).length === 0) throw new BadRequestException('invalid_patch');
 
-        const updated = await tx.modelPrice.update({ where: { model }, data });
+        const updated = await tx.modelPrice.update({ where: { model: name }, data });
         await this.audit.write(tx, actor, {
           action: 'modelPrice.update',
           targetType: 'modelPrice',
-          targetId: model,
+          targetId: name,
           summary: { before: toDto(before), after: toDto(updated) },
         });
         return updated;
@@ -145,23 +147,28 @@ export class AdminModelsService {
   }
 
   async remove(model: string, actor: AdminActor): Promise<void> {
+    // 路径参数可能带空白，统一归一化后再查询/删除/审计。
+    const name = modelName(model);
     try {
       await this.prisma.$transaction(async (tx) => {
-        const before = await tx.modelPrice.findUnique({ where: { model } });
-        if (!before) throw new NotFoundException('model_price_not_found');
+        // 先锁住价格行，避免套餐创建/更新在引用校验与删除之间插入导致无价引用。
+        const locked = await tx.$queryRaw<Array<{ model: string }>>`
+          SELECT "model" FROM "ModelPrice" WHERE "model" = ${name} FOR UPDATE
+        `;
+        if (locked.length === 0) throw new NotFoundException('model_price_not_found');
 
         // 启用中的套餐仍引用该模型时禁止删除，避免下单后计费无价可查。
         const used = await tx.plan.findFirst({
-          where: { active: true, allowedModels: { has: model } },
+          where: { active: true, allowedModels: { has: name } },
           select: { id: true },
         });
         if (used) throw new BadRequestException('model_in_use');
 
-        await tx.modelPrice.delete({ where: { model } });
+        await tx.modelPrice.delete({ where: { model: name } });
         await this.audit.write(tx, actor, {
           action: 'modelPrice.delete',
           targetType: 'modelPrice',
-          targetId: model,
+          targetId: name,
         });
       });
     } catch (err) {

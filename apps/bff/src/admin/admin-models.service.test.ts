@@ -42,6 +42,11 @@ function makeService(inUse = false) {
     plan: {
       findFirst: async () => (inUse ? { id: 'pro' } : null),
     },
+    // 模拟 SELECT ... FOR UPDATE：价格行存在时返回它，否则返回空集。
+    $queryRaw: async (_strings: TemplateStringsArray, ...values: unknown[]) => {
+      const model = values[0] as string;
+      return prices.has(model) ? [{ model }] : [];
+    },
     $transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn(db),
   } as unknown as PrismaService;
   const audit = {
@@ -88,6 +93,20 @@ describe('AdminModelsService', () => {
     await expect(
       svc.create({ model: 'm2', inputMilliCreditsPer1k: -1, outputMilliCreditsPer1k: 1 }, actor),
     ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('超出 Int32 上限抛 400', async () => {
+    const { svc } = makeService();
+    await expect(
+      svc.create({ model: 'm2', inputMilliCreditsPer1k: 2_147_483_648, outputMilliCreditsPer1k: 1 }, actor),
+    ).rejects.toMatchObject({ message: 'invalid_price' });
+  });
+
+  it('更新路径模型名会归一化', async () => {
+    const { svc } = makeService();
+    const row = await svc.update(' m1 ', { inputMilliCreditsPer1k: 1 }, actor);
+    expect(row.model).toBe('m1');
+    expect(row.inputMilliCreditsPer1k).toBe(1);
   });
 
   it('被启用套餐引用时拒绝删除', async () => {

@@ -44,9 +44,11 @@ function makeService(prices = ['m1']) {
         return next;
       },
     },
-    modelPrice: {
-      findMany: async ({ where }: { where: { model: { in: string[] } } }) =>
-        where.model.in.filter((m) => prices.includes(m)).map((model) => ({ model })),
+    // 模拟 SELECT ... FOR UPDATE：Prisma.join 的 Sql 片段里带有待校验的模型名。
+    $queryRaw: async (_strings: TemplateStringsArray, ...values: unknown[]) => {
+      const joined = values[0] as { values?: unknown[] } | undefined;
+      const requested = (joined?.values ?? []).filter((m): m is string => typeof m === 'string');
+      return requested.filter((m) => prices.includes(m)).map((model) => ({ model }));
     },
     $transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn(db),
   } as unknown as PrismaService;
@@ -77,6 +79,9 @@ describe('AdminPlansService', () => {
     await expect(
       svc.create({ id: 'pro', name: 'x', priceCents: 0, monthlyBaseCredits: 1.5, monthlyBonusCredits: 0, maxCreditsPerRun: 0, rpm: 0, allowedModels: ['m1'], active: true }, actor),
     ).rejects.toMatchObject({ message: 'invalid_monthlyBaseCredits' });
+    await expect(
+      svc.create({ id: 'pro', name: 'x', priceCents: 2_147_483_648, monthlyBaseCredits: 0, monthlyBonusCredits: 0, maxCreditsPerRun: 0, rpm: 0, allowedModels: ['m1'], active: true }, actor),
+    ).rejects.toMatchObject({ message: 'invalid_priceCents' });
   });
 
   it('allowedModels 必须都有价格', async () => {

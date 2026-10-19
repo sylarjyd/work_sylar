@@ -4,7 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import type { Plan, Prisma } from '@prisma/client';
+import { Prisma, type Plan } from '@prisma/client';
 import type { AdminPlanDto, AdminPlanInput, AdminPlanPatch } from '@ai-office/shared';
 import { PrismaService } from '../db/prisma.service';
 import { AuditService } from '../audit/audit.service';
@@ -29,7 +29,8 @@ function toDto(plan: Plan): AdminPlanDto {
 }
 
 function nonNegativeInt(raw: unknown, field: string): number {
-  if (typeof raw !== 'number' || !Number.isSafeInteger(raw) || raw < 0) {
+  // 数据库列均为 Int32，超出上限的数值会写入失败，提前以 400 拒绝。
+  if (typeof raw !== 'number' || !Number.isSafeInteger(raw) || raw < 0 || raw > 2_147_483_647) {
     throw new BadRequestException(`invalid_${field}`);
   }
   return raw;
@@ -163,10 +164,10 @@ export class AdminPlansService {
   }
 
   private async assertModelsPriced(tx: Prisma.TransactionClient, models: string[]): Promise<void> {
-    const found = await tx.modelPrice.findMany({
-      where: { model: { in: models } },
-      select: { model: true },
-    });
+    // 锁定价格行，避免价格删除与套餐引用校验并发交错后留下无价模型。
+    const found = await tx.$queryRaw<Array<{ model: string }>>`
+      SELECT "model" FROM "ModelPrice" WHERE "model" IN (${Prisma.join(models)}) FOR UPDATE
+    `;
     if (found.length !== models.length) throw new BadRequestException('model_price_missing');
   }
 }
