@@ -348,3 +348,13 @@ pnpm --filter @ai-office/bff typecheck             # 类型
 4. `web.fetch` 等对外请求必须防 SSRF（校验全部解析地址 + 固定连接 IP + 不跟随跳转）。
 5. 文件名进出 HTTP 头必须清洗（控制字符、引号、反斜杠）。
 6. `.env` 永不提交；生产密钥由环境注入。
+
+---
+
+## 10. 计费模块（M5a）本地开发
+
+1. `pnpm --filter @ai-office/bff db:up`（Postgres + MinIO + Redis）。
+2. `pnpm --filter @ai-office/bff db:push && pnpm --filter @ai-office/bff db:seed:billing`。
+3. 注册账号后自动获得 free 套餐 500 积分。
+4. 无 `DEEPSEEK_API_KEY` 时 runtime 走 mock 模型，仍会产出 usage，可完整验证结算链路。
+5. 模拟管理员操作：先把账号提权 `pnpm --filter @ai-office/bff admin:promote <email>`，再调 `/api/billing/admin/*`。

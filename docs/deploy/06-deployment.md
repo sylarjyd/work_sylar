@@ -322,3 +322,56 @@ pnpm --filter @ai-office/bff db:up      # 等价于在 apps/bff 下 docker compo
 | runtime 无内置鉴权 | 强制 token + 网络隔离 | 开发计划 P8 |
 | 无备份演练/生命周期 | 备份 + 演练 + S3 策略 | 开发计划 P9 |
 | 长任务无队列/续传 | 队列化 + checkpoint | 开发计划 P10 |
+
+---
+
+## 13. M5a 计费与网关
+
+### 13.1 依赖
+
+- PostgreSQL（已有）、Redis（限流用，可选但生产必配）。
+- `docker compose up -d` 会同时启动 `redis:7.4-alpine`（本地 compose 还含 `pgvector/pgvector:pg16` 与 MinIO）。
+
+### 13.2 初始化
+
+```bash
+pnpm --filter @ai-office/bff db:push
+pnpm --filter @ai-office/bff db:seed:billing
+```
+
+`db:seed:billing` 幂等写入 4 个套餐与模型价格；调价改该脚本后重跑即可。
+
+### 13.3 关键环境变量
+
+| 变量 | 说明 |
+|---|---|
+| `REDIS_URL` | 留空退化为进程内限流（仅单实例）；生产必须配置 |
+| `MODEL_PROVIDERS` | runtime 多模型路由，JSON 数组声明模型、baseUrl、apiKeyEnv；未配置回退 `MODEL_BASE_URL` + `MODEL_NAME` |
+| `BILLING_SWEEP_MS` | 补偿扫描间隔，默认 60000；0 关闭 |
+
+### 13.4 运营操作（管理员 JWT）
+
+```bash
+# 开通/续期付费套餐
+curl -X POST http://localhost:4000/api/billing/admin/subscribe \
+  -H "authorization: Bearer $TOKEN" -H "content-type: application/json" \
+  -d '{"planId":"standard"}'
+
+# 发放/收回积分（负数收回）
+curl -X POST http://localhost:4000/api/billing/admin/credits \
+  -H "authorization: Bearer $TOKEN" -H "content-type: application/json" \
+  -d '{"amount":1000,"note":"活动赠送"}'
+```
+
+### 13.5 失败排查
+
+- `insufficient_balance`：管理员收回积分超过可用余额。
+- 运行 402 `insufficient_credits`：可用积分不足 1。
+- 运行 429：超过套餐 RPM；响应头 `retry-after` 给出等待秒数。
+- 结算失败：`UsageRecord` 保持 `pending`，`CreditHold` 保留，补偿任务每分钟重试。
+
+### 13.6 安全边界（生产必读）
+
+- **BFF 是计费与预算的唯一裁决方**；runtime 信任 BFF 下发的 `billing` 参数，**runtime 不得直接暴露到公网**。
+- 生产必须：为 runtime 配置 `AGENT_RUNTIME_TOKEN`（BFF 自动携带）；仅允许 BFF 所在网段访问；容器/主机层面隔离 4001 端口。
+- 若 runtime 可被外部直接调用，调用方可伪造预算绕过计费；此项列入 M5c 上线准备。
