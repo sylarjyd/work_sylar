@@ -4,7 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import type { Plan } from '@prisma/client';
+import type { Plan, Prisma } from '@prisma/client';
 import type { AdminPlanDto, AdminPlanInput, AdminPlanPatch } from '@ai-office/shared';
 import { PrismaService } from '../db/prisma.service';
 import { AuditService } from '../audit/audit.service';
@@ -58,13 +58,22 @@ export class AdminPlansService {
   ) {}
 
   async listAll(): Promise<AdminPlanDto[]> {
-    const rows = await this.prisma.plan.findMany({ orderBy: { createdAt: 'asc' } });
+    // 同毫秒创建的套餐按 id 兜底排序，保证列表顺序稳定。
+    const rows = await this.prisma.plan.findMany({
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    });
     return rows.map(toDto);
   }
 
   async create(body: AdminPlanInput, actor: AdminActor): Promise<AdminPlanDto> {
     const id = typeof body?.id === 'string' ? body.id.trim() : '';
     if (!PLAN_ID_RE.test(id)) throw new BadRequestException('invalid_plan_id');
+
+    let active = true;
+    if (body.active !== undefined) {
+      if (typeof body.active !== 'boolean') throw new BadRequestException('invalid_active');
+      active = body.active;
+    }
 
     const input: AdminPlanInput = {
       id,
@@ -75,31 +84,33 @@ export class AdminPlansService {
       maxCreditsPerRun: nonNegativeInt(body.maxCreditsPerRun, 'maxCreditsPerRun'),
       rpm: nonNegativeInt(body.rpm, 'rpm'),
       allowedModels: modelList(body.allowedModels),
-      active: body.active === undefined ? true : Boolean(body.active),
+      active,
     };
-    // 套餐可用的每个模型都必须在模型价格表中，避免用户开到无价模型后计费失败。
-    await this.assertModelsPriced(input.allowedModels);
 
-    const exists = await this.prisma.plan.findUnique({ where: { id }, select: { id: true } });
-    if (exists) throw new ConflictException('plan_exists');
-
-    const row = await this.prisma.$transaction(async (tx) => {
-      const created = await tx.plan.create({ data: input });
-      await this.audit.write(tx, actor, {
-        action: 'plan.create',
-        targetType: 'plan',
-        targetId: id,
-        summary: { name: input.name },
+    try {
+      const row = await this.prisma.$transaction(async (tx) => {
+        // 套餐可用的每个模型都必须在模型价格表中，避免用户开到无价模型后计费失败。
+        await this.assertModelsPriced(tx, input.allowedModels);
+        const created = await tx.plan.create({ data: input });
+        await this.audit.write(tx, actor, {
+          action: 'plan.create',
+          targetType: 'plan',
+          targetId: id,
+          summary: { name: input.name },
+        });
+        return created;
       });
-      return created;
-    });
-    return toDto(row);
+      return toDto(row);
+    } catch (err) {
+      // 并发创建同一 id 时由唯一约束兜底，避免先查后写的竞态。
+      if ((err as { code?: string }).code === 'P2002') {
+        throw new ConflictException('plan_exists');
+      }
+      throw err;
+    }
   }
 
   async update(id: string, body: AdminPlanPatch, actor: AdminActor): Promise<AdminPlanDto> {
-    const plan = await this.prisma.plan.findUnique({ where: { id } });
-    if (!plan) throw new NotFoundException('plan_not_found');
-
     const patch: Partial<AdminPlanInput> = {};
     if (body?.name !== undefined) patch.name = nonEmptyString(body.name, 'name');
     const intFields = [
@@ -123,24 +134,36 @@ export class AdminPlansService {
     if (id === 'free' && patch.active === false) {
       throw new BadRequestException('free_not_deactivatable');
     }
-    if (patch.allowedModels) await this.assertModelsPriced(patch.allowedModels);
 
-    const row = await this.prisma.$transaction(async (tx) => {
-      const updated = await tx.plan.update({ where: { id }, data: patch });
-      // 审计记录变更前后快照，便于追溯定价/额度调整。
-      await this.audit.write(tx, actor, {
-        action: 'plan.update',
-        targetType: 'plan',
-        targetId: id,
-        summary: { before: toDto(plan), after: toDto(updated) },
+    try {
+      const row = await this.prisma.$transaction(async (tx) => {
+        // before 快照与更新同事务读取，避免审计记录与实际变更不一致。
+        const before = await tx.plan.findUnique({ where: { id } });
+        if (!before) throw new NotFoundException('plan_not_found');
+        if (patch.allowedModels) await this.assertModelsPriced(tx, patch.allowedModels);
+
+        const updated = await tx.plan.update({ where: { id }, data: patch });
+        // 审计记录变更前后快照，便于追溯定价/额度调整。
+        await this.audit.write(tx, actor, {
+          action: 'plan.update',
+          targetType: 'plan',
+          targetId: id,
+          summary: { before: toDto(before), after: toDto(updated) },
+        });
+        return updated;
       });
-      return updated;
-    });
-    return toDto(row);
+      return toDto(row);
+    } catch (err) {
+      // 并发删除等场景下 Prisma 抛 P2025，业务语义仍是套餐不存在。
+      if ((err as { code?: string }).code === 'P2025') {
+        throw new NotFoundException('plan_not_found');
+      }
+      throw err;
+    }
   }
 
-  private async assertModelsPriced(models: string[]): Promise<void> {
-    const found = await this.prisma.modelPrice.findMany({
+  private async assertModelsPriced(tx: Prisma.TransactionClient, models: string[]): Promise<void> {
+    const found = await tx.modelPrice.findMany({
       where: { model: { in: models } },
       select: { model: true },
     });

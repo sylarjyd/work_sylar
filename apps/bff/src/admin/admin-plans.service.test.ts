@@ -32,8 +32,11 @@ function makeService(prices = ['m1']) {
       findMany: async () => [...plans.values()],
       findUnique: async ({ where }: { where: { id: string } }) => plans.get(where.id) ?? null,
       create: async ({ data }: { data: PlanRow }) => {
-        plans.set(data.id, data);
-        return data;
+        // 模拟数据库唯一约束冲突。
+        if (plans.has(data.id)) throw Object.assign(new Error('unique'), { code: 'P2002' });
+        const row: PlanRow = { ...data, createdAt: data.createdAt ?? new Date() };
+        plans.set(data.id, row);
+        return row;
       },
       update: async ({ where, data }: { where: { id: string }; data: Partial<PlanRow> }) => {
         const next = { ...plans.get(where.id)!, ...data };
@@ -45,7 +48,6 @@ function makeService(prices = ['m1']) {
       findMany: async ({ where }: { where: { model: { in: string[] } } }) =>
         where.model.in.filter((m) => prices.includes(m)).map((model) => ({ model })),
     },
-    adminAuditLog: { create: async () => ({}) },
     $transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn(db),
   } as unknown as PrismaService;
   const audit = {
@@ -53,7 +55,7 @@ function makeService(prices = ['m1']) {
       audits.push(entry);
     },
   } as unknown as AuditService;
-  return { svc: new AdminPlansService(db, audit), plans, audits };
+  return { svc: new AdminPlansService(db, audit), audits };
 }
 
 describe('AdminPlansService', () => {
@@ -82,6 +84,27 @@ describe('AdminPlansService', () => {
     await expect(
       svc.create({ id: 'pro', name: '专业版', priceCents: 1, monthlyBaseCredits: 1, monthlyBonusCredits: 0, maxCreditsPerRun: 1, rpm: 1, allowedModels: ['missing'], active: true }, actor),
     ).rejects.toMatchObject({ message: 'model_price_missing' });
+  });
+
+  it('创建成功并写 plan.create 审计', async () => {
+    const { svc, audits } = makeService();
+    const out = await svc.create({
+      id: 'pro', name: '专业版', priceCents: 100, monthlyBaseCredits: 1000,
+      monthlyBonusCredits: 0, maxCreditsPerRun: 100, rpm: 10, allowedModels: ['m1'], active: true,
+    }, actor);
+    expect(out.id).toBe('pro');
+    expect(audits[0]).toMatchObject({ action: 'plan.create', targetId: 'pro' });
+  });
+
+  it('active 必须是 boolean', async () => {
+    const { svc } = makeService();
+    await expect(
+      svc.create({
+        id: 'pro', name: '专业版', priceCents: 0, monthlyBaseCredits: 0,
+        monthlyBonusCredits: 0, maxCreditsPerRun: 0, rpm: 0, allowedModels: ['m1'],
+        active: 'true' as unknown as boolean,
+      }, actor),
+    ).rejects.toMatchObject({ message: 'invalid_active' });
   });
 
   it('重复 id 抛 409', async () => {
