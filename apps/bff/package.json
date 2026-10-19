@@ -8,7 +8,8 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "db:up": "docker compose up -d",
-    "db:push": "prisma db push",
+    "db:push": "prisma db push && node scripts/apply-comments.mjs",
+    "db:comments": "node scripts/apply-comments.mjs",
     "db:generate": "prisma generate",
     "admin:promote": "node scripts/promote-admin.mjs"
   },
