@@ -42,10 +42,10 @@ describe('runAgent', () => {
           return {
             content: '先搜索',
             toolCalls: [{ id: 'c1', name: 'web.search', args: { query: '竞品' } }],
-            usage: { input: 1, output: 1 },
+            usage: { input: 1, output: 1 }, model: 'mock',
           };
         }
-        return { content: '结论', toolCalls: [], usage: { input: 2, output: 2 } };
+        return { content: '结论', toolCalls: [], usage: { input: 2, output: 2 }, model: 'mock' };
       },
     };
     const usages: { input: number; output: number }[] = [];
@@ -60,7 +60,7 @@ describe('runAgent', () => {
   it('无工具调用即结束（单轮）', async () => {
     const gateway: ModelGateway = {
       async chat() {
-        return { content: '直接回答', toolCalls: [], usage: { input: 1, output: 1 } };
+        return { content: '直接回答', toolCalls: [], usage: { input: 1, output: 1 }, model: 'mock' };
       },
     };
     const events = await collect(runAgent(req, { gateway, tools: [] }));
@@ -73,7 +73,7 @@ describe('runAgent', () => {
         return {
           content: '继续',
           toolCalls: [{ id: 'c', name: 'web.search', args: { query: 'x' } }],
-          usage: { input: 1, output: 1 },
+          usage: { input: 1, output: 1 }, model: 'mock',
         };
       },
     };
@@ -94,10 +94,10 @@ describe('runAgent', () => {
           return {
             content: '搜一下',
             toolCalls: [{ id: 'c1', name: 'web.search', args: { query: 'x' } }],
-            usage: { input: 0, output: 0 },
+            usage: { input: 0, output: 0 }, model: 'mock',
           };
         }
-        return { content: '收尾', toolCalls: [], usage: { input: 0, output: 0 } };
+        return { content: '收尾', toolCalls: [], usage: { input: 0, output: 0 }, model: 'mock' };
       },
     };
     const undefinedTool: Tool = {
@@ -124,10 +124,10 @@ describe('runAgent', () => {
           return {
             content: '试试',
             toolCalls: [{ id: 'c1', name: 'boom', args: {} }],
-            usage: { input: 0, output: 0 },
+            usage: { input: 0, output: 0 }, model: 'mock',
           };
         }
-        return { content: '收尾', toolCalls: [], usage: { input: 0, output: 0 } };
+        return { content: '收尾', toolCalls: [], usage: { input: 0, output: 0 }, model: 'mock' };
       },
     };
     const badTool: Tool = {
@@ -154,10 +154,10 @@ describe('runAgent', () => {
           return {
             content: '调用',
             toolCalls: [{ id: 'c1', name: 'web.search', args: { query: 'x' } }],
-            usage: { input: 0, output: 0 },
+            usage: { input: 0, output: 0 }, model: 'mock',
           };
         }
-        return { content: '收尾', toolCalls: [], usage: { input: 0, output: 0 } };
+        return { content: '收尾', toolCalls: [], usage: { input: 0, output: 0 }, model: 'mock' };
       },
     };
     const spyTool: Tool = {
@@ -183,10 +183,10 @@ describe('runAgent', () => {
           return {
             content: '生成',
             toolCalls: [{ id: 'c1', name: 'doc.pptx', args: { filename: 'a.pptx' } }],
-            usage: { input: 0, output: 0 },
+            usage: { input: 0, output: 0 }, model: 'mock',
           };
         }
-        return { content: '完成', toolCalls: [], usage: { input: 0, output: 0 } };
+        return { content: '完成', toolCalls: [], usage: { input: 0, output: 0 }, model: 'mock' };
       },
     };
     const docTool: Tool = {
@@ -220,10 +220,10 @@ describe('runAgent', () => {
           return {
             content: '生成',
             toolCalls: [{ id: 'c1', name: 'doc.pptx', args: {} }],
-            usage: { input: 0, output: 0 },
+            usage: { input: 0, output: 0 }, model: 'mock',
           };
         }
-        return { content: '收尾', toolCalls: [], usage: { input: 0, output: 0 } };
+        return { content: '收尾', toolCalls: [], usage: { input: 0, output: 0 }, model: 'mock' };
       },
     };
     const badTool: Tool = {
@@ -248,10 +248,10 @@ describe('runAgent', () => {
           return {
             content: '生成',
             toolCalls: [{ id: 'c1', name: 'doc.pptx', args: {} }],
-            usage: { input: 0, output: 0 },
+            usage: { input: 0, output: 0 }, model: 'mock',
           };
         }
-        return { content: '完成', toolCalls: [], usage: { input: 0, output: 0 } };
+        return { content: '完成', toolCalls: [], usage: { input: 0, output: 0 }, model: 'mock' };
       },
     };
     const weirdTool: Tool = {
@@ -430,9 +430,9 @@ function oneShotGateway(call: {
     async chat() {
       round++;
       if (round === 1) {
-        return { content: '执行', toolCalls: [call], usage: { input: 0, output: 0 } };
+        return { content: '执行', toolCalls: [call], usage: { input: 0, output: 0 }, model: 'mock' };
       }
-      return { content: '收尾', toolCalls: [], usage: { input: 0, output: 0 } };
+      return { content: '收尾', toolCalls: [], usage: { input: 0, output: 0 }, model: 'mock' };
     },
   };
 }

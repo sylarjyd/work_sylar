@@ -24,10 +24,10 @@ const scripted: ModelGateway = {
       return {
         content: '查一下',
         toolCalls: [{ id: 'c1', name: 'web.search', args: { query: 'x' } }],
-        usage: { input: 1, output: 1 },
+        usage: { input: 1, output: 1 }, model: 'mock',
       };
     }
-    return { content: '完成', toolCalls: [], usage: { input: 1, output: 1 } };
+    return { content: '完成', toolCalls: [], usage: { input: 1, output: 1 }, model: 'mock' };
   },
 };
 
@@ -171,7 +171,7 @@ describe('runtime server', () => {
     const server = createRuntimeServer({
       gateway: {
         async chat() {
-          return { content: 'hi', toolCalls: [], usage: { input: 0, output: 0 } };
+          return { content: 'hi', toolCalls: [], usage: { input: 0, output: 0 }, model: 'mock' };
         },
       },
       tools: [],
@@ -213,10 +213,10 @@ describe('runtime 确认端点', () => {
           return {
             content: '执行',
             toolCalls: [{ id: 'c1', name: 'code.exec', args: {} }],
-            usage: { input: 0, output: 0 },
+            usage: { input: 0, output: 0 }, model: 'mock',
           };
         }
-        return { content: '完成', toolCalls: [], usage: { input: 0, output: 0 } };
+        return { content: '完成', toolCalls: [], usage: { input: 0, output: 0 }, model: 'mock' };
       },
     };
     return createRuntimeServer({ gateway: scripted, tools: [confirmTool] });
@@ -380,7 +380,7 @@ describe('runtime 摄取端点', () => {
 
   beforeAll(async () => {
     srv = createRuntimeServer({
-      gateway: { async chat() { return { content: '', toolCalls: [], usage: { input: 0, output: 0 } }; } },
+      gateway: { async chat() { return { content: '', toolCalls: [], usage: { input: 0, output: 0 }, model: 'mock' }; } },
       tools: [],
       storage: txtStorage,
       embedding: { dim: 3, async embed(texts) { return texts.map((t) => [t.length, 0, 0]); } },
@@ -445,7 +445,7 @@ describe('runtime 摄取端点', () => {
 
 describe('POST /connectors/validate', () => {
   const stubGateway: ModelGateway = {
-    async chat() { return { content: '', toolCalls: [], usage: { input: 0, output: 0 } }; },
+    async chat() { return { content: '', toolCalls: [], usage: { input: 0, output: 0 }, model: 'mock' }; },
   };
 
   async function listen(server: Server): Promise<string> {
@@ -566,7 +566,7 @@ describe('/runs 的 per-run MCP 工具拼装', () => {
     const gateway: ModelGateway = {
       async chat(req) {
         toolNames.push(...req.tools.map((t) => t.name));
-        return { content: '完成', toolCalls: [], usage: { input: 0, output: 0 } };
+        return { content: '完成', toolCalls: [], usage: { input: 0, output: 0 }, model: 'mock' };
       },
     };
     const server = createRuntimeServer({

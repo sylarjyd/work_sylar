@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { ChatRequest, ChatResponse, ModelGateway, ModelMessage } from './types';
+import { ModelHttpError } from './errors';
 
 interface OpenAIResponse {
   choices?: {
@@ -41,7 +42,7 @@ export class OpenAICompatGateway implements ModelGateway {
           : undefined,
       }),
     });
-    if (!res.ok) throw new Error(`model_http_${res.status}`);
+    if (!res.ok) throw new ModelHttpError(res.status, this.cfg.model);
     let data: OpenAIResponse;
     try {
       data = (await res.json()) as OpenAIResponse;
@@ -61,6 +62,7 @@ export class OpenAICompatGateway implements ModelGateway {
         input: data.usage?.prompt_tokens ?? 0,
         output: data.usage?.completion_tokens ?? 0,
       },
+      model: this.cfg.model,
     };
   }
 }

@@ -25,12 +25,16 @@ export interface ModelMessage extends ChatMessage {
 export interface ChatRequest {
   messages: ModelMessage[];
   tools: ToolSchema[];
+  /** 本次运行允许的模型，按 BFF 给定优先级；缺省表示不限制。 */
+  models?: string[];
 }
 
 export interface ChatResponse {
   content: string;
   toolCalls: ToolCall[];
   usage: { input: number; output: number };
+  /** 实际产出该响应的模型名，用于按模型归集用量。 */
+  model: string;
 }
 
 /** 模型网关：M1 只暴露「一次 chat 补全」；多模型路由/限流/埋点留到 M5，不动上层。 */

@@ -14,12 +14,14 @@ export class MockGateway implements ModelGateway {
         content: `我需要先检索资料：${goal}`,
         toolCalls: [{ id: randomUUID(), name: 'web.search', args: { query: goal } }],
         usage: { input: 10, output: 8 },
+        model: 'mock',
       };
     }
     return {
       content: `根据检索结果，关于「${goal}」的结论已生成。`,
       toolCalls: [],
       usage: { input: 20, output: 12 },
+      model: 'mock',
     };
   }
 }

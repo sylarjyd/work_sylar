@@ -71,6 +71,7 @@ describe('OpenAICompatGateway', () => {
       { id: 'c1', name: 'web.search', args: { query: 'x' } },
     ]);
     expect(res.usage).toEqual({ input: 3, output: 5 });
+    expect(res.model).toBe('deepseek-chat');
   });
 
   it('把 ModelMessage 正确映射为 OpenAI 线格式（tool_calls / tool_call_id 往返）', async () => {

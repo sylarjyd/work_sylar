@@ -13,6 +13,22 @@ describe('createGateway', () => {
     expect(createGateway({ DEEPSEEK_API_KEY: 'k' })).toBeInstanceOf(OpenAICompatGateway);
   });
 
+  it('MODEL_PROVIDERS 配置有效 key 时返回 RoutingGateway', () => {
+    const gw = createGateway({
+      MODEL_PROVIDERS: JSON.stringify([
+        { model: 'deepseek-chat', baseUrl: 'https://x/v1', apiKeyEnv: 'K1' },
+      ]),
+      K1: 'sk-1',
+    } as NodeJS.ProcessEnv);
+    expect(gw.constructor.name).toBe('RoutingGateway');
+  });
+
+  it('MODEL_PROVIDERS 非法 JSON 时启动失败', () => {
+    expect(() => createGateway({ MODEL_PROVIDERS: '{bad' } as NodeJS.ProcessEnv)).toThrow(
+      'invalid_MODEL_PROVIDERS',
+    );
+  });
+
   it('MODEL_BASE_URL / MODEL_NAME 覆盖生效（打到 <base>/chat/completions 且带 model 名）', async () => {
     let path = '';
     let body: { model?: string } = {};
