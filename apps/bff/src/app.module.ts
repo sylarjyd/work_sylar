@@ -16,7 +16,7 @@ import { BillingModule } from './billing/billing.module';
 import { AdminModule } from './admin/admin.module';
 import { SettingsModule } from './settings/settings.module';
 
-/** 应用装配根：数据库、知识库、连接器、计费、管理端模块在此汇合。 */
+/** 应用装配根：数据库、知识库、连接器、计费、管理端模块在此汇合；参数配置模块供管理端与运行/摄取链路读取。 */
 @Module({
   imports: [PrismaModule, BillingModule, KbModule, ConnectorModule, SettingsModule, AdminModule],
   controllers: [AuthController, SessionsController, TasksController, RunsController, ArtifactController],
