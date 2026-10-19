@@ -59,6 +59,11 @@ function makeService(seed: Row[]) {
         return {};
       },
     },
+    // 模拟 FOR UPDATE 查询：返回当前全部 active 管理员 id。
+    $queryRaw: async () =>
+      rows
+        .filter((r) => r.role === 'admin' && r.status === 'active')
+        .map((r) => ({ id: r.id })),
     $transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn(db),
   } as unknown as PrismaService;
   const audit = {

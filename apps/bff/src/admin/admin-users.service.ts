@@ -23,6 +23,17 @@ interface UserRow {
   tenant: { name: string };
 }
 
+// 显式 select，避免把 passwordHash 等敏感字段读进内存。
+const USER_SELECT = {
+  id: true,
+  email: true,
+  tenantId: true,
+  role: true,
+  status: true,
+  createdAt: true,
+  tenant: { select: { name: true } },
+} as const;
+
 function isStatus(v: unknown): v is UserStatus {
   return v === 'active' || v === 'disabled';
 }
@@ -68,7 +79,7 @@ export class AdminUsersService {
     const [rows, total] = await Promise.all([
       this.prisma.user.findMany({
         where,
-        include: { tenant: { select: { name: true } } },
+        select: USER_SELECT,
         orderBy: { createdAt: 'desc' },
         skip,
         take,
@@ -82,7 +93,7 @@ export class AdminUsersService {
   async detail(id: string, actor: AdminActor): Promise<AdminUserDetailDto> {
     const row = await this.prisma.user.findUnique({
       where: { id },
-      include: { tenant: { select: { name: true } } },
+      select: USER_SELECT,
     });
     if (!row) throw new NotFoundException('user_not_found');
 
@@ -124,26 +135,26 @@ export class AdminUsersService {
     if (status !== undefined && !isStatus(status)) throw new BadRequestException('invalid_status');
     if (role !== undefined && !isRole(role)) throw new BadRequestException('invalid_role');
 
-    const row = await this.prisma.user.findUnique({
-      where: { id },
-      include: { tenant: { select: { name: true } } },
-    });
-    if (!row) throw new NotFoundException('user_not_found');
+    return this.prisma.$transaction(async (tx) => {
+      const row = await tx.user.findUnique({ where: { id }, select: USER_SELECT });
+      if (!row) throw new NotFoundException('user_not_found');
 
-    const next: { status: UserStatus; role: UserRole } = {
-      status: status ?? (row.status as UserStatus),
-      role: role ?? (row.role as UserRole),
-    };
+      const next: { status: UserStatus; role: UserRole } = {
+        status: status ?? (row.status as UserStatus),
+        role: role ?? (row.role as UserRole),
+      };
 
-    // 只检查「从 active admin 变为非 active admin」的情况，覆盖禁用与降级。
-    if (row.role === 'admin' && (next.status !== 'active' || next.role !== 'admin')) {
-      const others = await this.prisma.user.count({
-        where: { id: { not: id }, role: 'admin', status: 'active' },
-      });
-      if (others === 0) throw new BadRequestException('last_admin');
-    }
+      // 只检查「从 active admin 变为非 active admin」的情况，覆盖禁用与降级。
+      const wasActiveAdmin = row.role === 'admin' && row.status === 'active';
+      const staysActiveAdmin = next.status === 'active' && next.role === 'admin';
+      if (wasActiveAdmin && !staysActiveAdmin) {
+        // 锁住全部 active 管理员行，串行化并发降级/禁用，避免同时通过检查后留下 0 个管理员。
+        const actives = await tx.$queryRaw<Array<{ id: string }>>`
+          SELECT id FROM "User" WHERE role = 'admin' AND status = 'active' ORDER BY id FOR UPDATE
+        `;
+        if (actives.every((u) => u.id === id)) throw new BadRequestException('last_admin');
+      }
 
-    await this.prisma.$transaction(async (tx) => {
       await tx.user.update({ where: { id }, data: next });
       await this.audit.write(tx, actor, {
         action: 'user.update',
@@ -154,8 +165,8 @@ export class AdminUsersService {
           after: next,
         },
       });
-    });
 
-    return { ...toItem(row), status: next.status, role: next.role };
+      return { ...toItem(row), status: next.status, role: next.role };
+    });
   }
 }
