@@ -14,6 +14,14 @@ describe('sortLots', () => {
     ];
     expect(sortLots(lots).map((l) => l.id)).toEqual(['early', 'base', 'bonus', 'pack', 'never']);
   });
+
+  it('更早到期的 pack 优先于 base', () => {
+    const lots = [
+      { id: 'base', source: 'base', remaining: 5, expiresAt: d('2026-12-01') },
+      { id: 'pack', source: 'pack', remaining: 5, expiresAt: d('2026-11-01') },
+    ];
+    expect(sortLots(lots).map((l) => l.id)).toEqual(['pack', 'base']);
+  });
 });
 
 describe('allocate', () => {

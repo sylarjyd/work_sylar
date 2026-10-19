@@ -23,6 +23,20 @@ describe('parseModels', () => {
   });
 });
 
+describe('数值校验', () => {
+  it('拒绝 NaN / Infinity / 负数 token', () => {
+    expect(parseUsageEvent({ input: Number.NaN, output: 1, models: [] })).toBeNull();
+    expect(parseUsageEvent({ input: 1, output: Number.POSITIVE_INFINITY, models: [] })).toBeNull();
+    expect(parseUsageEvent({ input: -1, output: 1, models: [] })).toBeNull();
+    expect(
+      parseModels([
+        { model: 'a', input: Number.NaN, output: 1 },
+        { model: '', input: 1, output: 1 },
+      ]),
+    ).toEqual([]);
+  });
+});
+
 describe('aggregateUsage', () => {
   const rows = [
     {

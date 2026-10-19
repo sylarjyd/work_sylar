@@ -1,16 +1,16 @@
-import type { UsageAggregateDto, UsageEvent } from '@ai-office/shared';
+import type { ModelPriceDto, UsageAggregateDto, UsageEvent } from '@ai-office/shared';
+import type { ModelUsage } from './credits';
 
-export interface ModelUsage {
-  model: string;
-  input: number;
-  output: number;
+/** token 数必须是有限的非负数，拒绝 NaN / Infinity / 负数。 */
+function isFiniteNonNegative(x: unknown): x is number {
+  return typeof x === 'number' && Number.isFinite(x) && x >= 0;
 }
 
 /** 校验并解析 runtime 的 usage 事件；非法结构返回 null（不扣费）。 */
 export function parseUsageEvent(data: unknown): UsageEvent | null {
   if (data === null || typeof data !== 'object') return null;
   const d = data as Record<string, unknown>;
-  if (typeof d.input !== 'number' || typeof d.output !== 'number' || !Array.isArray(d.models)) {
+  if (!isFiniteNonNegative(d.input) || !isFiniteNonNegative(d.output) || !Array.isArray(d.models)) {
     return null;
   }
   return { input: d.input, output: d.output, models: parseModels(d.models) };
@@ -23,7 +23,12 @@ export function parseModels(raw: unknown): ModelUsage[] {
   for (const item of raw) {
     if (item === null || typeof item !== 'object') continue;
     const m = item as Record<string, unknown>;
-    if (typeof m.model !== 'string' || typeof m.input !== 'number' || typeof m.output !== 'number') {
+    if (
+      typeof m.model !== 'string' ||
+      m.model === '' ||
+      !isFiniteNonNegative(m.input) ||
+      !isFiniteNonNegative(m.output)
+    ) {
       continue;
     }
     out.push({ model: m.model, input: m.input, output: m.output });
@@ -46,7 +51,7 @@ export interface UsageRow {
 export function aggregateUsage(
   rows: UsageRow[],
   groupBy: 'day' | 'model',
-  prices: Record<string, { inputMilliCreditsPer1k: number; outputMilliCreditsPer1k: number }>,
+  prices: Record<string, ModelPriceDto>,
 ): UsageAggregateDto[] {
   const acc = new Map<string, UsageAggregateDto>();
   // 按模型聚合时先累计毫积分，最后统一折算，避免逐行取整把积分抬高。
