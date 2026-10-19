@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import type {
   AdminMessageDto,
@@ -19,6 +19,10 @@ interface SessionRow {
   createdAt: Date;
   user: { email: string };
   _count: { messages: number; tasks: number };
+}
+
+function isStatus(v: unknown): v is 'active' | 'archived' {
+  return v === 'active' || v === 'archived';
 }
 
 function toItem(row: SessionRow): AdminSessionItemDto {
@@ -48,6 +52,7 @@ export class AdminSessionsService {
     const userId = optionalString(query.userId);
     const q = optionalString(query.q);
     const status = optionalString(query.status);
+    if (status !== undefined && !isStatus(status)) throw new BadRequestException('invalid_status');
 
     const where: Prisma.SessionWhereInput = {
       ...(tenantId ? { tenantId } : {}),
@@ -129,7 +134,15 @@ export class AdminSessionsService {
   async archive(id: string, actor: AdminActor): Promise<AdminSessionItemDto> {
     const row = await this.getSession(id);
     await this.prisma.$transaction(async (tx) => {
-      await tx.session.update({ where: { id }, data: { status: 'archived' } });
+      try {
+        await tx.session.update({ where: { id }, data: { status: 'archived' } });
+      } catch (err) {
+        // 并发删除时 Prisma 抛 P2025，转为 404；其他异常原样抛出。
+        if ((err as { code?: string }).code === 'P2025') {
+          throw new NotFoundException('session_not_found');
+        }
+        throw err;
+      }
       await this.audit.write(tx, actor, {
         action: 'session.archive',
         targetType: 'session',
