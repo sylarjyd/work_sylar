@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import type { AdminUserItemDto, AdminUserPatch } from '@ai-office/shared';
 import {
@@ -21,15 +21,19 @@ export default function AdminUsersPage() {
   const [role, setRole] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const loadSeq = useRef(0);
 
   const load = useCallback(async () => {
+    const id = ++loadSeq.current;
     setLoading(true);
     setError('');
     try {
       const data = await listAdminUsers({ page, pageSize: 20, q, status, role });
+      if (id !== loadSeq.current) return;
       setItems(data.items);
       setTotal(data.total);
     } catch (err) {
+      if (id !== loadSeq.current) return;
       if (isUnauthorized(err)) {
         router.push('/login');
         return;
@@ -40,7 +44,7 @@ export default function AdminUsersPage() {
       }
       setError(adminErrorText(err));
     } finally {
-      setLoading(false);
+      if (id === loadSeq.current) setLoading(false);
     }
   }, [page, q, status, role, router]);
 

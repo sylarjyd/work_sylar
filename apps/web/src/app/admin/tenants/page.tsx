@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import type {
   AdminPlanDto,
@@ -29,25 +29,32 @@ export default function AdminTenantsPage() {
   const [detail, setDetail] = useState<AdminTenantDetailDto | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
+  const [detailLoading, setDetailLoading] = useState(false);
   const [amount, setAmount] = useState('');
   const [note, setNote] = useState('');
+  const [busy, setBusy] = useState(false);
+  const loadSeq = useRef(0);
+  const detailSeq = useRef(0);
+  const inFlight = useRef(false);
 
   const handleErr = useCallback(
-    (err: unknown) => {
+    (err: unknown): boolean => {
       if (isUnauthorized(err)) {
         router.push('/login');
-        return;
+        return true;
       }
       if (isForbidden(err)) {
         router.push('/');
-        return;
+        return true;
       }
       setError(adminErrorText(err));
+      return false;
     },
     [router],
   );
 
   const load = useCallback(async () => {
+    const id = ++loadSeq.current;
     setLoading(true);
     setError('');
     try {
@@ -55,13 +62,15 @@ export default function AdminTenantsPage() {
         listAdminTenants({ page, pageSize: 20, q, planId }),
         listAdminPlans(),
       ]);
+      if (id !== loadSeq.current) return;
       setItems(data.items);
       setTotal(data.total);
       setPlans(planRows.filter((p) => p.active));
     } catch (err) {
-      handleErr(err);
+      if (id !== loadSeq.current) return;
+      if (handleErr(err)) return;
     } finally {
-      setLoading(false);
+      if (id === loadSeq.current) setLoading(false);
     }
   }, [page, q, planId, handleErr]);
 
@@ -69,42 +78,77 @@ export default function AdminTenantsPage() {
     void load();
   }, [load]);
 
-  async function openDetail(id: string) {
+  async function openDetail(id: string): Promise<boolean> {
+    const seq = ++detailSeq.current;
+    setError('');
+    setDetailLoading(true);
+    try {
+      const data = await getAdminTenant(id);
+      if (seq !== detailSeq.current) return false;
+      setDetail(data);
+      setAmount('');
+      setNote('');
+      return true;
+    } catch (err) {
+      if (seq === detailSeq.current) handleErr(err);
+      return false;
+    } finally {
+      if (seq === detailSeq.current) setDetailLoading(false);
+    }
+  }
+
+  function closeDetail() {
+    detailSeq.current += 1;
+    setDetail(null);
+    setAmount('');
+    setNote('');
+    setDetailLoading(false);
+  }
+
+  async function subscribe(tenantId: string, tenantName: string, plan: string) {
+    if (inFlight.current) return;
+    if (!plan) return;
+    const planName = plans.find((p) => p.id === plan)?.name ?? plan;
+    if (!window.confirm(`确认给 ${tenantName} 开通套餐 ${planName}？`)) return;
+    inFlight.current = true;
+    setBusy(true);
     setError('');
     try {
-      setDetail(await getAdminTenant(id));
-    } catch (err) {
-      handleErr(err);
-    }
-  }
-
-  async function subscribe(tenantId: string, plan: string) {
-    if (!plan) return;
-    if (!window.confirm(`确认为该租户开通套餐 ${plan}？`)) return;
-    try {
       await adminSubscribeTenant(tenantId, { planId: plan });
-      await openDetail(tenantId);
-      await load();
+      if (await openDetail(tenantId)) {
+        await load();
+      }
     } catch (err) {
       handleErr(err);
+    } finally {
+      inFlight.current = false;
+      setBusy(false);
     }
   }
 
-  async function adjust(tenantId: string) {
+  async function adjust(tenantId: string, tenantName: string) {
+    if (inFlight.current) return;
     const value = Number(amount);
     if (!Number.isSafeInteger(value) || value === 0) {
       setError('请输入非零整数积分');
       return;
     }
-    if (!window.confirm(`确认调整积分 ${value}？\n备注：${note || '—'}`)) return;
+    if (!window.confirm(`确认调整 ${tenantName} 的积分 ${value}？\n备注：${note.trim() || '—'}`)) return;
+    inFlight.current = true;
+    setBusy(true);
+    setError('');
     try {
       await adminAdjustCredits(tenantId, { amount: value, note });
       setAmount('');
       setNote('');
-      await openDetail(tenantId);
-      await load();
+      if (await openDetail(tenantId)) {
+        await load();
+      }
     } catch (err) {
       handleErr(err);
+    } finally {
+      inFlight.current = false;
+      setBusy(false);
     }
   }
 
@@ -140,6 +184,8 @@ export default function AdminTenantsPage() {
           <span className="admin-muted">共 {total} 条</span>
         </div>
 
+        {detailLoading && <div className="admin-empty">详情加载中…</div>}
+
         {detail && (
           <section className="admin-panel">
             <h2 className="billing-heading">{detail.name}</h2>
@@ -153,7 +199,13 @@ export default function AdminTenantsPage() {
                 <select
                   className="admin-input"
                   defaultValue=""
-                  onChange={(e) => void subscribe(detail.id, e.target.value)}
+                  disabled={busy}
+                  onChange={(e) => {
+                    if (busy) return;
+                    const value = e.currentTarget.value;
+                    e.currentTarget.value = '';
+                    void subscribe(detail.id, detail.name, value);
+                  }}
                 >
                   <option value="">选择套餐…</option>
                   {plans.filter((p) => p.id !== 'free').map((p) => (
@@ -169,10 +221,15 @@ export default function AdminTenantsPage() {
                 备注
                 <input className="admin-input" value={note} onChange={(e) => setNote(e.target.value)} />
               </label>
-              <button type="button" className="admin-btn primary" onClick={() => void adjust(detail.id)}>
+              <button
+                type="button"
+                className="admin-btn primary"
+                disabled={busy}
+                onClick={() => void adjust(detail.id, detail.name)}
+              >
                 提交调整
               </button>
-              <button type="button" className="admin-btn" onClick={() => setDetail(null)}>
+              <button type="button" className="admin-btn" onClick={closeDetail}>
                 关闭
               </button>
             </div>
