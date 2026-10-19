@@ -28,4 +28,13 @@ describe('computeCredits', () => {
   it('未知模型不计价但仍有最低 1 积分', () => {
     expect(computeCredits([{ model: 'nope', input: 9999, output: 9999 }], prices, 100)).toBe(1);
   });
+
+  it('cap 为 0 时不扣费', () => {
+    // 无 hold 且可用余额为 0 时，任何用量都不应产生扣费。
+    expect(computeCredits([{ model: 'chat', input: 1_000_000, output: 1_000_000 }], prices, 0)).toBe(0);
+  });
+
+  it('cap 为负数时返回 0', () => {
+    expect(computeCredits([{ model: 'chat', input: 1000, output: 1000 }], prices, -5)).toBe(0);
+  });
 });
