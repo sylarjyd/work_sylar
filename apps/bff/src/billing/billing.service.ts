@@ -25,6 +25,9 @@ import { RATE_LIMITER, type RateLimiter } from './billing.rate-limit';
 
 type Db = Prisma.TransactionClient;
 
+/** 管理操作写入后的同事务回调（审计用）；不传则行为不变。 */
+export type BillingWriteHook = (tx: Prisma.TransactionClient) => Promise<void>;
+
 const HOLD_TTL_MS = 24 * 60 * 60 * 1000;
 
 /** 当前自然月（UTC）：月初到下月月初。 */
@@ -446,7 +449,12 @@ export class BillingService implements OnModuleDestroy {
   }
 
   // ------------------------------------------------------------------ 管理操作
-  async adminSubscribe(tenantId: string, planId: string, now = new Date()): Promise<BillingSummaryDto> {
+  async adminSubscribe(
+    tenantId: string,
+    planId: string,
+    now = new Date(),
+    afterWrite?: BillingWriteHook,
+  ): Promise<BillingSummaryDto> {
     const plan = await this.prisma.plan.findUnique({ where: { id: planId } });
     if (!plan || !plan.active) throw new NotFoundException('plan_not_found');
     if (plan.id === 'free') throw new BadRequestException('free_not_subscribable');
@@ -460,6 +468,7 @@ export class BillingService implements OnModuleDestroy {
         update: { planId: plan.id, status: 'active', periodStart: start, periodEnd: end },
       });
       await this.grantPeriod(tx, tenantId, plan, start, end);
+      await afterWrite?.(tx);
     });
     return this.summary(tenantId);
   }
@@ -469,6 +478,7 @@ export class BillingService implements OnModuleDestroy {
     amount: number,
     note: string,
     expiresAt: Date | null,
+    afterWrite?: BillingWriteHook,
   ): Promise<BillingSummaryDto> {
     if (amount === 0) throw new BadRequestException('amount_required');
     await this.prisma.$transaction(async (tx) => {
@@ -491,6 +501,7 @@ export class BillingService implements OnModuleDestroy {
           where: { tenantId },
           data: { balance: { increment: amount } },
         });
+        await afterWrite?.(tx);
         return;
       }
 
@@ -517,6 +528,7 @@ export class BillingService implements OnModuleDestroy {
         where: { tenantId },
         data: { balance: { decrement: deducted } },
       });
+      await afterWrite?.(tx);
     });
     return this.summary(tenantId);
   }
