@@ -31,6 +31,8 @@ let upstreamMode: 'ok' | 'error' | 'nousage' | 'slow' | 'fail502' = 'ok';
 let failStepCreate = false;
 let failRunUpdate = false;
 let failTaskCreate = false;
+// 配置读取故障注入：非空时 getRunConfig 抛错，用于验证「配置失败不留预占/不建 task」。
+let getRunConfigError: unknown = null;
 
 const stored: {
   steps: unknown[];
@@ -204,11 +206,14 @@ beforeAll(async () => {
       {
         provide: SettingsService,
         useValue: {
-          getRunConfig: async () => ({
-            maxRounds: 3,
-            confirmTimeoutMs: 1000,
-            codeExecTimeoutMs: 1234,
-          }),
+          getRunConfig: async () => {
+            if (getRunConfigError) throw getRunConfigError;
+            return {
+              maxRounds: 3,
+              confirmTimeoutMs: 1000,
+              codeExecTimeoutMs: 1234,
+            };
+          },
         },
       },
       { provide: PrismaService, useValue: fakePrisma },
@@ -237,6 +242,7 @@ beforeEach(() => {
   failStepCreate = false;
   failRunUpdate = false;
   failTaskCreate = false;
+  getRunConfigError = null;
   billingCalls.length = 0;
   beginRunError = null;
   escapedErrors.length = 0;
@@ -485,6 +491,24 @@ describe('TasksController', () => {
     await res.text();
     expect(billingCalls.some((c) => c[0] === 'settle')).toBe(false);
     expect(billingCalls.some((c) => c[0] === 'release')).toBe(true);
+  });
+
+  it('读取运行参数失败时不预占、不建 task/run', async () => {
+    getRunConfigError = new Error('injected settings failure');
+    const token = signToken({ sub: 'u1', tenantId: 't1' });
+    // 配置读取发生在 hijack/BEGIN 之前，因此可以走 inject 拿到正常的 JSON 错误响应。
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/sessions/s1/tasks',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { goal: 'g' },
+    });
+    expect(res.statusCode).toBe(500);
+    // 预占必须尚未发生（既无 begin 也无 release）。
+    expect(billingCalls).toHaveLength(0);
+    expect(stored.messages).toHaveLength(0);
+    expect(stored.artifacts).toHaveLength(0);
+    expect(lastRunsBody).toBe('');
   });
 
   it('可用积分不足返回 402', async () => {

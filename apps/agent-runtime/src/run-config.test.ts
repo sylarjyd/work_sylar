@@ -27,4 +27,38 @@ describe('resolveRunConfig', () => {
     const out = resolveRunConfig({ maxRounds: 0, confirmTimeoutMs: -1, codeExecTimeoutMs: 0 }, {});
     expect(out).toEqual({ maxRounds: 8, confirmTimeoutMs: 120000, codeExecTimeoutMs: 5000 });
   });
+
+  it('低于下限的正数请求值回落到 env', () => {
+    const out = resolveRunConfig(
+      { maxRounds: 1.5, confirmTimeoutMs: 500, codeExecTimeoutMs: 50 },
+      { MAX_ROUNDS: '10', CONFIRM_TIMEOUT_MS: '9000', CODE_EXEC_TIMEOUT_MS: '3000' },
+    );
+    expect(out).toEqual({ maxRounds: 10, confirmTimeoutMs: 9000, codeExecTimeoutMs: 3000 });
+  });
+
+  it('NaN / Infinity 请求值回落到 env', () => {
+    const out = resolveRunConfig(
+      { maxRounds: Number.NaN, confirmTimeoutMs: Number.POSITIVE_INFINITY, codeExecTimeoutMs: Number.NEGATIVE_INFINITY },
+      { MAX_ROUNDS: '10', CONFIRM_TIMEOUT_MS: '9000', CODE_EXEC_TIMEOUT_MS: '3000' },
+    );
+    expect(out).toEqual({ maxRounds: 10, confirmTimeoutMs: 9000, codeExecTimeoutMs: 3000 });
+  });
+
+  it('env 越界时回落到默认值', () => {
+    const out = resolveRunConfig(undefined, {
+      MAX_ROUNDS: '99',
+      CONFIRM_TIMEOUT_MS: '1',
+      CODE_EXEC_TIMEOUT_MS: '999999',
+    });
+    expect(out).toEqual({ maxRounds: 8, confirmTimeoutMs: 120000, codeExecTimeoutMs: 5000 });
+  });
+
+  it('env 非数字时回落到默认值', () => {
+    const out = resolveRunConfig(undefined, {
+      MAX_ROUNDS: 'abc',
+      CONFIRM_TIMEOUT_MS: '',
+      CODE_EXEC_TIMEOUT_MS: 'NaN',
+    });
+    expect(out).toEqual({ maxRounds: 8, confirmTimeoutMs: 120000, codeExecTimeoutMs: 5000 });
+  });
 });

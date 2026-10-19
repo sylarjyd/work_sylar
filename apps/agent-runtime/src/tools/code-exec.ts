@@ -138,13 +138,20 @@ function runSandboxed(spawn: Spawn, code: string, limits: Limits): Promise<CodeE
   });
 }
 
+/** 服务端上限缺失或非法时的兜底值（与 CODE_EXEC_TIMEOUT_MS 默认值一致）。 */
+const DEFAULT_SERVER_LIMIT_MS = 5000;
+
 /** 解析单次执行上限：请求值 ≤ 运行级上限 ≤ 服务端硬上限（60s）。 */
 export function resolveTimeLimit(
   requested: unknown,
   ctxLimit: unknown,
   serverLimit: number,
 ): number {
-  const server = Math.min(Math.max(serverLimit, 100), 60000);
+  // NaN 参与 Math.min/Math.max 会一路传播，最终 setTimeout(NaN) 近似立即触发；
+  // 非有限值（NaN/±Infinity）一律按未配置处理。
+  const server = Number.isFinite(serverLimit)
+    ? Math.min(Math.max(serverLimit, 100), 60000)
+    : DEFAULT_SERVER_LIMIT_MS;
   const ctxMax =
     typeof ctxLimit === 'number' && Number.isFinite(ctxLimit) && ctxLimit > 0
       ? Math.min(ctxLimit, server)

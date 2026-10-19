@@ -72,4 +72,18 @@ describe('resolveTimeLimit', () => {
     expect(resolveTimeLimit(undefined, undefined, 120000)).toBe(60000);
     expect(resolveTimeLimit(undefined, 90000, 5000)).toBe(5000);
   });
+
+  it('非有限的服务端上限回落到 5s 默认值', () => {
+    // NaN 若直接参与 Math.min/Math.max，会让 setTimeout(NaN) 几乎立刻触发，
+    // 把「未配置」变成「1ms 超时」。
+    expect(resolveTimeLimit(undefined, undefined, Number.NaN)).toBe(5000);
+    expect(resolveTimeLimit(undefined, undefined, Number.POSITIVE_INFINITY)).toBe(5000);
+    // 请求值合法时仍可收紧到 5s 默认上限之内。
+    expect(resolveTimeLimit(1000, undefined, Number.NaN)).toBe(1000);
+  });
+
+  it('非法请求值被忽略，回落运行级或服务端上限', () => {
+    expect(resolveTimeLimit(Number.NaN, 2000, 5000)).toBe(2000);
+    expect(resolveTimeLimit(-5, undefined, 5000)).toBe(5000);
+  });
 });
