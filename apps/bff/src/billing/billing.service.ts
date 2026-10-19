@@ -464,6 +464,11 @@ export class BillingService implements OnModuleDestroy {
       await this.lockCredit(tx, tenantId);
 
       if (amount > 0) {
+        // TenantCredit.balance 为 Postgres int4，连续大额发放可能溢出，先在锁内校验。
+        const current = await tx.tenantCredit.findUnique({ where: { tenantId } });
+        if ((current?.balance ?? 0) + amount > 2_147_483_647) {
+          throw new BadRequestException('amount_too_large');
+        }
         await tx.creditLot.create({
           data: { tenantId, source: 'adjust', granted: amount, remaining: amount, expiresAt, note },
         });

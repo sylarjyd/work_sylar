@@ -95,6 +95,12 @@ export function createRateLimiter(env: NodeJS.ProcessEnv = process.env): RateLim
   const url = env.REDIS_URL;
   if (!url) return new MemoryRateLimiter();
   return new RedisRateLimiter(
-    new Redis(url, { lazyConnect: true, maxRetriesPerRequest: 1, connectTimeout: 2000 }),
+    new Redis(url, {
+      lazyConnect: true,
+      maxRetriesPerRequest: 1,
+      connectTimeout: 2000,
+      // 命令级超时：建连后 Redis 卡死时 eval 不会无限挂起，fail-open 才能生效。
+      commandTimeout: 2000,
+    }),
   );
 }

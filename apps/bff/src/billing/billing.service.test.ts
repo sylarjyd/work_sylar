@@ -322,6 +322,18 @@ describe('BillingService', () => {
     await expect(svc.adjust('t1', -1, '收回', null)).rejects.toThrow('insufficient_balance');
   });
 
+  it('adjust 正数累计超出 Int 上限时拒绝', async () => {
+    await svc.summary('t1');
+    ctx.db.credits[0].balance = 2_147_483_647;
+    const lotsBefore = ctx.db.lots.length;
+    const txsBefore = ctx.db.txs.length;
+
+    await expect(svc.adjust('t1', 1, '溢出', null)).rejects.toThrow('amount_too_large');
+    expect(ctx.db.lots).toHaveLength(lotsBefore);
+    expect(ctx.db.txs).toHaveLength(txsBefore);
+    expect(ctx.db.credits[0].balance).toBe(2_147_483_647);
+  });
+
   it('管理员开通套餐时月末日期夹到目标月最后一天', async () => {
     ctx.db.plans.push({
       id: 'pro',

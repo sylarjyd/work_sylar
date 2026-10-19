@@ -44,14 +44,18 @@ export class BillingController {
     @Query('to') to?: string,
     @Query('groupBy') groupBy?: string,
   ): Promise<UsageAggregateDto[]> {
-    const now = new Date();
-    let fromDate = parseDate(from) ?? new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-    const toDate = parseDate(to) ?? now;
-    if (fromDate > toDate) throw new BadRequestException('invalid_range');
+    // 默认区间以 to 为基准，避免只传过去的 to 时 from 落在未来导致 invalid_range。
+    const toDate = parseDate(to) ?? new Date();
+    const fromDate = parseDate(from) ?? new Date(toDate.getTime() - 30 * 24 * 60 * 60 * 1000);
+    if (fromDate.getTime() > toDate.getTime()) {
+      throw new BadRequestException('invalid_range');
+    }
     // 区间上限 365 天，避免一次查询拉取过多用量记录。
-    const minFrom = new Date(toDate.getTime() - 365 * 24 * 60 * 60 * 1000);
-    if (fromDate < minFrom) fromDate = minFrom;
-    return this.billing.usage(user.tenantId, fromDate, toDate, groupBy === 'model' ? 'model' : 'day');
+    const start =
+      fromDate.getTime() < toDate.getTime() - 365 * 24 * 60 * 60 * 1000
+        ? new Date(toDate.getTime() - 365 * 24 * 60 * 60 * 1000)
+        : fromDate;
+    return this.billing.usage(user.tenantId, start, toDate, groupBy === 'model' ? 'model' : 'day');
   }
 }
 
