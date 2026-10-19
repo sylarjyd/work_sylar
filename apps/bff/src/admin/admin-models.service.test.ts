@@ -8,7 +8,7 @@ import type { AdminActor } from '../audit/audit.types';
 
 const actor: AdminActor = { id: 'a1', email: 'admin@test.local' };
 
-function makeService(inUse = false) {
+function makeService(inUse = false, activeSubInUse = false) {
   const prices = new Map([
     ['m1', { model: 'm1', inputMilliCreditsPer1k: 100, outputMilliCreditsPer1k: 200, updatedAt: new Date('2026-10-01T00:00:00Z') }],
   ]);
@@ -41,6 +41,9 @@ function makeService(inUse = false) {
     },
     plan: {
       findFirst: async () => (inUse ? { id: 'pro' } : null),
+    },
+    subscription: {
+      findFirst: async () => (activeSubInUse ? { tenantId: 't1' } : null),
     },
     // 模拟 SELECT ... FOR UPDATE：价格行存在时返回它，否则返回空集。
     $queryRaw: async (_strings: TemplateStringsArray, ...values: unknown[]) => {
@@ -111,6 +114,12 @@ describe('AdminModelsService', () => {
 
   it('被启用套餐引用时拒绝删除', async () => {
     const { svc } = makeService(true);
+    await expect(svc.remove('m1', actor)).rejects.toMatchObject({ message: 'model_in_use' });
+  });
+
+  it('停用套餐的有效订阅引用时拒绝删除', async () => {
+    // 停用套餐的订阅在 periodEnd 前仍生效，删除价格会让这些租户的运行失败。
+    const { svc } = makeService(false, true);
     await expect(svc.remove('m1', actor)).rejects.toMatchObject({ message: 'model_in_use' });
   });
 

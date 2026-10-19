@@ -138,24 +138,31 @@ function runSandboxed(spawn: Spawn, code: string, limits: Limits): Promise<CodeE
   });
 }
 
-/** 服务端上限缺失或非法时的兜底值（与 CODE_EXEC_TIMEOUT_MS 默认值一致）。 */
+/** 服务端硬上限：任何路径都不能超过 60s。 */
+const HARD_LIMIT_MS = 60000;
+
+/** 兜底默认值（与 CODE_EXEC_TIMEOUT_MS 默认值一致），仅在未下发运行级配置时使用。 */
 const DEFAULT_SERVER_LIMIT_MS = 5000;
 
-/** 解析单次执行上限：请求值 ≤ 运行级上限 ≤ 服务端硬上限（60s）。 */
+/**
+ * 解析单次执行上限：请求值 ≤ 运行级上限 ≤ 服务端硬上限（60s）。
+ * fallbackLimit 来自 env，只是未下发运行级配置时的兜底值，不是硬上限。
+ */
 export function resolveTimeLimit(
   requested: unknown,
   ctxLimit: unknown,
-  serverLimit: number,
+  fallbackLimit: number,
 ): number {
   // NaN 参与 Math.min/Math.max 会一路传播，最终 setTimeout(NaN) 近似立即触发；
   // 非有限值（NaN/±Infinity）一律按未配置处理。
-  const server = Number.isFinite(serverLimit)
-    ? Math.min(Math.max(serverLimit, 100), 60000)
+  const fallback = Number.isFinite(fallbackLimit)
+    ? Math.min(Math.max(fallbackLimit, 100), HARD_LIMIT_MS)
     : DEFAULT_SERVER_LIMIT_MS;
+  // 运行级上限已下发时独立钳到服务端硬上限，不再受 env 兜底值限制；未下发时才用兜底值。
   const ctxMax =
     typeof ctxLimit === 'number' && Number.isFinite(ctxLimit) && ctxLimit > 0
-      ? Math.min(ctxLimit, server)
-      : server;
+      ? Math.min(Math.max(ctxLimit, 100), HARD_LIMIT_MS)
+      : fallback;
   return typeof requested === 'number' && Number.isFinite(requested) && requested > 0
     ? Math.min(requested, ctxMax)
     : ctxMax;
@@ -185,7 +192,7 @@ export function createCodeExecTool(
     },
     async execute(args, ctx) {
       const code = String(args.code ?? '');
-      // 调用方只能收紧、不能放宽；运行级上限再收紧一次。
+      // 请求值受运行级上限与 60s 服务端硬上限约束；env 仅在未下发运行级配置时兜底。
       const limit = resolveTimeLimit(args.timeoutMs, ctx?.codeExecTimeoutMs, limits.timeoutMs);
       return runSandboxed(spawn, code, { ...limits, timeoutMs: limit });
     },

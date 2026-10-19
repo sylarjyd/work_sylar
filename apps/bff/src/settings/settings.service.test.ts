@@ -88,6 +88,15 @@ describe('SettingsService', () => {
     await expect(svc.update('kbChunkOverlap', 200, actor)).resolves.toMatchObject({ value: 200 });
   });
 
+  it('kbChunkSize 必须大于当前生效的 kbChunkOverlap', async () => {
+    const { svc } = makeService();
+    await svc.update('kbChunkOverlap', 600, actor);
+    await expect(svc.update('kbChunkSize', 500, actor)).rejects.toMatchObject({
+      message: 'invalid_kbChunkSize',
+    });
+    await expect(svc.update('kbChunkSize', 601, actor)).resolves.toMatchObject({ value: 601 });
+  });
+
   it('update 与审计同事务写入', async () => {
     const { svc, audits } = makeService();
     await svc.update('maxRounds', 12, actor);

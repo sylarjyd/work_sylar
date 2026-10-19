@@ -21,28 +21,32 @@ export default function AdminUsersPage() {
   const [role, setRole] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const loadSeq = useRef(0);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (): Promise<boolean> => {
     const id = ++loadSeq.current;
     setLoading(true);
     setError('');
     try {
       const data = await listAdminUsers({ page, pageSize: 20, q, status, role });
-      if (id !== loadSeq.current) return;
+      // 过期响应不写状态
+      if (id !== loadSeq.current) return true;
       setItems(data.items);
       setTotal(data.total);
+      return true;
     } catch (err) {
-      if (id !== loadSeq.current) return;
+      if (id !== loadSeq.current) return true;
       if (isUnauthorized(err)) {
         router.push('/login');
-        return;
+        return false;
       }
       if (isForbidden(err)) {
         router.push('/');
-        return;
+        return false;
       }
       setError(adminErrorText(err));
+      return false;
     } finally {
       if (id === loadSeq.current) setLoading(false);
     }
@@ -58,20 +62,38 @@ export default function AdminUsersPage() {
     void load();
   }, [load]);
 
+  // 防重提交：确认框之后、首个 await 之前占位，finally 复位。
+  const inFlight = useRef(false);
+  const [busy, setBusy] = useState(false);
+
   async function patch(user: AdminUserItemDto, body: AdminUserPatch) {
+    if (inFlight.current) return;
     const before = `角色 ${user.role} / 状态 ${user.status}`;
     const after = `角色 ${body.role ?? user.role} / 状态 ${body.status ?? user.status}`;
     if (!window.confirm(`确认修改 ${user.email}？\n${before} → ${after}`)) return;
+    inFlight.current = true;
+    setBusy(true);
     setError('');
+    setNotice('');
     try {
       await updateAdminUser(user.id, body);
-      await loadRef.current();
+      // 写操作已成功，先给出明确提示，避免补刷新失败被误判为写失败而重复提交
+      setNotice('操作已成功，正在刷新数据…');
+      const ok = await loadRef.current();
+      setNotice(ok ? '操作已成功。' : '操作已成功，但数据刷新失败，请勿重复提交；稍后可刷新页面确认。');
     } catch (err) {
       if (isUnauthorized(err)) {
         router.push('/login');
         return;
       }
+      if (isForbidden(err)) {
+        router.push('/');
+        return;
+      }
       setError(adminErrorText(err));
+    } finally {
+      inFlight.current = false;
+      setBusy(false);
     }
   }
 
@@ -91,22 +113,33 @@ export default function AdminUsersPage() {
           </div>
         )}
 
+        {notice && (
+          <div
+            className="banner"
+            role="status"
+            style={{ marginBottom: 16, background: 'var(--surface-2)', border: '1px solid var(--line)' }}
+          >
+            {notice}
+          </div>
+        )}
+
         <div className="admin-toolbar">
           <input
             className="admin-input"
             placeholder="搜索邮箱"
             value={q}
+            disabled={busy}
             onChange={(e) => {
               setPage(1);
               setQ(e.target.value);
             }}
           />
-          <select className="admin-input" value={status} onChange={(e) => { setPage(1); setStatus(e.target.value); }}>
+          <select className="admin-input" value={status} disabled={busy} onChange={(e) => { setPage(1); setStatus(e.target.value); }}>
             <option value="">全部状态</option>
             <option value="active">启用</option>
             <option value="disabled">禁用</option>
           </select>
-          <select className="admin-input" value={role} onChange={(e) => { setPage(1); setRole(e.target.value); }}>
+          <select className="admin-input" value={role} disabled={busy} onChange={(e) => { setPage(1); setRole(e.target.value); }}>
             <option value="">全部角色</option>
             <option value="member">成员</option>
             <option value="admin">管理员</option>
@@ -142,6 +175,7 @@ export default function AdminUsersPage() {
                     <button
                       type="button"
                       className="admin-btn"
+                      disabled={busy}
                       onClick={() => void patch(u, { status: u.status === 'active' ? 'disabled' : 'active' })}
                     >
                       {u.status === 'active' ? '禁用' : '启用'}
@@ -149,6 +183,7 @@ export default function AdminUsersPage() {
                     <button
                       type="button"
                       className="admin-btn"
+                      disabled={busy}
                       onClick={() => void patch(u, { role: u.role === 'admin' ? 'member' : 'admin' })}
                     >
                       {u.role === 'admin' ? '设为成员' : '设为管理员'}
@@ -161,14 +196,14 @@ export default function AdminUsersPage() {
         )}
 
         <div className="admin-pager">
-          <button type="button" className="admin-btn" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
+          <button type="button" className="admin-btn" disabled={busy || page <= 1} onClick={() => setPage((p) => p - 1)}>
             上一页
           </button>
           <span>第 {page} 页</span>
           <button
             type="button"
             className="admin-btn"
-            disabled={page * 20 >= total}
+            disabled={busy || page * 20 >= total}
             onClick={() => setPage((p) => p + 1)}
           >
             下一页

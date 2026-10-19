@@ -77,6 +77,12 @@ export class SettingsService {
       if (value >= size.value) throw new BadRequestException('invalid_kbChunkOverlap');
     }
 
+    if (key === 'kbChunkSize') {
+      // 与当前生效的 overlap 联合校验，避免落库 overlap ≥ size 的不一致状态。
+      const overlap = await this.resolve('kbChunkOverlap');
+      if (overlap.value >= value) throw new BadRequestException('invalid_kbChunkSize');
+    }
+
     await this.prisma.$transaction(async (tx) => {
       await tx.setting.upsert({
         where: { key },

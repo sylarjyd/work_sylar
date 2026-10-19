@@ -74,6 +74,7 @@ export function adminErrorText(err: unknown): string {
     'admin_failed_409_model_exists': '该模型价格已存在',
     'admin_failed_404_setting_not_found': '参数不存在',
     'admin_failed_400_invalid_kbChunkOverlap': '分块重叠必须小于分块大小',
+    'admin_failed_400_invalid_kbChunkSize': '分块大小必须大于分块重叠',
     'admin_failed_400_invalid_value': '参数值超出允许范围',
   };
   if (map[msg]) return map[msg];

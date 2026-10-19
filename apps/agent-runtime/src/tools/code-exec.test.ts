@@ -68,9 +68,15 @@ describe('resolveTimeLimit', () => {
     expect(resolveTimeLimit(500, 2000, 5000)).toBe(500);
   });
 
-  it('服务端上限硬夹到 60s', () => {
+  it('服务端硬上限为 60s', () => {
     expect(resolveTimeLimit(undefined, undefined, 120000)).toBe(60000);
-    expect(resolveTimeLimit(undefined, 90000, 5000)).toBe(5000);
+    expect(resolveTimeLimit(undefined, 90000, 5000)).toBe(60000);
+  });
+
+  it('运行级配置不受 env 兜底值限制', () => {
+    // env 只是未下发运行级配置时的兜底值，不能把管理端配置截断。
+    expect(resolveTimeLimit(undefined, 30000, 5000)).toBe(30000);
+    expect(resolveTimeLimit(999999, 30000, 5000)).toBe(30000);
   });
 
   it('非有限的服务端上限回落到 5s 默认值', () => {

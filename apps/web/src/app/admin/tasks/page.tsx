@@ -139,6 +139,7 @@ export default function AdminTasksPage() {
           <select className="admin-input" value={status} onChange={(e) => { setPage(1); setStatus(e.target.value); }}>
             <option value="">全部状态</option>
             <option value="running">运行中</option>
+            <option value="queued">排队中</option>
             <option value="done">完成</option>
             <option value="failed">失败</option>
           </select>

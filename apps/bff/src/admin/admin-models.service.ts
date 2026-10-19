@@ -164,6 +164,14 @@ export class AdminModelsService {
         });
         if (used) throw new BadRequestException('model_in_use');
 
+        // 停用套餐的有效订阅仍可使用到期；价格被这类订阅引用时同样不能删，
+        // 否则 ensureSubscription 返回的旧 plan 会在运行时抛 model_price_missing。
+        const subscribed = await tx.subscription.findFirst({
+          where: { periodEnd: { gt: new Date() }, plan: { allowedModels: { has: name } } },
+          select: { tenantId: true },
+        });
+        if (subscribed) throw new BadRequestException('model_in_use');
+
         await tx.modelPrice.delete({ where: { model: name } });
         await this.audit.write(tx, actor, {
           action: 'modelPrice.delete',
