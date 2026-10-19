@@ -17,6 +17,8 @@ import { writeHead } from '../stream/sse-proxy';
 const UPSTREAM_CONNECT_TIMEOUT_MS = 10_000;
 /** 上游流空闲超时：超过该时长未收到任何 chunk 视为 runtime 卡死。 */
 const UPSTREAM_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
+/** 非 2xx 错误体读取超时：避免上游发完响应头后 body 停滞导致已 hijack 的响应永久挂起。 */
+const UPSTREAM_ERROR_BODY_TIMEOUT_MS = 10_000;
 
 // 项目未启用 DOM lib，`ReadableStreamReadResult` 不存在，从 reader.read 推导。
 type StreamReadResult<T> = Awaited<ReturnType<ReadableStreamDefaultReader<T>['read']>>;
@@ -36,15 +38,19 @@ function readWithIdleTimeout(
   }) as Promise<StreamReadResult<Uint8Array>>;
 }
 
-/** 有界读取上游响应体：非 2xx 时只用于回显，避免恶意/异常上游撑爆内存。 */
-async function readBodyLimited(res: Response, limit = 8192): Promise<string> {
+/** 有界读取上游响应体：非 2xx 时只用于回显，避免恶意/异常上游撑爆内存或长期停滞。 */
+async function readBodyLimited(
+  res: Response,
+  limit = 8192,
+  timeoutMs = UPSTREAM_ERROR_BODY_TIMEOUT_MS,
+): Promise<string> {
   if (!res.body) return '';
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let out = '';
   try {
     while (out.length < limit) {
-      const { done, value } = await reader.read();
+      const { done, value } = await readWithIdleTimeout(reader, timeoutMs);
       if (done) break;
       out += decoder.decode(value, { stream: true });
     }
@@ -160,7 +166,7 @@ export class TasksController {
       clearTimeout(connectTimer);
     }
 
-    if (!upstream.ok || !upstream.body) {
+    if (!upstream.ok) {
       // 上游非 2xx：归还预占，原样转发真实状态码与响应体，不伪装成 200 text/event-stream。
       await this.billing.releaseHold(runId).catch(() => undefined);
       await this.safeFinish(runId, taskId, 'failed', '', sessionId);
@@ -178,6 +184,25 @@ export class TasksController {
       } catch (err) {
         // 写响应失败也必须终止响应，否则已 hijack 的请求会一直挂起。
         this.logger.error(`run ${runId} 转发上游错误响应失败: ${(err as Error).message}`);
+        try {
+          reply.raw.end();
+        } catch {
+          // 客户端已断开时 end() 可能抛错，忽略。
+        }
+      }
+      return;
+    }
+
+    if (!upstream.body) {
+      // 2xx 却没有 body：属于上游异常。不能回 200 + upstream_error，否则客户端会
+      // 误以为成功；明确回 502，并同样保证 end 容错。
+      await this.billing.releaseHold(runId).catch(() => undefined);
+      await this.safeFinish(runId, taskId, 'failed', '', sessionId);
+      try {
+        writeHead(reply, 502, { 'content-type': 'application/json' });
+        reply.raw.end(JSON.stringify({ error: 'upstream_empty_body' }));
+      } catch (err) {
+        this.logger.error(`run ${runId} 转发上游空响应体失败: ${(err as Error).message}`);
         try {
           reply.raw.end();
         } catch {
@@ -239,18 +264,27 @@ export class TasksController {
       // 结算优先于 finish：即使 finish 失败，用量也已落账。
       // 结算抛错时保留 hold 与 pending，由补偿任务重试。
       if (latestUsage) {
+        let usageRecorded = false;
         try {
           await this.recordUsageWithRetry(runId, { tenantId, userId, sessionId }, latestUsage);
+          usageRecorded = true;
         } catch (err) {
+          // 重试全部失败：释放预占，避免 hold 滞留到 24h TTL。
           this.logger.error(
-            `run ${runId} 用量记录失败，已尽力重试，用量=${JSON.stringify(latestUsage)}: ${(err as Error).message}`,
+            `run ${runId} 用量记录失败，已尽力重试，将释放预占；用量=${JSON.stringify(latestUsage)}: ${(err as Error).message}`,
           );
+          await this.billing.releaseHold(runId).catch((e) => {
+            this.logger.error(`run ${runId} 释放预占失败: ${(e as Error).message}`);
+          });
         }
-        try {
-          await this.billing.settle(runId);
-        } catch (err) {
-          // settle 失败时 hold 与 pending 都还在，由补偿任务重试。
-          this.logger.error(`run ${runId} 计费结算失败（保留 pending 待补偿）: ${(err as Error).message}`);
+        // 只有用量成功落库后才结算；settle 失败保留 pending 待补偿任务重试。
+        if (usageRecorded) {
+          try {
+            await this.billing.settle(runId);
+          } catch (err) {
+            // settle 失败时 hold 与 pending 都还在，由补偿任务重试。
+            this.logger.error(`run ${runId} 计费结算失败（保留 pending 待补偿）: ${(err as Error).message}`);
+          }
         }
       } else {
         try {

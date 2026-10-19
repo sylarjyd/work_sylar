@@ -439,6 +439,7 @@ describe('TasksController', () => {
       body: JSON.stringify({ goal: 'g' }),
     });
     expect(res.status).toBe(502);
+    expect(res.headers.get('content-type')).toContain('application/json');
     expect(await res.json()).toEqual({ error: 'upstream_boom' });
     expect(billingCalls.some((c) => c[0] === 'release')).toBe(true);
     expect(billingCalls.some((c) => c[0] === 'record')).toBe(false);
