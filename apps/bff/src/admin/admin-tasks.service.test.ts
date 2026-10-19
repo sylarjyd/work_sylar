@@ -1,6 +1,6 @@
 import 'reflect-metadata';
 import { describe, it, expect } from 'vitest';
-import { NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { AdminTasksService } from './admin-tasks.service';
 import type { AuditService } from '../audit/audit.service';
 import type { PrismaService } from '../db/prisma.service';
@@ -8,43 +8,146 @@ import type { AdminActor } from '../audit/audit.types';
 
 const actor: AdminActor = { id: 'a1', email: 'admin@test.local' };
 
-function makeService() {
-  const task = {
-    id: 'task1',
-    sessionId: 's1',
-    goal: 'x'.repeat(300),
-    status: 'done',
-    createdAt: new Date('2026-10-01T00:00:00Z'),
-    runs: [{ status: 'done' }],
-  };
-  const run = {
-    id: 'r1',
-    taskId: 'task1',
-    status: 'done',
-    startedAt: new Date('2026-10-01T00:00:00Z'),
-    endedAt: new Date('2026-10-01T00:01:00Z'),
-    steps: [
-      { id: 'st1', seq: 0, type: 'think', payload: { text: 'hi' }, ts: new Date('2026-10-01T00:00:01Z') },
-    ],
-    _count: { steps: 1 },
-  };
+interface StepSeed {
+  id: string;
+  seq: number;
+  type: string;
+  payload: unknown;
+  ts: Date;
+}
+
+interface RunSeed {
+  id: string;
+  taskId: string;
+  status: string;
+  startedAt: Date;
+  endedAt: Date | null;
+  steps: StepSeed[];
+}
+
+interface TaskSeed {
+  id: string;
+  sessionId: string;
+  goal: string;
+  status: string;
+  createdAt: Date;
+}
+
+interface UsageSeed {
+  runId: string;
+  credits: number | null;
+  inputTokens?: number;
+  outputTokens?: number;
+  status?: string;
+  models?: unknown;
+}
+
+interface SessionSeed {
+  tenantId: string;
+  userId: string;
+}
+
+interface Fixtures {
+  tasks?: TaskSeed[];
+  runs?: RunSeed[];
+  usage?: UsageSeed[];
+  sessions?: Record<string, SessionSeed>;
+}
+
+const defaultTask: TaskSeed = {
+  id: 'task1',
+  sessionId: 's1',
+  goal: 'x'.repeat(300),
+  status: 'done',
+  createdAt: new Date('2026-10-01T00:00:00Z'),
+};
+
+const defaultRun: RunSeed = {
+  id: 'r1',
+  taskId: 'task1',
+  status: 'done',
+  startedAt: new Date('2026-10-01T00:00:00Z'),
+  endedAt: new Date('2026-10-01T00:01:00Z'),
+  steps: [
+    { id: 'st1', seq: 0, type: 'think', payload: { text: 'hi' }, ts: new Date('2026-10-01T00:00:01Z') },
+  ],
+};
+
+/** 内存 fake：findMany/count 按 where 真实过滤，便于验证过滤条件确实下发。 */
+function makeService(fixtures: Fixtures = {}) {
+  const tasks = fixtures.tasks ?? [defaultTask];
+  const runs = fixtures.runs ?? [defaultRun];
+  const usage = fixtures.usage ?? [{ runId: 'r1', credits: 7 }];
+  const sessions = fixtures.sessions ?? { s1: { tenantId: 't1', userId: 'u1' } };
   const audits: unknown[] = [];
+
+  const runsOfTask = (taskId: string) =>
+    runs
+      .filter((r) => r.taskId === taskId)
+      .sort((a, b) => b.startedAt.getTime() - a.startedAt.getTime());
+
+  const taskView = (task: TaskSeed) => ({
+    ...task,
+    runs: runsOfTask(task.id).slice(0, 1).map((r) => ({ status: r.status })),
+  });
+
+  const matchTask = (task: TaskSeed, where: any) => {
+    if (where?.sessionId && task.sessionId !== where.sessionId) return false;
+    if (where?.status && task.status !== where.status) return false;
+    const sessionWhere = where?.session?.is;
+    if (sessionWhere) {
+      const session = sessions[task.sessionId];
+      if (sessionWhere.tenantId && session?.tenantId !== sessionWhere.tenantId) return false;
+      if (sessionWhere.userId && session?.userId !== sessionWhere.userId) return false;
+    }
+    return true;
+  };
+
+  const usageView = (u: UsageSeed) => ({
+    runId: u.runId,
+    credits: u.credits,
+    inputTokens: u.inputTokens ?? 10,
+    outputTokens: u.outputTokens ?? 20,
+    status: u.status ?? 'settled',
+    models: u.models ?? [],
+  });
+
   const db = {
     task: {
-      findMany: async () => [task],
-      count: async () => 1,
-      findUnique: async ({ where }: { where: { id: string } }) => (where.id === 'task1' ? task : null),
+      findMany: async ({ where, skip = 0, take = tasks.length }: any) =>
+        tasks
+          .filter((t) => matchTask(t, where))
+          .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+          .slice(skip, skip + take)
+          .map(taskView),
+      count: async ({ where }: any) => tasks.filter((t) => matchTask(t, where)).length,
+      findUnique: async ({ where }: { where: { id: string } }) => {
+        const task = tasks.find((t) => t.id === where.id);
+        return task ? taskView(task) : null;
+      },
     },
     run: {
-      findMany: async () => [run],
-      findUnique: async ({ where }: { where: { id: string } }) => (where.id === 'r1' ? run : null),
+      findMany: async ({ where }: any) => runsOfTask(where.taskId),
+      findUnique: async ({ where, include }: any) => {
+        const run = runs.find((r) => r.id === where.id);
+        if (!run) return null;
+        const ordered = [...run.steps].sort((a, b) => a.seq - b.seq);
+        const skip = include?.steps?.skip ?? 0;
+        const take = include?.steps?.take ?? ordered.length;
+        return {
+          ...run,
+          steps: ordered.slice(skip, skip + take),
+          _count: { steps: ordered.length },
+        };
+      },
     },
     usageRecord: {
-      findMany: async () => [{ runId: 'r1', credits: 7 }],
-      findUnique: async ({ where }: { where: { runId: string } }) =>
-        where.runId === 'r1'
-          ? { inputTokens: 10, outputTokens: 20, credits: 7, status: 'settled', models: [] }
-          : null,
+      findMany: async ({ where }: any) =>
+        usage.filter((u) => where.runId.in.includes(u.runId)).map(usageView),
+      findUnique: async ({ where }: { where: { runId: string } }) => {
+        const u = usage.find((x) => x.runId === where.runId);
+        return u ? usageView(u) : null;
+      },
     },
   } as unknown as PrismaService;
   const audit = {
@@ -63,11 +166,48 @@ describe('AdminTasksService', () => {
     expect(page.items[0].latestRunStatus).toBe('done');
   });
 
+  it('list 截断按码点计算，不切裂 emoji', async () => {
+    const { svc } = makeService({
+      tasks: [{ ...defaultTask, goal: 'a'.repeat(199) + '😀'.repeat(10) }],
+    });
+    const page = await svc.list({});
+    const goal = page.items[0].goal;
+    expect(Array.from(goal)).toHaveLength(200);
+    expect(goal.endsWith('😀')).toBe(true);
+  });
+
+  it('list status 过滤生效', async () => {
+    const { svc } = makeService();
+    const failed = await svc.list({ status: 'failed' });
+    expect(failed.items).toHaveLength(0);
+    expect(failed.total).toBe(0);
+
+    const done = await svc.list({ status: 'done' });
+    expect(done.items).toHaveLength(1);
+    expect(done.total).toBe(1);
+  });
+
+  it('list 非法 status 抛 400', async () => {
+    const { svc } = makeService();
+    await expect(svc.list({ status: 'queued' })).rejects.toBeInstanceOf(BadRequestException);
+  });
+
   it('detail 返回运行与积分', async () => {
     const { svc, audits } = makeService();
     const detail = await svc.detail('task1', actor);
     expect(detail.runs[0]).toMatchObject({ id: 'r1', credits: 7 });
     expect(audits[0]).toMatchObject({ action: 'task.view', targetId: 'task1' });
+  });
+
+  it('detail 在无 run 或无 usage 时摘要为 null', async () => {
+    const noRun = makeService({ runs: [], usage: [] });
+    const detailWithoutRun = await noRun.svc.detail('task1', actor);
+    expect(detailWithoutRun.latestRunStatus).toBeNull();
+    expect(detailWithoutRun.runs).toHaveLength(0);
+
+    const noUsage = makeService({ usage: [] });
+    const detailWithoutUsage = await noUsage.svc.detail('task1', actor);
+    expect(detailWithoutUsage.runs[0].credits).toBeNull();
   });
 
   it('runDetail 返回分页 step 与用量', async () => {
@@ -78,8 +218,19 @@ describe('AdminTasksService', () => {
     expect(audits[0]).toMatchObject({ action: 'run.view', targetId: 'r1' });
   });
 
+  it('runDetail stepPageSize 非法抛 400', async () => {
+    const { svc } = makeService();
+    await expect(
+      svc.runDetail('r1', { stepPageSize: '0' }, actor),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    await expect(
+      svc.runDetail('r1', { stepPageSize: '101' }, actor),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
   it('不存在抛 404', async () => {
     const { svc } = makeService();
     await expect(svc.detail('missing', actor)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(svc.runDetail('missing', {}, actor)).rejects.toBeInstanceOf(NotFoundException);
   });
 });

@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import type {
   AdminRunDetailDto,
@@ -25,11 +25,17 @@ const LATEST_RUN_INCLUDE = {
 
 type TaskWithLatestRun = Prisma.TaskGetPayload<{ include: typeof LATEST_RUN_INCLUDE }>;
 
+/** 任务状态实际只写 running/done/failed（见 TasksService）。 */
+function isTaskStatus(v: unknown): v is 'running' | 'done' | 'failed' {
+  return v === 'running' || v === 'done' || v === 'failed';
+}
+
 function toItem(row: TaskWithLatestRun): AdminTaskItemDto {
   return {
     id: row.id,
     sessionId: row.sessionId,
-    goal: row.goal.slice(0, GOAL_PREVIEW_LIMIT),
+    // 按码点截断，避免切裂 emoji 等代理对。
+    goal: Array.from(row.goal).slice(0, GOAL_PREVIEW_LIMIT).join(''),
     status: row.status,
     latestRunStatus: row.runs[0]?.status ?? null,
     createdAt: row.createdAt.toISOString(),
@@ -50,6 +56,7 @@ export class AdminTasksService {
     const userId = optionalString(query.userId);
     const sessionId = optionalString(query.sessionId);
     const status = optionalString(query.status);
+    if (status !== undefined && !isTaskStatus(status)) throw new BadRequestException('invalid_status');
 
     // 任务表不冗余租户/用户，过滤落在会话维度。
     const sessionFilter: Prisma.SessionWhereInput = {
@@ -149,7 +156,7 @@ export class AdminTasksService {
           id: s.id,
           seq: s.seq,
           type: s.type,
-          payload: (s.payload ?? {}) as Record<string, unknown>,
+          payload: s.payload as Record<string, unknown>,
           ts: s.ts.toISOString(),
         })),
         total: row._count.steps,
