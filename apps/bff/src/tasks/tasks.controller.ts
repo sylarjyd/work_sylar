@@ -13,6 +13,47 @@ import { CurrentUser } from '../auth/current-user';
 import type { JwtPayload } from '../auth/jwt';
 import { writeHead } from '../stream/sse-proxy';
 
+/** 上游建连超时：只约束 fetch 拿到响应头，不中断已建立的长流。 */
+const UPSTREAM_CONNECT_TIMEOUT_MS = 10_000;
+/** 上游流空闲超时：超过该时长未收到任何 chunk 视为 runtime 卡死。 */
+const UPSTREAM_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
+
+// 项目未启用 DOM lib，`ReadableStreamReadResult` 不存在，从 reader.read 推导。
+type StreamReadResult<T> = Awaited<ReturnType<ReadableStreamDefaultReader<T>['read']>>;
+
+/** 带空闲超时的读取：超时后 reject，避免上游卡死导致请求与 hold 永久悬挂。 */
+function readWithIdleTimeout(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  timeoutMs: number,
+): Promise<StreamReadResult<Uint8Array>> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error('upstream_idle_timeout')), timeoutMs);
+    timer.unref?.();
+  });
+  return Promise.race([reader.read(), timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  }) as Promise<StreamReadResult<Uint8Array>>;
+}
+
+/** 有界读取上游响应体：非 2xx 时只用于回显，避免恶意/异常上游撑爆内存。 */
+async function readBodyLimited(res: Response, limit = 8192): Promise<string> {
+  if (!res.body) return '';
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let out = '';
+  try {
+    while (out.length < limit) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      out += decoder.decode(value, { stream: true });
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+  return out.slice(0, limit);
+}
+
 @Controller('api/sessions')
 @UseGuards(JwtGuard)
 export class TasksController {
@@ -43,6 +84,7 @@ export class TasksController {
     }
 
     // 归属校验放在预占之前：404 不应留下 hold。
+    // 与 prepare 内的归属校验重复一次查询，换取「404 早于预占」。
     await this.tasks.assertOwned(sessionId, user.tenantId, user.sub);
 
     // 预占额度并做限流；失败在 hijack 之前返回，Nest 可正常写响应。
@@ -92,6 +134,9 @@ export class TasksController {
     reply.raw.on('close', onClientGone);
 
     let upstream: Response;
+    const connectController = new AbortController();
+    const connectTimer = setTimeout(() => connectController.abort(), UPSTREAM_CONNECT_TIMEOUT_MS);
+    connectTimer.unref?.();
     try {
       upstream = await fetch(`${runtimeUrl}/runs`, {
         method: 'POST',
@@ -101,14 +146,18 @@ export class TasksController {
           ...(runtimeToken ? { 'x-agent-runtime-token': runtimeToken } : {}),
         },
         body: JSON.stringify({ runId, sessionId, tenantId, userId, goal, messages, billing }),
+        signal: connectController.signal,
       });
     } catch {
-      // 传输层失败：上游不可达，归还预占并回 502 而不是未捕获的 500。
+      // 传输层失败（含建连超时）：上游不可达，归还预占并回 502 而不是未捕获的 500。
       await this.billing.releaseHold(runId).catch(() => undefined);
       await this.safeFinish(runId, taskId, 'failed', '', sessionId);
       writeHead(reply, 502, { 'content-type': 'application/json' });
       reply.raw.end(JSON.stringify({ error: 'upstream_unreachable' }));
       return;
+    } finally {
+      // 建连已有结果就撤销定时器：不能中断随后建立的长流。
+      clearTimeout(connectTimer);
     }
 
     if (!upstream.ok || !upstream.body) {
@@ -116,8 +165,25 @@ export class TasksController {
       await this.billing.releaseHold(runId).catch(() => undefined);
       await this.safeFinish(runId, taskId, 'failed', '', sessionId);
       const contentType = upstream.headers.get('content-type') ?? 'application/json';
-      writeHead(reply, upstream.status, { 'content-type': contentType });
-      reply.raw.end(await upstream.text());
+      let body: string;
+      try {
+        body = await readBodyLimited(upstream);
+      } catch {
+        body = JSON.stringify({ error: 'upstream_error' });
+      }
+      if (!body) body = JSON.stringify({ error: 'upstream_error' });
+      try {
+        writeHead(reply, upstream.status, { 'content-type': contentType });
+        reply.raw.end(body);
+      } catch (err) {
+        // 写响应失败也必须终止响应，否则已 hijack 的请求会一直挂起。
+        this.logger.error(`run ${runId} 转发上游错误响应失败: ${(err as Error).message}`);
+        try {
+          reply.raw.end();
+        } catch {
+          // 客户端已断开时 end() 可能抛错，忽略。
+        }
+      }
       return;
     }
 
@@ -136,7 +202,7 @@ export class TasksController {
 
     try {
       for (;;) {
-        const { done, value } = await reader.read();
+        const { done, value } = await readWithIdleTimeout(reader, UPSTREAM_IDLE_TIMEOUT_MS);
         if (done) break;
         const chunk = decoder.decode(value, { stream: true });
         if (!clientGone) reply.raw.write(chunk);
@@ -150,7 +216,13 @@ export class TasksController {
             }
           } else if (m.event === 'usage') {
             const usage = parseUsageEvent(m.data);
-            if (usage) latestUsage = usage;
+            // runtime 每个 run 只发一次 usage（agent-loop 的 finally），故覆盖保存最后一条即可。
+            if (usage) {
+              latestUsage = usage;
+            } else {
+              const raw = JSON.stringify(m.data) ?? String(m.data);
+              this.logger.warn(`run ${runId} usage 事件非法，已忽略: ${raw.slice(0, 500)}`);
+            }
           } else if (m.event === 'error') {
             status = 'failed';
           }
@@ -161,14 +233,23 @@ export class TasksController {
       // 否则会带着默认的 'done' 落库，把失败的运行伪装成成功。
       status = 'failed';
       this.logger.error(`run ${runId} 处理失败，标记为 failed: ${(err as Error).message}`);
+      // 超时/出错时主动终止上游，避免连接继续悬挂、资源泄漏。
+      await reader.cancel().catch(() => undefined);
     } finally {
       // 结算优先于 finish：即使 finish 失败，用量也已落账。
       // 结算抛错时保留 hold 与 pending，由补偿任务重试。
       if (latestUsage) {
         try {
-          await this.billing.recordUsage(runId, { tenantId, userId, sessionId }, latestUsage);
+          await this.recordUsageWithRetry(runId, { tenantId, userId, sessionId }, latestUsage);
+        } catch (err) {
+          this.logger.error(
+            `run ${runId} 用量记录失败，已尽力重试，用量=${JSON.stringify(latestUsage)}: ${(err as Error).message}`,
+          );
+        }
+        try {
           await this.billing.settle(runId);
         } catch (err) {
+          // settle 失败时 hold 与 pending 都还在，由补偿任务重试。
           this.logger.error(`run ${runId} 计费结算失败（保留 pending 待补偿）: ${(err as Error).message}`);
         }
       } else {
@@ -199,6 +280,27 @@ export class TasksController {
     } catch (err) {
       this.logger.error(`run ${runId} artifact 落库失败: ${(err as Error).message}`);
     }
+  }
+
+  /** 记录用量：瞬时故障最多重试 3 次（100ms/200ms 退避），全部失败才抛出最后一次错误。 */
+  private async recordUsageWithRetry(
+    runId: string,
+    meta: { tenantId: string; userId: string; sessionId: string },
+    usage: UsageEvent,
+  ): Promise<void> {
+    let lastErr: unknown;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        await this.billing.recordUsage(runId, meta, usage);
+        return;
+      } catch (err) {
+        lastErr = err;
+        if (attempt < 2) {
+          await new Promise<void>((resolve) => setTimeout(resolve, attempt === 0 ? 100 : 200));
+        }
+      }
+    }
+    throw lastErr;
   }
 
   /** 落库收尾；失败只记日志，绝不向调用方抛出——否则会阻断后续的响应终止。 */

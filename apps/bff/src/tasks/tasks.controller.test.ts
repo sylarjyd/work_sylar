@@ -1,6 +1,5 @@
 import 'reflect-metadata';
-import { randomUUID } from 'node:crypto';
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import { Test } from '@nestjs/testing';
 import { BaseExceptionFilter } from '@nestjs/core';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
@@ -24,12 +23,13 @@ let baseUrl: string;
 let runtimeUrl: string;
 // 上游收到的最近一次 /runs 请求体原文，供断言 BFF 透传的字段（如 userId）。
 let lastRunsBody = '';
-// 上游行为开关：正常流 / 中途发 error 事件 / 不发 usage / 慢速流（用于断连排空）。
-let upstreamMode: 'ok' | 'error' | 'nousage' | 'slow' = 'ok';
+// 上游行为开关：正常流 / 中途发 error 事件 / 不发 usage / 慢速流（用于断连排空）/ 非 2xx。
+let upstreamMode: 'ok' | 'error' | 'nousage' | 'slow' | 'fail502' = 'ok';
 // 落库故障注入开关：用于验证控制器在写库失败时的落 failed / 不挂起行为。
-// 这两个开关必须能被各用例独立置位，否则「修复被回退」时用例依旧会通过。
+// 这些开关必须能被各用例独立置位，否则「修复被回退」时用例依旧会通过。
 let failStepCreate = false;
 let failRunUpdate = false;
+let failTaskCreate = false;
 
 const stored: {
   steps: unknown[];
@@ -94,7 +94,10 @@ const fakePrisma = {
     },
   },
   task: {
-    create: async ({ data }: { data: unknown }) => ({ id: 'task1', ...(data as object) }),
+    create: async ({ data }: { data: unknown }) => {
+      if (failTaskCreate) throw new Error('injected task.create failure');
+      return { id: 'task1', ...(data as object) };
+    },
     update: async (args: unknown) => {
       stored.taskUpdates.push(args);
       return {};
@@ -136,6 +139,12 @@ beforeAll(async () => {
       // runId 由 BFF 预生成：上游事件与产物 storageKey 必须使用请求体里的真实值，
       // 否则 ArtifactService 的前缀校验会拒绝落库。
       const runId = (JSON.parse(reqBody) as { runId?: string }).runId ?? 'run1';
+      if (upstreamMode === 'fail502') {
+        // 非 2xx：控制器应释放预占、不结算，并把状态码与响应体原样回显。
+        res.writeHead(502, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: 'upstream_boom' }));
+        return;
+      }
       res.writeHead(200, { 'content-type': 'text/event-stream' });
       res.write(encodeSse({ event: 'step', data: { runId, seq: 0, type: 'think', payload: { text: '想' }, ts: 1 } }));
       if (upstreamMode === 'error') {
@@ -204,6 +213,7 @@ beforeEach(() => {
   upstreamMode = 'ok';
   failStepCreate = false;
   failRunUpdate = false;
+  failTaskCreate = false;
   billingCalls.length = 0;
   beginRunError = null;
   escapedErrors.length = 0;
@@ -394,9 +404,45 @@ describe('TasksController', () => {
       body: JSON.stringify({ goal: '写个总结' }),
     });
     await res.text();
-    expect(billingCalls[0]?.[0]).toBe('begin');
-    expect(billingCalls.some((c) => c[0] === 'record')).toBe(true);
-    expect(billingCalls.some((c) => c[0] === 'settle')).toBe(true);
+    const begin = billingCalls.find((c) => c[0] === 'begin');
+    const record = billingCalls.find((c) => c[0] === 'record');
+    const settle = billingCalls.find((c) => c[0] === 'settle');
+    expect(begin).toBeDefined();
+    // record 的参数：runId 与 begin 一致；meta 与登录用户一致；usage 为上游事件内容。
+    expect(record?.[1]).toBe(begin?.[1]);
+    expect(record?.[2]).toEqual({ tenantId: 't1', userId: 'u1', sessionId: session.id });
+    expect(record?.[3]).toEqual({ input: 1, output: 1, models: [{ model: 'mock', input: 1, output: 1 }] });
+    expect(settle?.[1]).toBe(begin?.[1]);
+  });
+
+  it('prepare 失败时归还预占', async () => {
+    // 预占成功后建 task 抛错：必须 release，不能记录/结算用量。
+    failTaskCreate = true;
+    const token = signToken({ sub: 'u1', tenantId: 't1' });
+    const res = await fetch(`${baseUrl}/api/sessions/${session.id}/tasks`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+      body: JSON.stringify({ goal: 'g' }),
+    });
+    expect(res.status).toBe(500);
+    expect(billingCalls.some((c) => c[0] === 'release')).toBe(true);
+    expect(billingCalls.some((c) => c[0] === 'record')).toBe(false);
+    expect(billingCalls.some((c) => c[0] === 'settle')).toBe(false);
+  });
+
+  it('上游非 2xx 时释放预占且不结算', async () => {
+    upstreamMode = 'fail502';
+    const token = signToken({ sub: 'u1', tenantId: 't1' });
+    const res = await fetch(`${baseUrl}/api/sessions/${session.id}/tasks`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+      body: JSON.stringify({ goal: 'g' }),
+    });
+    expect(res.status).toBe(502);
+    expect(await res.json()).toEqual({ error: 'upstream_boom' });
+    expect(billingCalls.some((c) => c[0] === 'release')).toBe(true);
+    expect(billingCalls.some((c) => c[0] === 'record')).toBe(false);
+    expect(billingCalls.some((c) => c[0] === 'settle')).toBe(false);
   });
 
   it('上游无 usage 时只释放预占', async () => {
@@ -461,7 +507,7 @@ describe('TasksController', () => {
     const reader = res.body!.getReader();
     await reader.read(); // 至少收到首帧后再断开
     ac.abort();
-    await new Promise((r) => setTimeout(r, 300));
-    expect(billingCalls.some((c) => c[0] === 'settle')).toBe(true);
+    // 排空是异步的：用轮询等待结算，避免固定 sleep 在慢机器上偶发假失败。
+    await vi.waitFor(() => expect(billingCalls.some((c) => c[0] === 'settle')).toBe(true), { timeout: 2000 });
   });
 });
