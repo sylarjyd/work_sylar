@@ -37,7 +37,7 @@ export function clearToken(): void {
   window.localStorage.removeItem(ROLE_KEY);
 }
 
-async function authFetch(path: string, init: RequestInit = {}): Promise<Response> {
+export async function authFetch(path: string, init: RequestInit = {}): Promise<Response> {
   const token = getToken();
   const res = await fetch(`${BFF_URL}${path}`, {
     ...init,
