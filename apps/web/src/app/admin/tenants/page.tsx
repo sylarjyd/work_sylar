@@ -28,6 +28,7 @@ export default function AdminTenantsPage() {
   const [planId, setPlanId] = useState('');
   const [detail, setDetail] = useState<AdminTenantDetailDto | null>(null);
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
   const [amount, setAmount] = useState('');
@@ -53,48 +54,75 @@ export default function AdminTenantsPage() {
     [router],
   );
 
-  const load = useCallback(async () => {
-    const id = ++loadSeq.current;
-    setLoading(true);
-    setError('');
-    try {
-      const [data, planRows] = await Promise.all([
-        listAdminTenants({ page, pageSize: 20, q, planId }),
-        listAdminPlans(),
-      ]);
-      if (id !== loadSeq.current) return;
-      setItems(data.items);
-      setTotal(data.total);
-      setPlans(planRows.filter((p) => p.active));
-    } catch (err) {
-      if (id !== loadSeq.current) return;
-      if (handleErr(err)) return;
-    } finally {
-      if (id === loadSeq.current) setLoading(false);
-    }
-  }, [page, q, planId, handleErr]);
+  const load = useCallback(
+    async (opts?: { preserveError?: boolean }): Promise<boolean> => {
+      const id = ++loadSeq.current;
+      setLoading(true);
+      // 补刷新时保留详情请求写入的具体错误，避免被列表刷新清掉
+      if (!opts?.preserveError) setError('');
+      try {
+        const [data, planRows] = await Promise.all([
+          listAdminTenants({ page, pageSize: 20, q, planId }),
+          listAdminPlans(),
+        ]);
+        // 过期请求：已有更新的请求在途，视为无需提示失败
+        if (id !== loadSeq.current) return true;
+        setItems(data.items);
+        setTotal(data.total);
+        setPlans(planRows.filter((p) => p.active));
+        return true;
+      } catch (err) {
+        if (id !== loadSeq.current) return true;
+        return !handleErr(err);
+      } finally {
+        if (id === loadSeq.current) setLoading(false);
+      }
+    },
+    [page, q, planId, handleErr],
+  );
+
+  // 写操作结束后必须调用最新的 load，避免用旧的筛选闭包覆盖用户刚改的条件
+  const loadRef = useRef(load);
+  useEffect(() => {
+    loadRef.current = load;
+  }, [load]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  async function openDetail(id: string): Promise<boolean> {
+  async function openDetail(id: string): Promise<'ok' | 'error' | 'redirect'> {
     const seq = ++detailSeq.current;
     setError('');
     setDetailLoading(true);
     try {
       const data = await getAdminTenant(id);
-      if (seq !== detailSeq.current) return false;
+      // 过期请求不写状态、不报错
+      if (seq !== detailSeq.current) return 'ok';
       setDetail(data);
       setAmount('');
       setNote('');
-      return true;
+      return 'ok';
     } catch (err) {
-      if (seq === detailSeq.current) handleErr(err);
-      return false;
+      if (seq !== detailSeq.current) return 'ok';
+      return handleErr(err) ? 'redirect' : 'error';
     } finally {
       if (seq === detailSeq.current) setDetailLoading(false);
     }
+  }
+
+  async function refreshAfterWrite(tenantId: string) {
+    // 写操作已成功，先给出明确的成功提示，避免刷新失败被误判为操作失败
+    setNotice('操作已成功，正在刷新数据…');
+    const detailResult = await openDetail(tenantId);
+    if (detailResult === 'redirect') return;
+    // 详情刷新失败也要继续补刷新列表，保证后台数据尽量一致
+    const listOk = await loadRef.current({ preserveError: true });
+    setNotice(
+      detailResult === 'ok' && listOk
+        ? '操作已成功。'
+        : '操作已成功，但数据刷新失败，请勿重复提交；稍后可手动刷新页面确认。',
+    );
   }
 
   function closeDetail() {
@@ -113,11 +141,10 @@ export default function AdminTenantsPage() {
     inFlight.current = true;
     setBusy(true);
     setError('');
+    setNotice('');
     try {
       await adminSubscribeTenant(tenantId, { planId: plan });
-      if (await openDetail(tenantId)) {
-        await load();
-      }
+      await refreshAfterWrite(tenantId);
     } catch (err) {
       handleErr(err);
     } finally {
@@ -137,13 +164,12 @@ export default function AdminTenantsPage() {
     inFlight.current = true;
     setBusy(true);
     setError('');
+    setNotice('');
     try {
       await adminAdjustCredits(tenantId, { amount: value, note });
       setAmount('');
       setNote('');
-      if (await openDetail(tenantId)) {
-        await load();
-      }
+      await refreshAfterWrite(tenantId);
     } catch (err) {
       handleErr(err);
     } finally {
@@ -165,6 +191,16 @@ export default function AdminTenantsPage() {
         {error && (
           <div className="banner banner-error" role="alert" style={{ marginBottom: 16 }}>
             {error}
+          </div>
+        )}
+
+        {notice && (
+          <div
+            className="banner"
+            role="status"
+            style={{ marginBottom: 16, background: 'var(--surface-2)', border: '1px solid var(--line)' }}
+          >
+            {notice}
           </div>
         )}
 
@@ -229,7 +265,7 @@ export default function AdminTenantsPage() {
               >
                 提交调整
               </button>
-              <button type="button" className="admin-btn" onClick={closeDetail}>
+              <button type="button" className="admin-btn" disabled={busy} onClick={closeDetail}>
                 关闭
               </button>
             </div>

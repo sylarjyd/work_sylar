@@ -48,6 +48,12 @@ export default function AdminUsersPage() {
     }
   }, [page, q, status, role, router]);
 
+  // 写操作结束后必须调用最新的 load，避免用旧的筛选闭包覆盖用户刚改的条件
+  const loadRef = useRef(load);
+  useEffect(() => {
+    loadRef.current = load;
+  }, [load]);
+
   useEffect(() => {
     void load();
   }, [load]);
@@ -59,7 +65,7 @@ export default function AdminUsersPage() {
     setError('');
     try {
       await updateAdminUser(user.id, body);
-      await load();
+      await loadRef.current();
     } catch (err) {
       if (isUnauthorized(err)) {
         router.push('/login');
