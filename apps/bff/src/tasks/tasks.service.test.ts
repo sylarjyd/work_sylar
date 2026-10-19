@@ -32,9 +32,7 @@ function makeDb() {
         const injected = db.messageCreateErrors.shift();
         if (injected) throw injected;
         if (db.messages.some((m) => m.sessionId === data.sessionId && m.seq === data.seq)) {
-          const err: any = new Error('unique');
-          err.code = 'P2002';
-          throw err;
+          throw p2002();
         }
         const row = { id: `m${db.messages.length + 1}`, ...data };
         db.messages.push(row);
@@ -67,8 +65,22 @@ function makeDb() {
         return row ?? { id: where.id, ...data };
       },
     },
-    // 测试里不需要真实事务语义，直接执行回调即可。
-    $transaction: async (fn: any) => fn(client),
+    // 模拟事务回滚：回调抛错时恢复进入事务前的数据快照。
+    $transaction: async (fn: any) => {
+      const snapshot = {
+        messages: [...db.messages],
+        tasks: [...db.tasks],
+        runs: [...db.runs],
+      };
+      try {
+        return await fn(client);
+      } catch (err) {
+        db.messages = snapshot.messages;
+        db.tasks = snapshot.tasks;
+        db.runs = snapshot.runs;
+        throw err;
+      }
+    },
   };
 
   return { db, prisma: client as unknown as PrismaService };
@@ -84,9 +96,10 @@ beforeEach(() => {
   svc = new TasksService(ctx.prisma, sessions as any);
 });
 
-function p2002(): Error {
+function p2002(target: string[] = ['sessionId', 'seq']): Error {
   const err: any = new Error('unique');
   err.code = 'P2002';
+  err.meta = { target };
   return err;
 }
 
@@ -104,6 +117,10 @@ describe('TasksService', () => {
     expect(ctx.db.messages.filter((m) => m.role === 'user').map((m) => m.seq)).toEqual([0, 1]);
     expect(ctx.db.messages.find((m) => m.role === 'user' && m.seq === 1)?.content).toBe('新目标');
     expect(result.messages.at(-1)).toEqual({ role: 'user', content: '新目标' });
+    // 首次事务已回滚：重试成功后不应残留第一次创建的 task/run 孤儿。
+    expect(ctx.db.tasks).toHaveLength(1);
+    expect(ctx.db.runs).toHaveLength(1);
+    expect(ctx.db.runs[0].id).toBe('run1');
   });
 
   it('prepare 只重试 P2002，其他错误立即抛出', async () => {
@@ -113,6 +130,24 @@ describe('TasksService', () => {
 
     await expect(svc.prepare('s1', 't1', 'u1', '目标', 'run1')).rejects.toMatchObject({ code: 'P2003' });
     expect(ctx.db.messageCreateCalls).toBe(1);
+  });
+
+  it('prepare 重试耗尽后抛出，且所有事务均已回滚', async () => {
+    for (let i = 0; i < 5; i++) ctx.db.messageCreateErrors.push(p2002());
+
+    await expect(svc.prepare('s1', 't1', 'u1', '目标', 'run1')).rejects.toMatchObject({ code: 'P2002' });
+    expect(ctx.db.messageCreateCalls).toBe(5);
+    expect(ctx.db.tasks).toHaveLength(0);
+    expect(ctx.db.runs).toHaveLength(0);
+  });
+
+  it('prepare 对 runId 等非 seq 的 P2002 不重试，直接抛出', async () => {
+    ctx.db.messageCreateErrors.push(p2002(['id']));
+
+    await expect(svc.prepare('s1', 't1', 'u1', '目标', 'run1')).rejects.toMatchObject({ code: 'P2002' });
+    expect(ctx.db.messageCreateCalls).toBe(1);
+    expect(ctx.db.tasks).toHaveLength(0);
+    expect(ctx.db.runs).toHaveLength(0);
   });
 
   it('finish 的 assistant 消息冲突后重试，seq 取现有最大值 +1', async () => {

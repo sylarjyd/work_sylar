@@ -7,6 +7,17 @@ import type { AgentEvent, ChatMessage } from '@ai-office/shared';
 /** 并发抢占同一 seq 时的最大尝试次数（首次 + 最多 4 次重试）。 */
 const MAX_SEQ_ATTEMPTS = 5;
 
+/** 仅当唯一键冲突落在 seq 上时才值得重试；runId 等主键冲突重试也不会成功。 */
+function isSeqConflict(err: unknown): boolean {
+  const e = err as { code?: string; meta?: { target?: unknown } };
+  if (e.code !== 'P2002') return false;
+  const t = e.meta?.target;
+  if (Array.isArray(t)) return t.includes('seq');
+  if (typeof t === 'string') return t.includes('seq');
+  // 老版本/未提供 target 时保守重试。
+  return true;
+}
+
 @Injectable()
 export class TasksService {
   constructor(
@@ -37,6 +48,7 @@ export class TasksService {
           const prior = await tx.message.findMany({
             where: { sessionId },
             orderBy: { seq: 'asc' },
+            select: { role: true, content: true, seq: true },
           });
           const task = await tx.task.create({
             data: { sessionId, goal, status: 'running' },
@@ -57,8 +69,8 @@ export class TasksService {
           return { taskId: task.id, runId: run.id, tenantId, userId, messages };
         });
       } catch (err) {
-        // 非唯一键冲突说明不是并发抢占 seq，立即抛出；仅 P2002 值得重试。
-        if ((err as { code?: string }).code !== 'P2002' || attempt >= MAX_SEQ_ATTEMPTS - 1) {
+        // 非 seq 唯一键冲突（如 runId 主键冲突）重试也不会成功，立即抛出。
+        if (!isSeqConflict(err) || attempt >= MAX_SEQ_ATTEMPTS - 1) {
           throw err;
         }
       }
@@ -105,7 +117,7 @@ export class TasksService {
         await this.prisma.message.create({ data: { sessionId, role, content, seq } });
         return;
       } catch (err) {
-        if ((err as { code?: string }).code !== 'P2002' || attempt >= MAX_SEQ_ATTEMPTS - 1) {
+        if (!isSeqConflict(err) || attempt >= MAX_SEQ_ATTEMPTS - 1) {
           throw err;
         }
       }
