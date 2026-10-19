@@ -409,3 +409,14 @@ curl -X POST http://localhost:4000/api/billing/admin/credits \
 - **容器部署**：runtime 只加入内部网络，不把 4001 端口映射到宿主机公网。
 - **共享 token**：生产必须设置 `AGENT_RUNTIME_TOKEN`（强随机），BFF 调用时自动携带 `x-agent-runtime-token` 头；未设置时 runtime 仅放行回环来源。
 - 若 runtime 可被外部直接调用，调用方可伪造预算绕过计费；此项列入 M5c 上线准备。
+
+---
+
+## 管理端（M5b-1）
+
+- 管理员预置：`pnpm --filter @ai-office/bff admin:promote <email>`；注册用户一律 `member`。
+- 入口：以管理员登录后，工作台侧栏出现「管理后台」，路由前缀 `/admin`；普通用户直连 `/api/admin/*` 返回 403。
+- 权限：所有管理接口位于 `/api/admin/*`，受 `JwtGuard + AdminGuard` 保护；`JwtGuard` 每次请求查库，禁用用户立即失效。
+- 写操作非破坏性：用户仅可启用/禁用、改角色；会话仅可归档；套餐仅可停用；模型价格可删除但被启用套餐引用时拒绝。
+- 审计：写操作与业务写入同事务落 `AdminAuditLog`；敏感查看（用户/租户/会话/消息/任务/运行详情）尽力记录；不记录消息正文、密钥与工具入参全文。
+- 参数白名单：`maxRounds`、`confirmTimeoutMs`、`codeExecTimeoutMs`、`kbChunkSize`、`kbChunkOverlap`；来源优先级 DB > 环境变量 > 默认值，页面修改即时生效。

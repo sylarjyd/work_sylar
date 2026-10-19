@@ -358,3 +358,13 @@ pnpm --filter @ai-office/bff typecheck             # 类型
 3. 注册账号后自动获得 free 套餐 500 积分。
 4. 无 `DEEPSEEK_API_KEY` 时 runtime 走 mock 模型，仍会产出 usage，可完整验证结算链路。
 5. 模拟管理员操作：先把账号提权 `pnpm --filter @ai-office/bff admin:promote <email>`，再调 `/api/billing/admin/*`。
+
+---
+
+## 11. 本地验证管理端（M5b-1）
+
+1. `pnpm --filter @ai-office/bff db:push && pnpm --filter @ai-office/bff db:seed:billing`
+2. 注册一个普通账号；再用 `pnpm --filter @ai-office/bff admin:promote <email>` 提升为管理员。
+3. 启动 `pnpm dev`，用管理员登录后从侧栏进入「管理后台」。
+4. 依次验证：用户禁用后既有 token 立即 401；为租户开通套餐与调额；创建/停用套餐；修改模型价格；归档会话后普通用户列表不可见；修改 `maxRounds` 后下一次运行按新值停止；审计页能查到上述记录。
+5. 运行 `pnpm test` 与 `pnpm build`。
