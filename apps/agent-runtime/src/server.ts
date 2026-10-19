@@ -309,6 +309,7 @@ function defaultExtraTools(host: McpHost): (tenantId: string) => Promise<Tool[]>
         },
         tenantId,
       );
+      await host.retain(new Set(connectors.filter((c) => c.enabled).map((c) => c.name)));
       return await buildMcpTools(connectors, host);
     } catch {
       // 拉取失败退化为无 MCP 工具，不中断本次 run。

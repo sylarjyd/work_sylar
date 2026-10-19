@@ -2,6 +2,11 @@ import type { McpToolInfo } from '@ai-office/shared';
 import type { ConnectorConfig, McpTransport, TransportFactory } from './transport';
 import { StdioMcpTransport } from './stdio-transport';
 
+/** env 规范化为与键序无关的字符串，用于比较连接器配置是否变化。 */
+function envKey(env: Record<string, string>): string {
+  return Object.keys(env).sort().map((k) => `${k}\u0000${env[k]}`).join('\u0001');
+}
+
 export interface McpHostOptions {
   heartbeatMs: number;
   backoffBaseMs: number;
@@ -44,16 +49,38 @@ export class McpHost {
     });
   }
 
+  private sameConfig(a: ConnectorConfig, b: ConnectorConfig): boolean {
+    return (
+      a.command === b.command &&
+      a.args.join('\u0000') === b.args.join('\u0000') &&
+      envKey(a.env) === envKey(b.env)
+    );
+  }
+
+  /** 关闭并从池中移除某连接器（清定时器、回收子进程）；不存在则无操作。 */
+  private async dispose(name: string): Promise<void> {
+    const entry = this.entries.get(name);
+    if (!entry) return;
+    this.entries.delete(name);
+    if (entry.heartbeatTimer) clearInterval(entry.heartbeatTimer);
+    if (entry.retryTimer) clearTimeout(entry.retryTimer);
+    await entry.transport?.close().catch(() => undefined);
+  }
+
   /** 确保某连接器子进程就绪并返回其工具；失败抛错并安排退避重拉。 */
   async ensure(cfg: ConnectorConfig): Promise<McpToolInfo[]> {
     const existing = this.entries.get(cfg.name);
-    if (existing?.state === 'ready') return existing.tools;
+    if (existing?.state === 'ready' && this.sameConfig(existing.cfg, cfg)) {
+      return existing.tools;
+    }
     if (existing?.state === 'starting' && existing.connectPromise) {
+      // 启动中：复用同一 in-flight promise（期间若有配置变更，留待下次 run 协调）。
       return existing.connectPromise;
     }
+    const prevBackoff = existing?.backoffMs ?? this.opts.backoffBaseMs;
+    if (existing) await this.dispose(cfg.name); // 配置变更 / error 态：先回收旧连接
 
     const transport = this.factory(cfg);
-    const prevBackoff = existing?.backoffMs ?? this.opts.backoffBaseMs;
     const entry: Entry = {
       cfg, transport, state: 'starting', tools: [], backoffMs: prevBackoff,
     };
@@ -61,6 +88,13 @@ export class McpHost {
     entry.connectPromise = promise;
     this.entries.set(cfg.name, entry);
     return promise;
+  }
+
+  /** 关闭并移除不在 names 中的连接器（已删除/停用），回收其常驻子进程。 */
+  async retain(names: Set<string>): Promise<void> {
+    for (const name of [...this.entries.keys()]) {
+      if (!names.has(name)) await this.dispose(name);
+    }
   }
 
   private async spawn(name: string, entry: Entry): Promise<McpToolInfo[]> {

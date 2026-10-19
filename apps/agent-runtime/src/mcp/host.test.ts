@@ -112,4 +112,31 @@ describe('McpHost', () => {
     await expect(p).rejects.toThrow('mcp_host_closed');
     expect(made[0].closed).toBe(true);
   });
+
+  it('配置变更后 ensure 重建子进程并关闭旧连接', async () => {
+    const { host, made } = makeHost();
+    await host.ensure(cfg);
+    await host.ensure({ ...cfg, args: ['other.mjs'] });
+    expect(made).toHaveLength(2);
+    expect(made[0].closed).toBe(true);
+    await host.closeAll();
+  });
+
+  it('等价配置（env 键序不同）不重建', async () => {
+    const { host, made } = makeHost();
+    await host.ensure({ ...cfg, env: { A: '1', B: '2' } });
+    await host.ensure({ ...cfg, env: { B: '2', A: '1' } });
+    expect(made).toHaveLength(1);
+    await host.closeAll();
+  });
+
+  it('retain 回收不在集合中的连接器，需要时再重建', async () => {
+    const { host, made } = makeHost();
+    await host.ensure(cfg);
+    await host.retain(new Set());
+    expect(made[0].closed).toBe(true);
+    await host.ensure(cfg);
+    expect(made).toHaveLength(2);
+    await host.closeAll();
+  });
 });
