@@ -154,4 +154,33 @@ describe('McpHost', () => {
     });
     await host.closeAll();
   });
+
+  it('进入 error 后重新拉起的成功连接回调 onRestart，首次建连不计重启', async () => {
+    vi.useFakeTimers();
+    const behavior = { connectFails: true };
+    const restarted: string[] = [];
+    const made: FakeTransport[] = [];
+    const host = new McpHost({
+      heartbeatMs: 1000,
+      backoffBaseMs: 100,
+      backoffMaxMs: 400,
+      initTimeoutMs: 5000,
+      callTimeoutMs: 5000,
+      transportFactory: () => {
+        const transport = new FakeTransport(behavior);
+        made.push(transport);
+        return transport;
+      },
+      onRestart: (server) => restarted.push(server),
+    });
+
+    await expect(host.ensure('t1', cfg)).rejects.toThrow('spawn_failed');
+    expect(restarted).toEqual([]);
+
+    behavior.connectFails = false;
+    await vi.advanceTimersByTimeAsync(150);
+    expect(made.length).toBeGreaterThanOrEqual(2);
+    expect(restarted).toEqual(['echo']);
+    await host.closeAll();
+  });
 });

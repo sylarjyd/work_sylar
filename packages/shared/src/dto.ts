@@ -443,3 +443,21 @@ export interface HealthReadyDto {
     runtime: HealthCheckDto;
   };
 }
+
+/** runtime `/metrics/summary`：按分钟窗口聚合的模型/MCP 观测数据。 */
+export interface RuntimeModelSummaryDto {
+  model: string;
+  requests: number;
+  errors: number;
+  avgLatencyMs: number | null;
+}
+
+export interface RuntimeSummaryDto {
+  /** 窗口内没有任何模型样本时为 insufficient_data，告警评估需跳过而不是误报。 */
+  status: 'ok' | 'insufficient_data';
+  windowMinutes: number;
+  activeRuns: number;
+  models: RuntimeModelSummaryDto[];
+  fallbacks: number;
+  mcpRestarts: number;
+}

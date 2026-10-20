@@ -1,11 +1,21 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { Readable } from 'node:stream';
 import type { Server } from 'node:http';
+import {
+  currentContext,
+  currentTrace,
+  initTelemetry,
+  shutdownTelemetry,
+} from '@ai-office/telemetry';
 import { decodeSseFrames, createSseParser } from '@ai-office/shared';
-import type { AgentEvent } from '@ai-office/shared';
+import type { AgentEvent, RuntimeSummaryDto } from '@ai-office/shared';
 import { createRuntimeServer, isLoopback } from './server';
+import { createRuntimeMetrics } from './observability/metrics';
 import type { ModelGateway } from './model/types';
 import type { Tool } from './tools/types';
+
+// 测试不校验日志输出；保持 stdout 干净。
+process.env.LOG_LEVEL = 'silent';
 
 const echo: Tool = {
   name: 'web.search',
@@ -35,6 +45,7 @@ let server: Server;
 let baseUrl: string;
 
 beforeAll(async () => {
+  initTelemetry({ serviceName: 'agent-runtime-test', serviceVersion: '1' });
   server = createRuntimeServer({ gateway: scripted, tools: [echo] });
   await new Promise<void>((r) => server.listen(0, r));
   const addr = server.address();
@@ -44,6 +55,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await new Promise<void>((r) => server.close(() => r()));
+  await shutdownTelemetry();
 });
 
 async function postRuns(payload: unknown) {
@@ -191,6 +203,87 @@ describe('runtime server', () => {
       expect(text).toContain('event: done');
     } finally {
       await new Promise<void>((r) => server.close(() => r()));
+    }
+  });
+
+  it('GET /metrics 输出 Prometheus 文本，GET /metrics/summary 夹取窗口', async () => {
+    const metrics = await fetch(`${baseUrl}/metrics`);
+    expect(metrics.status).toBe(200);
+    expect(metrics.headers.get('content-type')).toContain('text/plain');
+    expect(await metrics.text()).toContain('ai_office_active_runs');
+
+    const summary = await fetch(`${baseUrl}/metrics/summary?windowMinutes=999`);
+    expect(summary.status).toBe(200);
+    const body = (await summary.json()) as RuntimeSummaryDto;
+    expect(body.windowMinutes).toBe(60);
+    // 注入的 scripted 网关不经过 createGateway 观察者，窗口内没有模型样本。
+    expect(body.status).toBe('insufficient_data');
+    expect(body.activeRuns).toBe(0);
+  });
+
+  it('设置 AGENT_RUNTIME_TOKEN 后指标端点缺 token 返回 401', async () => {
+    process.env.AGENT_RUNTIME_TOKEN = 'secret-tok';
+    try {
+      expect((await fetch(`${baseUrl}/metrics`)).status).toBe(401);
+      expect((await fetch(`${baseUrl}/metrics/summary`)).status).toBe(401);
+      const allowed = await fetch(`${baseUrl}/metrics`, {
+        headers: { 'x-agent-runtime-token': 'secret-tok' },
+      });
+      expect(allowed.status).toBe(200);
+      await allowed.text();
+    } finally {
+      delete process.env.AGENT_RUNTIME_TOKEN;
+    }
+  });
+
+  it('从 traceparent 续接 traceId，并把工具调用计入指标', async () => {
+    const metrics = createRuntimeMetrics({ defaultMetrics: false });
+    let seen: { traceId?: string; runId?: string } = {};
+    let round = 0;
+    const capture: ModelGateway = {
+      async chat() {
+        round++;
+        if (round === 1) {
+          seen = { traceId: currentTrace()?.traceId, runId: currentContext().runId };
+          return {
+            content: '搜索',
+            toolCalls: [{ id: 'c1', name: 'web.search', args: { query: 'x' } }],
+            usage: { input: 1, output: 1 },
+            model: 'mock',
+          };
+        }
+        return { content: '完成', toolCalls: [], usage: { input: 1, output: 1 }, model: 'mock' };
+      },
+    };
+    const srv = createRuntimeServer({ gateway: capture, tools: [echo], metrics });
+    await new Promise<void>((r) => srv.listen(0, '127.0.0.1', () => r()));
+    const addr = srv.address();
+    if (!addr || typeof addr === 'string') throw new Error('no port');
+    const traceId = '0af7651916cd43dd8448eb211c80319c';
+    try {
+      const res = await fetch(`http://127.0.0.1:${addr.port}/runs`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          traceparent: `00-${traceId}-b7ad6b7169203331-01`,
+        },
+        body: JSON.stringify({
+          runId: 'r-trace',
+          sessionId: 's1',
+          tenantId: 't1',
+          userId: 'u1',
+          goal: 'g',
+          messages: [{ role: 'user', content: 'g' }],
+        }),
+      });
+      expect(res.status).toBe(200);
+      await res.text();
+      expect(seen).toEqual({ traceId, runId: 'r-trace' });
+      const text = await metrics.registry.metrics();
+      expect(text).toContain('ai_office_tool_calls_total{tool="web.search",status="ok"} 1');
+      expect(text).toContain('ai_office_active_runs 0');
+    } finally {
+      await new Promise<void>((r) => srv.close(() => r()));
     }
   });
 });

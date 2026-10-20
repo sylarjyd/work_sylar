@@ -1,9 +1,22 @@
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
+import { context, SpanKind, trace } from '@opentelemetry/api';
+import type { Logger } from 'pino';
 import { encodeSse } from '@ai-office/shared';
 import type { RunRequest } from '@ai-office/shared';
-import { runAgent } from './agent-loop';
+import {
+  createLogger,
+  endSpan,
+  extractTraceContext,
+  initTelemetry,
+  runWithContext,
+  shutdownTelemetry,
+  startSpan,
+} from '@ai-office/telemetry';
+import { runAgent, type ToolObservation } from './agent-loop';
+import { createRuntimeMetrics, type RuntimeMetrics } from './observability/metrics';
+import type { ModelObserver } from './model/observed-gateway';
 import { resolveRunConfig } from './run-config';
 import { createGateway } from './model/create-gateway';
 import type { ModelGateway } from './model/types';
@@ -30,10 +43,21 @@ export interface RuntimeDeps {
   validateConnector?: typeof defaultValidateConnector;
   /** 每次 run 追加的工具（按 tenantId）；测试可注入。默认从 BFF 拉连接器构建 MCP 工具。 */
   extraTools?: (tenantId: string) => Promise<Tool[]>;
+  /** 测试注入指标；默认新建独立 Registry。 */
+  metrics?: RuntimeMetrics;
+  /** 测试注入日志；默认 pino。 */
+  logger?: Logger;
 }
 
 export function createRuntimeServer(deps: RuntimeDeps = {}): Server {
-  const gateway = deps.gateway ?? createGateway();
+  const metrics = deps.metrics ?? createRuntimeMetrics();
+  const logger = deps.logger ?? createLogger('agent-runtime');
+  const observer: ModelObserver = {
+    onAttempt: (model, ok, durationMs) =>
+      metrics.recordModelAttempt(model, ok ? 'ok' : 'error', durationMs),
+    onFallback: (from, to) => metrics.recordModelFallback(from, to),
+  };
+  const gateway = deps.gateway ?? createGateway(process.env, observer);
   const storage = deps.storage ?? createStorage();
   const baseTools = deps.tools ?? createTools(process.env, storage);
 
@@ -48,6 +72,7 @@ export function createRuntimeServer(deps: RuntimeDeps = {}): Server {
           backoffMaxMs: Number(process.env.MCP_BACKOFF_MAX_MS ?? 30000),
           initTimeoutMs: Number(process.env.MCP_INIT_TIMEOUT_MS ?? 10000),
           callTimeoutMs: Number(process.env.MCP_CALL_TIMEOUT_MS ?? 30000),
+          onRestart: (server) => metrics.recordMcpRestart(server),
         });
 
   const extraTools = deps.extraTools ?? (mcpHost ? defaultExtraTools(mcpHost) : undefined);
@@ -70,6 +95,39 @@ export function createRuntimeServer(deps: RuntimeDeps = {}): Server {
     if (req.method === 'GET' && req.url === '/health') {
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ ok: true }));
+      return;
+    }
+
+    if (req.method === 'GET' && req.url === '/metrics') {
+      if (!authorized(req)) {
+        res.writeHead(401, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: 'unauthorized' }));
+        return;
+      }
+      void metrics.registry
+        .metrics()
+        .then((text) => {
+          res.writeHead(200, { 'content-type': metrics.registry.contentType });
+          res.end(text);
+        })
+        .catch((err: unknown) => {
+          logger.error({ msg: 'metrics_render_failed', err });
+          res.writeHead(500, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ error: 'metrics_unavailable' }));
+        });
+      return;
+    }
+
+    if (req.method === 'GET' && /^\/metrics\/summary(?:\?|$)/.test(req.url ?? '')) {
+      if (!authorized(req)) {
+        res.writeHead(401, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: 'unauthorized' }));
+        return;
+      }
+      const url = new URL(req.url ?? '/', 'http://localhost');
+      const raw = Number(url.searchParams.get('windowMinutes') ?? '15');
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(metrics.summary(raw)));
       return;
     }
 
@@ -96,34 +154,88 @@ export function createRuntimeServer(deps: RuntimeDeps = {}): Server {
           'cache-control': 'no-cache',
           connection: 'keep-alive',
         });
-        // 客户端断开：把该 run 的挂起闸门按拒绝兑现，避免悬停到超时。
-        res.on('close', () => confirm.cancel(runReq.runId));
 
-        void (async () => {
-          try {
-            const runTools = extraTools
-              ? [...baseTools, ...(await extraTools(runReq.tenantId))]
-              : baseTools;
-            const config = resolveRunConfig(runReq.config, process.env);
-            for await (const ev of runAgent(runReq, {
-              gateway,
-              tools: runTools,
-              confirm,
-              maxRounds: config.maxRounds,
-              confirmTimeoutMs: config.confirmTimeoutMs,
-              codeExecTimeoutMs: config.codeExecTimeoutMs,
-              billing: runReq.billing,
-              onUsage: (u) => res.write(encodeSse({ event: 'usage', data: u })),
-            })) {
-              res.write(encodeSse({ event: 'step', data: ev }));
-            }
-            res.write(encodeSse({ event: 'done', data: { runId: runReq.runId } }));
-          } catch (err) {
-            res.write(encodeSse({ event: 'error', data: { message: String(err) } }));
-          } finally {
-            res.end();
-          }
-        })();
+        // 只放稳定 ID；prompt、消息与工具参数不进 span。
+        const runAttributes: Record<string, string> = { 'run.id': runReq.runId };
+        if (runReq.sessionId) runAttributes['session.id'] = runReq.sessionId;
+        if (runReq.tenantId) runAttributes['tenant.id'] = runReq.tenantId;
+        if (runReq.userId) runAttributes['enduser.id'] = runReq.userId;
+        // 续接 BFF 注入的父上下文；没有 traceparent 时 startSpan 自建 root。
+        const parent = extractTraceContext(req.headers);
+        const runSpan = startSpan('runtime.run', runAttributes, {
+          parent,
+          kind: SpanKind.SERVER,
+        });
+        const spanContext = trace.setSpan(parent, runSpan);
+        const runStartedAt = Date.now();
+        let finalized = false;
+        // SSE 断开即视为运行结束：同步收尾 span 与活跃计数，避免长连接泄漏。
+        const finalizeRun = (ok: boolean, err?: unknown): void => {
+          if (finalized) return;
+          finalized = true;
+          endSpan(runSpan, ok, err);
+          metrics.runFinished();
+          const fields = {
+            msg: 'run_done',
+            runId: runReq.runId,
+            status: ok ? 'done' : 'failed',
+            durationMs: Date.now() - runStartedAt,
+          };
+          if (ok) logger.info(fields);
+          else logger.error({ ...fields, err: err ?? new Error('stream_closed') });
+        };
+        metrics.runStarted();
+        logger.info({ msg: 'run_start', runId: runReq.runId });
+
+        // 客户端断开：把该 run 的挂起闸门按拒绝兑现，避免悬停到超时。
+        res.on('close', () => {
+          confirm.cancel(runReq.runId);
+          finalizeRun(false);
+        });
+
+        context.with(spanContext, () =>
+          runWithContext(
+            {
+              runId: runReq.runId,
+              sessionId: runReq.sessionId,
+              tenantId: runReq.tenantId,
+              userId: runReq.userId,
+            },
+            () => {
+              void (async () => {
+                try {
+                  const runTools = extraTools
+                    ? [...baseTools, ...(await extraTools(runReq.tenantId))]
+                    : baseTools;
+                  const config = resolveRunConfig(runReq.config, process.env);
+                  for await (const ev of runAgent(runReq, {
+                    gateway,
+                    tools: runTools,
+                    confirm,
+                    maxRounds: config.maxRounds,
+                    confirmTimeoutMs: config.confirmTimeoutMs,
+                    codeExecTimeoutMs: config.codeExecTimeoutMs,
+                    billing: runReq.billing,
+                    onToolCall: (obs) => recordToolObservation(metrics, logger, obs),
+                    onUsage: (u) => res.write(encodeSse({ event: 'usage', data: u })),
+                  })) {
+                    res.write(encodeSse({ event: 'step', data: ev }));
+                  }
+                  res.write(encodeSse({ event: 'done', data: { runId: runReq.runId } }));
+                  finalizeRun(true);
+                } catch (err) {
+                  // 客户端已断开时 res.write 可能抛错；只按失败收尾，不再二次写流。
+                  if (!finalized) {
+                    res.write(encodeSse({ event: 'error', data: { message: String(err) } }));
+                  }
+                  finalizeRun(false, err);
+                } finally {
+                  res.end();
+                }
+              })();
+            },
+          ),
+        );
       });
       return;
     }
@@ -287,6 +399,30 @@ export function createRuntimeServer(deps: RuntimeDeps = {}): Server {
   return server;
 }
 
+/** 工具观测转指标；MCP 工具名 `mcp.<server>.<tool>` 拆出 server 维度。 */
+function recordToolObservation(
+  metrics: RuntimeMetrics,
+  logger: Logger,
+  obs: ToolObservation,
+): void {
+  metrics.recordToolCall(obs.tool, obs.status, obs.durationMs);
+  if (obs.tool.startsWith('mcp.')) {
+    const rest = obs.tool.slice(4);
+    const dot = rest.indexOf('.');
+    if (dot > 0) {
+      metrics.recordMcpToolCall(rest.slice(0, dot), rest.slice(dot + 1), obs.status);
+    }
+  }
+  if (obs.codeExecTimeout) metrics.recordCodeExecTimeout();
+  // 只记录工具名、状态与耗时：入参与结果全文禁止进日志。
+  logger.debug({
+    msg: 'tool_call',
+    tool: obs.tool,
+    status: obs.status,
+    durationMs: obs.durationMs,
+  });
+}
+
 /** 判断请求来源是否为回环地址；未配置共享密钥时仅信任本机调用。 */
 export function isLoopback(ip: string | undefined): boolean {
   if (!ip) return false;
@@ -328,6 +464,10 @@ const isEntry = !!process.argv[1] &&
 
 if (isEntry) {
   loadRootEnv();
+  initTelemetry({
+    serviceName: 'ai-office-agent-runtime',
+    serviceVersion: process.env.APP_VERSION ?? '0.0.0',
+  });
   const storage = createStorage();
   try {
     await storage.ensureBucket();
@@ -343,9 +483,10 @@ if (isEntry) {
   server.listen(port, host, () => {
     console.log(`agent-runtime listening on http://${host}:${port}`);
   });
-  // 收到终止信号时优雅停机：server.close() 触发 'close' → McpHost.closeAll() 回收 MCP 子进程；
-  // 不调用 process.exit，让事件循环在子进程回收后自然退出，避免遗留孤儿子进程。
-  const shutdown = () => { server.close(); };
+  // 收到终止信号时优雅停机：等待连接关闭后冲刷 span，再由事件循环自然退出。
+  const shutdown = () => {
+    server.close(() => void shutdownTelemetry());
+  };
   process.on('SIGTERM', shutdown);
   process.on('SIGINT', shutdown);
 }

@@ -1,15 +1,26 @@
 import { randomUUID } from 'node:crypto';
 import type { AgentEvent, RunBilling, RunRequest, UsageEvent } from '@ai-office/shared';
+import { endSpan, startSpan } from '@ai-office/telemetry';
 import type { ModelGateway, ModelMessage } from './model/types';
 import type { ConfirmGate } from './confirm/broker';
 import type { RunContext, Tool } from './tools/types';
 import { scaledValue, toUsageEvent } from './billing';
+
+export interface ToolObservation {
+  tool: string;
+  status: 'ok' | 'error' | 'denied' | 'blocked';
+  durationMs: number;
+  /** 仅 code.exec 且子进程因超时被杀时置 true。 */
+  codeExecTimeout: boolean;
+}
 
 export interface RunDeps {
   gateway: ModelGateway;
   tools: Tool[];
   maxRounds?: number;
   onUsage?: (usage: UsageEvent) => void;
+  /** 工具埋点；实现方不应抛错。 */
+  onToolCall?: (obs: ToolObservation) => void;
   /** 确认闸门：confirm 级工具执行前挂起等待用户决策；未注入时按拒绝处理（fail-safe）。 */
   confirm?: ConfirmGate;
   /** 确认等待上限（毫秒）。 */
@@ -99,12 +110,19 @@ export async function* runAgent(req: RunRequest, deps: RunDeps): AsyncGenerator<
         yield step('tool_call', { tool: call.name, args: call.args });
         const tool = deps.tools.find((t) => t.name === call.name);
         let ok = true;
+        let status: ToolObservation['status'] = 'ok';
         let result: unknown;
         const extra: Record<string, unknown> = {};
+        const toolStarted = Date.now();
+        const toolSpan = startSpan('tool.execute', {
+          'gen_ai.tool.name': call.name,
+          'run.id': req.runId,
+        });
         try {
           if (!tool) throw new Error(`unknown_tool:${call.name}`);
           if (tool.permission === 'blocked') {
             ok = false;
+            status = 'blocked';
             extra.blocked = true;
             result = { error: 'blocked' };
           } else if (tool.permission === 'confirm') {
@@ -123,6 +141,7 @@ export async function* runAgent(req: RunRequest, deps: RunDeps): AsyncGenerator<
               result = await tool.execute(call.args, ctx);
             } else {
               ok = false;
+              status = 'denied';
               extra.denied = true;
               extra.reason = decision.reason ?? 'user_denied';
               result = { denied: true, reason: extra.reason };
@@ -132,8 +151,20 @@ export async function* runAgent(req: RunRequest, deps: RunDeps): AsyncGenerator<
           }
         } catch (err) {
           ok = false;
+          status = 'error';
           result = { error: String(err) };
         }
+        // 工具返回 {ok:false}（如 MCP 调用失败）即使没有抛错也算失败；
+        // 不改 tool_result.ok 的既有语义（它表示“是否抛错/被拒”），只影响埋点。
+        if (status === 'ok' && isFailureResult(result)) status = 'error';
+        const durationMs = Date.now() - toolStarted;
+        endSpan(toolSpan, status === 'ok');
+        deps.onToolCall?.({
+          tool: call.name,
+          status,
+          durationMs,
+          codeExecTimeout: call.name === 'code.exec' && isTimeoutResult(result),
+        });
         yield step('tool_result', {
           tool: call.name,
           ok,
@@ -170,6 +201,14 @@ function displayOf(result: unknown): { display?: unknown } {
   if (result === null || typeof result !== 'object' || Array.isArray(result)) return {};
   const d = (result as { display?: unknown }).display;
   return d === undefined ? {} : { display: d };
+}
+
+function isFailureResult(value: unknown): boolean {
+  return value !== null && typeof value === 'object' && (value as { ok?: unknown }).ok === false;
+}
+
+function isTimeoutResult(value: unknown): boolean {
+  return value !== null && typeof value === 'object' && (value as { timeout?: unknown }).timeout === true;
 }
 
 /** 工具返回 `{ artifact: ArtifactRef }` 时取出该引用；结构不符则视为无产物。 */

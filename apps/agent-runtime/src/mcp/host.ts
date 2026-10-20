@@ -20,6 +20,8 @@ export interface McpHostOptions {
   callTimeoutMs: number;
   /** 测试注入；默认建 stdio 传输。 */
   transportFactory?: TransportFactory;
+  /** 从 error 态恢复成功时回调；首次建连不算重启。 */
+  onRestart?: (server: string) => void;
 }
 
 type State = 'starting' | 'ready' | 'error';
@@ -32,6 +34,8 @@ interface Entry {
   state: State;
   tools: McpToolInfo[];
   backoffMs: number;
+  /** 本次 spawn 是否来自 error 态重拉。 */
+  restartedFromError: boolean;
   /** 进行中的 spawn；并发 ensure 共用同一 promise，避免重复建连接。 */
   connectPromise?: Promise<McpToolInfo[]>;
   heartbeatTimer?: ReturnType<typeof setInterval>;
@@ -85,12 +89,14 @@ export class McpHost {
       // 启动中：复用同一 in-flight promise（期间若有配置变更，留待下次 run 协调）。
       return existing.connectPromise;
     }
+    const restartedFromError = existing?.state === 'error';
     const prevBackoff = existing?.backoffMs ?? this.opts.backoffBaseMs;
     if (existing) await this.dispose(key); // 配置变更 / error 态：先回收旧连接
 
     const transport = this.factory(cfg);
     const entry: Entry = {
       cfg, tenantId, transport, state: 'starting', tools: [], backoffMs: prevBackoff,
+      restartedFromError,
     };
     const promise = this.spawn(key, entry);
     entry.connectPromise = promise;
@@ -120,6 +126,10 @@ export class McpHost {
       entry.state = 'ready';
       entry.tools = tools;
       entry.backoffMs = this.opts.backoffBaseMs; // 成功后重置退避
+      if (entry.restartedFromError) {
+        entry.restartedFromError = false;
+        this.opts.onRestart?.(entry.cfg.name);
+      }
       entry.connectPromise = undefined;
       this.startHeartbeat(key, entry);
       return tools;

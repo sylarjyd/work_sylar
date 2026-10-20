@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { runAgent } from './agent-loop';
+import { runAgent, type ToolObservation } from './agent-loop';
 import type { ModelGateway } from './model/types';
 import type { Tool } from './tools/types';
 import type { ConfirmGate } from './confirm/broker';
@@ -477,6 +477,73 @@ describe('runAgent', () => {
     const events = await collect(runAgent(req, { gateway, tools: [tool] }));
     const tr = events.find((e) => e.type === 'tool_result')!;
     expect('display' in tr.payload).toBe(false);
+  });
+
+  it('工具结果映射为 ok/error/blocked 观测，code.exec 超时单独标记', async () => {
+    const failed: ToolObservation[] = [];
+    const timeoutTool: Tool = {
+      name: 'code.exec',
+      description: 'd',
+      parameters: {},
+      permission: 'safe',
+      async execute() {
+        return { ok: false, timeout: true, stdout: '', stderr: '', durationMs: 5 };
+      },
+    };
+    await collect(
+      runAgent(req, {
+        gateway: oneShotGateway({ id: 'c1', name: 'code.exec', args: {} }),
+        tools: [timeoutTool],
+        onToolCall: (o) => failed.push(o),
+      }),
+    );
+    expect(failed).toHaveLength(1);
+    expect(failed[0]).toMatchObject({
+      tool: 'code.exec',
+      status: 'error',
+      codeExecTimeout: true,
+    });
+
+    const blocked: ToolObservation[] = [];
+    const blockedTool: Tool = {
+      name: 'danger',
+      description: 'd',
+      parameters: {},
+      permission: 'blocked',
+      async execute() {
+        return {};
+      },
+    };
+    await collect(
+      runAgent(req, {
+        gateway: oneShotGateway({ id: 'c2', name: 'danger', args: {} }),
+        tools: [blockedTool],
+        onToolCall: (o) => blocked.push(o),
+      }),
+    );
+    expect(blocked[0]).toMatchObject({ tool: 'danger', status: 'blocked', codeExecTimeout: false });
+  });
+
+  it('被拒绝的 confirm 工具记为 denied', async () => {
+    const seen: ToolObservation[] = [];
+    const tool: Tool = {
+      name: 'code.exec',
+      description: 'd',
+      parameters: {},
+      permission: 'confirm',
+      async execute() {
+        return { stdout: 'never' };
+      },
+    };
+    await collect(
+      runAgent(req, {
+        gateway: oneShotGateway({ id: 'c1', name: 'code.exec', args: {} }),
+        tools: [tool],
+        confirm: stubGate(false),
+        onToolCall: (o) => seen.push(o),
+      }),
+    );
+    expect(seen[0]).toMatchObject({ status: 'denied', codeExecTimeout: false });
   });
 });
 

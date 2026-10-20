@@ -1,4 +1,6 @@
 import type { ModelGateway } from './types';
+import type { ModelObserver } from './observed-gateway';
+import { ObservedGateway } from './observed-gateway';
 import { OpenAICompatGateway } from './openai-compat';
 import { MockGateway } from './mock-gateway';
 import { RoutingGateway } from './routing-gateway';
@@ -43,8 +45,12 @@ export function parseProviders(raw: string | undefined): ProviderConfig[] {
 /**
  * 配置了 MODEL_PROVIDERS 且至少一个 provider 有 key → 多模型路由；
  * 否则沿用单模型配置；完全没有 key → MockGateway（本地/CI）。
+ * 传 observer 时单模型网关外包一层观测；不传则保持原实例，兼容既有调用方。
  */
-export function createGateway(env: NodeJS.ProcessEnv = process.env): ModelGateway {
+export function createGateway(
+  env: NodeJS.ProcessEnv = process.env,
+  observer?: ModelObserver,
+): ModelGateway {
   const providers = parseProviders(env.MODEL_PROVIDERS).filter((p) => env[p.apiKeyEnv]);
   if (providers.length > 0) {
     return new RoutingGateway(
@@ -56,13 +62,19 @@ export function createGateway(env: NodeJS.ProcessEnv = process.env): ModelGatewa
           model: p.model,
         }),
       })),
+      observer,
     );
   }
   const apiKey = env.DEEPSEEK_API_KEY;
-  if (!apiKey) return new MockGateway();
-  return new OpenAICompatGateway({
+  if (!apiKey) {
+    const mock = new MockGateway();
+    return observer ? new ObservedGateway(mock, 'mock', observer) : mock;
+  }
+  const model = env.MODEL_NAME ?? 'deepseek-chat';
+  const inner = new OpenAICompatGateway({
     baseUrl: env.MODEL_BASE_URL ?? 'https://api.deepseek.com/v1',
     apiKey,
-    model: env.MODEL_NAME ?? 'deepseek-chat',
+    model,
   });
+  return observer ? new ObservedGateway(inner, model, observer) : inner;
 }
