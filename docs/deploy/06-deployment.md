@@ -1,11 +1,11 @@
 # AI 办公智能体 · 部署文档（Deployment Guide）
 
-- 版本：v1.1
-- 日期：2026-10-19
-- 状态：随 M5a 交付更新
+- 版本：v1.2
+- 日期：2026-10-20
+- 状态：随 M5b-2 可观测性交付更新
 - 关联：`docs/design/02-architecture.md`、`docs/db/schema.sql`
 
-> 本文覆盖**本地开发**与**生产部署**两套流程。当前代码已具备生产级安全边界，但生产化项（密钥托管、队列、可观测、CI/CD）见 §10 与开发计划 §6。
+> 本文覆盖**本地开发**与**生产部署**两套流程。当前代码已具备生产级安全边界，但生产化项（密钥托管、队列、CI/CD）见 §10 与开发计划 §6。
 
 ---
 
@@ -102,6 +102,20 @@ flowchart LR
 | `MCP_BACKOFF_BASE_MS` / `MCP_BACKOFF_MAX_MS` | `1000` / `30000` | MCP 子进程崩溃退避重拉 |
 | `MCP_INIT_TIMEOUT_MS` | `10000` | MCP `initialize` / 校验握手超时 |
 | `MCP_CALL_TIMEOUT_MS` | `30000` | MCP 单次工具调用超时 |
+| `LOG_LEVEL` | `info` | 日志级别；生产保持 `info`，排障临时调 `debug` |
+| `LOG_PRETTY` | `0` | 本地开发设 `1`；生产关闭，避免彩色转义符进入日志采集 |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | 空 | OTLP/HTTP 端点（如 `http://collector:4318`）；留空不导出 trace |
+| `OTEL_EXPORTER_OTLP_HEADERS` | 空 | OTLP 请求头，逗号分隔 `key=urlencoded-value` |
+| `OTEL_TRACES_SAMPLER_ARG` | `1.0` | trace 采样率 0–1；高流量环境下调以控成本 |
+| `METRICS_ROLLUP_MS` | `300000` | 指标聚合间隔，最小 10000；`0` 关闭定时任务；多实例由 Leader 锁保证只跑一个 |
+| `METRICS_BACKFILL_HOURS` | `24` | 启动时回填小时数，1–168 |
+| `METRICS_RETENTION_DAYS` | `90` | 指标桶保留天数，1–3650；到期由聚合任务分批清理 |
+| `ALERT_RETENTION_DAYS` | `90` | 告警事件保留天数，1–3650；到期由聚合任务分批清理 |
+| `ALERTS_ENABLED` | `true` | 告警评估总开关；也可在管理端参数页修改（DB 优先） |
+| `ALERT_EVAL_MS` | `60000` | 评估间隔，最小 5000；`0` 关闭评估但仍会播种规则 |
+| `ALERT_MAX_PER_HOUR` | `60` | Webhook 滚动一小时投递上限（含测试告警） |
+| `ALERT_WEBHOOK_URL` / `ALERT_WEBHOOK_SECRET` | 空 | 初始 Webhook 配置；管理端写入的 DB 值优先，secret 仅以掩码展示 |
+| `ADMIN_WEB_URL` | `http://localhost:3000` | 告警消息中的管理端跳转地址 |
 
 > `JWT_SECRET` 未设置时 BFF 会抛错（fail-fast）；`AGENT_RUNTIME_TOKEN` 未设置时 runtime 仅放行回环来源（fail-closed）——生产两者都必须设置。
 
@@ -218,13 +232,16 @@ server {
 
 ## 7. 健康检查与探活
 
-| 单元 | 端点 | 期望 |
-|---|---|---|
-| agent-runtime | `GET /health` | `200 {"ok":true}` |
-| bff | 无专用健康端点（见 §10 建议补充） | 可用 `GET /api/sessions`（无 token 应 401，证明服务在） |
-| web | `GET /` | 200 |
+| 单元 | 端点 | 鉴权 | 期望 |
+|---|---|---|---|
+| agent-runtime | `GET /health` | 无 | `200 {"ok":true}` |
+| agent-runtime | `GET /metrics`、`GET /metrics/summary` | 回环或 `x-agent-runtime-token` | 前者 Prometheus 文本，后者 JSON 摘要 |
+| bff | `GET /api/health` | 无 | `200 {"status":"ok","version":"…"}`，仅证明进程存活 |
+| bff | `GET /api/health/ready` | 回环或 `x-internal-token` | DB/Redis/runtime 全部可用才 200；否则 503 且 `checks` 标出失败项 |
+| bff | `GET /metrics` | 回环或 `x-internal-token` | Prometheus 文本 |
+| web | `GET /` | 无 | 200 |
 
-> 建议为 BFF 增加 `GET /health`（含 DB 连通性检查），并在编排中配置 liveness/readiness 探针（见 §10）。
+> 编排探针建议：liveness 打 `/api/health`，readiness 打 `/api/health/ready`（由内网探针携带 `x-internal-token`）。不要把 `/metrics` 或 `/api/health/ready` 暴露到公网。
 
 ---
 
@@ -284,9 +301,9 @@ server {
 - [ ] 数据库仅内网可达、最小权限账号、连接加密。
 - [ ] 对象存储桶**私有**（当前下载经 BFF 代理，桶不公开）。
 - [ ] 容器镜像**钉版本/digest**（当前 MinIO 为 `:latest`，见开发计划 P3）。
-- [ ] 补齐按 IP/全局滥用防护与限流指标告警（RPM 限流与积分额度已在 M5a 落地，P7）。
-- [ ] 日志脱敏（不记录令牌、密码、密钥）。
-- [ ] 为 BFF 增加 `/health` 并配置探针。
+- [ ] 补齐按 IP/全局滥用防护（RPM 限流与积分额度已在 M5a 落地；限流指标与告警已在 M5b-2 落地，P7）。
+- [ ] 日志脱敏（M5b-2 已内置 redact 路径；新增业务日志仍需自查）。
+- [ ] 为 BFF 的 `/api/health`、`/api/health/ready` 配置 liveness/readiness 探针（M5b-2 已提供）。
 - [ ] `code.exec` 沙箱为「受限计算」而非强隔离：无 fs/网络/子进程已被 harness + Node 权限模型收口；若需更强隔离（防进程内 V8 漏洞），升级为容器沙箱。
 
 ---
@@ -320,7 +337,7 @@ pnpm --filter @ai-office/bff db:up      # 等价于在 apps/bff 下执行 docker
 | SDK 版本偏斜 | 统一版本 | 开发计划 P4 |
 | CORS 未收敛 | 域名白名单 | 开发计划 P5 |
 | 无 CI/CD、无覆盖率门槛 | 补 CI | 开发计划 P6 |
-| 请求限流仅覆盖 RPM 与积分额度 | 补按 IP/全局滥用防护与限流指标告警 | 开发计划 P7 |
+| 请求限流仅覆盖 RPM 与积分额度 | 限流指标与告警已随 M5b-2 落地；仍缺按 IP/全局滥用防护 | 开发计划 P7 |
 | runtime 鉴权默认可选 | 生产强制 `AGENT_RUNTIME_TOKEN` + 网络隔离 | 开发计划 P8 |
 | 无备份演练/生命周期 | 备份 + 演练 + S3 策略 | 开发计划 P9 |
 | 长任务无队列/续传 | 队列化 + checkpoint | 开发计划 P10 |
@@ -420,3 +437,29 @@ curl -X POST http://localhost:4000/api/billing/admin/credits \
 - 写操作非破坏性：用户仅可启用/禁用、改角色；会话仅可归档；套餐仅可停用；模型价格可删除但被启用套餐引用时拒绝。
 - 审计：写操作与业务写入同事务落 `AdminAuditLog`；敏感查看（用户/租户/会话/消息/任务/运行详情）尽力记录；不记录消息正文、密钥与工具入参全文。
 - 参数白名单：`maxRounds`、`confirmTimeoutMs`、`codeExecTimeoutMs`、`kbChunkSize`、`kbChunkOverlap`；来源优先级 DB > 环境变量 > 默认值，页面修改即时生效。
+
+## 管理端（M5b-2 可观测性）
+
+- 概览 `/admin/overview`：24h/7d/30d KPI、运行/Token/时长趋势、按模型堆叠积分、模型成本与三服务健康；60 秒静默刷新，标签页隐藏时暂停。
+- 告警 `/admin/alerts`：规则就地编辑、事件状态筛选与分页、发送测试告警；测试与真实投递共用每小时配额。
+- 时间线：任务页打开运行后自动加载，最多 500 个节点，超出时提示省略数量；不包含 prompt 与工具入参/结果正文。
+- 所有管理端接口仍受 `JwtGuard + AdminGuard` 保护；写操作与审计同事务。
+
+### 可观测数据流
+
+1. 服务产生结构化日志/span/指标；日志经 redact 后输出，span 按 `OTEL_TRACES_SAMPLER_ARG` 采样并导出到 OTLP 端点。
+2. BFF 定时把事件聚合进 `MetricBucket`（小时桶），概览、趋势与告警共用。
+3. 告警评估读取服务健康、结算滞留、运行失败率/P95、模型错误率与积分窗口；条件满足时写 `AlertEvent`（`openKey` 唯一，避免重复触发），并按冷却时间投递 Webhook。
+4. Webhook 请求带 `x-ai-office-signature: sha256=<HMAC-SHA256(body, secret)>`，5 秒超时、不跟随重定向、仅允许 http(s)，最多重试 3 次。
+5. 条件恢复后自动写 resolved 事件；停用规则会在同一事务里关闭其未恢复事件。
+
+投递失败只影响通知，不阻塞评估；事件与 `deliveryStatus/deliveryError` 保留在告警中心。
+
+### 安全边界（生产必读）
+
+- **禁止把 prompt、消息正文、工具入参/结果全文、Authorization、内部 token、API key、连接器 env、Webhook secret 写入日志或指标 label。**
+- **指标 label 禁止 userId/tenantId/sessionId/runId**；管理端指标接口也不返回邮箱、消息内容、工具入参/结果。
+- `/metrics`、`/api/health/ready` 仅回环或内部 token 可访问；runtime 指标端点仅在配置 `AGENT_RUNTIME_TOKEN` 后对非回环来源放行。
+- Webhook URL 仅管理员可改；secret 设置后永不返回明文，读取一律掩码。
+- 日志默认带 `traceId/spanId/requestId` 与脱敏后的 userId/tenantId，排障时优先用 `requestId` 串联，不要把业务正文补进日志。
+- 指标与告警历史默认各保留 90 天，分别按 `METRICS_RETENTION_DAYS`、`ALERT_RETENTION_DAYS` 分批清理；需要长期留存时在 Prometheus/远端存储侧另行配置。

@@ -17,6 +17,7 @@ import type {
   AdminPlanInput,
   AdminPlanPatch,
   AdminRunDetailDto,
+  AdminRunTimelineDto,
   AdminSessionDetailDto,
   AdminSessionItemDto,
   AdminSettingDto,
@@ -209,6 +210,10 @@ export function getAdminRun(
   return request(`/api/admin/runs/${encodeURIComponent(id)}${query(params)}`);
 }
 
+export function getAdminRunTimeline(id: string): Promise<AdminRunTimelineDto> {
+  return request(`/api/admin/runs/${encodeURIComponent(id)}/timeline`);
+}
+
 // ------------------------------------------------------------------ 模型
 export function getAdminModels(): Promise<AdminModelsDto> {
   return request('/api/admin/models');
@@ -323,5 +328,9 @@ export function listAdminAlertEvents(params: {
 }
 
 export function sendAdminAlertTest(id: string): Promise<AdminAlertTestResultDto> {
-  return request(`/api/admin/alert-rules/${encodeURIComponent(id)}/test`, { method: 'POST' });
+  // authFetch 固定带 JSON content-type；Fastify 对空体 POST 直接 400，故发送空对象。
+  return request(`/api/admin/alert-rules/${encodeURIComponent(id)}/test`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  });
 }

@@ -4,6 +4,7 @@ import {
   createModelPrice,
   getAdminMetricTimeseries,
   getAdminOverview,
+  getAdminRunTimeline,
   isForbidden,
   listAdminAlertEvents,
   listAdminAlertRules,
@@ -200,6 +201,8 @@ describe('admin-api', () => {
     );
     expect(String(calls[3][0])).toContain('/api/admin/alert-rules/r%2F1/test');
     expect(calls[3][1].method).toBe('POST');
+    // authFetch 固定带 JSON content-type，Fastify 会拒绝空体 POST（400），故须显式发送空对象。
+    expect(calls[3][1].body).toBe('{}');
   });
 
   it('告警规则校验失败有专门文案', () => {
@@ -209,5 +212,20 @@ describe('admin-api', () => {
     expect(adminErrorText(new Error('admin_failed_404_alert_rule_not_found'))).toBe(
       '告警规则不存在',
     );
+  });
+
+  it('运行时间线路径参数做 URL 编码', async () => {
+    stubWindow();
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ nodes: [] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    await getAdminRunTimeline('r/1');
+    const [url] = fetchMock.mock.calls[0] as unknown as [string];
+    expect(String(url)).toContain('/api/admin/runs/r%2F1/timeline');
   });
 });

@@ -1925,7 +1925,7 @@ a {
   color: var(--ink-3);
 }
 
-/* ================================ ÔËĞĞ¸ÅÀÀ ================================ */
+/* ================================ è¿è¡Œæ¦‚è§ˆ ================================ */
 
 .overview-range {
   display: flex;
@@ -2071,7 +2071,7 @@ a {
   }
 }
 
-/* ================================ ¸æ¾¯ÖĞĞÄ ================================ */
+/* ================================ å‘Šè­¦ä¸­å¿ƒ ================================ */
 
 .alert-cell-input {
   width: 96px;
@@ -2105,4 +2105,86 @@ a {
 .alert-badge.resolved {
   color: var(--mint-ink);
   background: var(--mint-soft);
+}
+
+/* ================================ è¿è¡Œæ—¶é—´çº¿ ================================ */
+
+.run-timeline {
+  margin-top: 16px;
+}
+
+.timeline-list {
+  position: relative;
+  margin: 8px 0 12px;
+  padding: 0 0 0 18px;
+  list-style: none;
+  border-left: 1px solid var(--line-strong);
+}
+
+.timeline-node {
+  position: relative;
+  padding: 0 0 12px 14px;
+}
+
+.timeline-dot {
+  position: absolute;
+  left: -23px;
+  top: 6px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--ink-3);
+  border: 2px solid var(--surface);
+}
+
+.timeline-dot.ok {
+  background: var(--mint);
+}
+
+.timeline-dot.bad {
+  background: var(--danger);
+}
+
+.timeline-dot.warn {
+  background: var(--amber-ink);
+}
+
+.timeline-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.timeline-trace {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.timeline-label {
+  font-weight: 500;
+}
+
+.timeline-badge {
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--ink-2);
+  background: var(--surface-2);
+}
+
+.timeline-badge.ok {
+  color: var(--mint-ink);
+  background: var(--mint-soft);
+}
+
+.timeline-badge.bad {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.timeline-badge.warn {
+  color: var(--amber-ink);
+  background: var(--amber-soft);
 }

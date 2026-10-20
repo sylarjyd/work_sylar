@@ -4,17 +4,25 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import type {
   AdminRunDetailDto,
+  AdminRunTimelineDto,
   AdminTaskDetailDto,
   AdminTaskItemDto,
 } from '@ai-office/shared';
 import {
   adminErrorText,
   getAdminRun,
+  getAdminRunTimeline,
   getAdminTask,
   isForbidden,
   listAdminTasks,
 } from '../../../lib/admin-api';
 import { isUnauthorized } from '../../../lib/api';
+import { formatDuration } from '../../../components/chart-geometry';
+import {
+  timelineKindLabel,
+  timelineStatusLabel,
+  timelineStatusTone,
+} from '../../../lib/run-timeline';
 
 export default function AdminTasksPage() {
   const router = useRouter();
@@ -27,6 +35,8 @@ export default function AdminTasksPage() {
   const [status, setStatus] = useState('');
   const [detail, setDetail] = useState<AdminTaskDetailDto | null>(null);
   const [run, setRun] = useState<AdminRunDetailDto | null>(null);
+  const [timeline, setTimeline] = useState<AdminRunTimelineDto | null>(null);
+  const [traceCopied, setTraceCopied] = useState(false);
   const [taskLoading, setTaskLoading] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
@@ -81,6 +91,8 @@ export default function AdminTasksPage() {
     setError('');
     setDetail(null);
     setRun(null);
+    setTimeline(null);
+    setTraceCopied(false);
     setTaskLoading(true);
     try {
       const data = await getAdminTask(id);
@@ -100,19 +112,46 @@ export default function AdminTasksPage() {
     runSeq.current++;
     setDetail(null);
     setRun(null);
+    setTimeline(null);
+    setTraceCopied(false);
     setTaskLoading(false);
   }
 
   async function openRun(id: string) {
     const seq = ++runSeq.current;
     setError('');
+    setTimeline(null);
+    setTraceCopied(false);
     try {
-      const data = await getAdminRun(id, { stepPage: 1, stepPageSize: 100 });
+      // 时间线失败不应拖垮运行详情：两者独立结算，谁成功就先展示谁。
+      const [runResult, timelineResult] = await Promise.allSettled([
+        getAdminRun(id, { stepPage: 1, stepPageSize: 100 }),
+        getAdminRunTimeline(id),
+      ]);
       if (seq !== runSeq.current) return;
-      setRun(data);
+      if (runResult.status === 'rejected') {
+        handleErr(runResult.reason);
+        return;
+      }
+      setRun(runResult.value);
+      if (timelineResult.status === 'fulfilled') {
+        setTimeline(timelineResult.value);
+      } else {
+        handleErr(timelineResult.reason);
+      }
     } catch (err) {
       if (seq !== runSeq.current) return;
       handleErr(err);
+    }
+  }
+
+  // 复制失败（非 HTTPS、权限拒绝）时退回手动选择，不阻断时间线展示。
+  async function copyTrace(traceId: string) {
+    try {
+      await navigator.clipboard.writeText(traceId);
+      setTraceCopied(true);
+    } catch {
+      setError('复制失败，请手动选择 traceId');
     }
   }
 
@@ -196,6 +235,63 @@ export default function AdminTasksPage() {
             <p className="admin-muted">
               状态 {run.status} · tokens {run.usage?.inputTokens ?? 0}/{run.usage?.outputTokens ?? 0} · 积分 {run.usage?.credits ?? '—'}
             </p>
+            {timeline && (
+              <div className="run-timeline">
+                <h3 className="billing-heading">时间线</h3>
+                <p className="admin-muted">
+                  {timeline.nodes.length} 个节点 · 用时 {formatDuration(timeline.durationMs)} ·
+                  tokens {timeline.usage ? timeline.usage.inputTokens : '—'}/
+                  {timeline.usage ? timeline.usage.outputTokens : '—'} · 积分{' '}
+                  {timeline.usage?.credits ?? '—'}
+                </p>
+                <p className="admin-muted timeline-trace">
+                  trace {timeline.traceId ?? '—'}
+                  {timeline.traceId && (
+                    <button
+                      type="button"
+                      className="admin-btn"
+                      onClick={() => {
+                        if (timeline.traceId) void copyTrace(timeline.traceId);
+                      }}
+                    >
+                      {traceCopied ? '已复制' : '复制 traceId'}
+                    </button>
+                  )}
+                </p>
+                <ol className="timeline-list">
+                  {timeline.nodes.map((node) => {
+                    const tone = timelineStatusTone(node.status);
+                    return (
+                      <li key={node.id} className="timeline-node">
+                        <span className={`timeline-dot ${tone}`} aria-hidden="true" />
+                        <div className="timeline-body">
+                          <div className="timeline-head">
+                            <span className="timeline-label">{node.label}</span>
+                            <span className={`timeline-badge ${tone}`}>
+                              {timelineStatusLabel(node.status)}
+                            </span>
+                            <span className="admin-muted">
+                              {new Date(node.startedAt).toLocaleTimeString('zh-CN', {
+                                hour12: false,
+                              })}
+                            </span>
+                            {node.durationMs !== null && (
+                              <span className="admin-muted">
+                                {formatDuration(node.durationMs)}
+                              </span>
+                            )}
+                          </div>
+                          <div className="admin-muted">{timelineKindLabel(node.kind)}</div>
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ol>
+                {timeline.truncated && (
+                  <p className="admin-muted">节点过多，已省略部分节点。</p>
+                )}
+              </div>
+            )}
             {run.steps.items.length === 0 ? (
               <div className="admin-empty">暂无 step</div>
             ) : (
@@ -228,6 +324,8 @@ export default function AdminTasksPage() {
                 // 关闭面板时作废在途的运行请求，避免被迟到响应重新打开
                 runSeq.current += 1;
                 setRun(null);
+                setTimeline(null);
+                setTraceCopied(false);
               }}
             >
               关闭运行详情
