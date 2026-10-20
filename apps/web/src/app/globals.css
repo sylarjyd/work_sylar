@@ -2070,3 +2070,39 @@ a {
     grid-template-columns: 1fr;
   }
 }
+
+/* ================================ ¸æ¾¯ÖÐÐÄ ================================ */
+
+.alert-cell-input {
+  width: 96px;
+}
+
+.alert-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.alert-enabled {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.alert-badge {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+}
+
+.alert-badge.firing {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.alert-badge.resolved {
+  color: var(--mint-ink);
+  background: var(--mint-soft);
+}

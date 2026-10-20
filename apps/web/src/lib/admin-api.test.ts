@@ -5,8 +5,12 @@ import {
   getAdminMetricTimeseries,
   getAdminOverview,
   isForbidden,
+  listAdminAlertEvents,
+  listAdminAlertRules,
   listAdminUsers,
   resetAdminSetting,
+  sendAdminAlertTest,
+  updateAdminAlertRule,
   updateModelPrice,
 } from './admin-api';
 
@@ -168,5 +172,42 @@ describe('admin-api', () => {
       '/api/admin/metrics/timeseries?metrics=credits&from=2026-10-01T00%3A00%3A00.000Z&to=2026-10-02T00%3A00%3A00.000Z&granularity=day&dimensionType=model',
     );
     expect(urls[1]).not.toContain('dimensionId=');
+  });
+
+  it('告警规则、事件与测试投递使用正确的方法和参数', async () => {
+    stubWindow();
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await listAdminAlertRules();
+    await updateAdminAlertRule('r/1', { threshold: 0.5, enabled: false });
+    await listAdminAlertEvents({ status: 'firing', page: 2, pageSize: 20 });
+    await sendAdminAlertTest('r/1');
+
+    const calls = fetchMock.mock.calls as unknown as Array<[string, RequestInit]>;
+    expect(String(calls[0][0])).toContain('/api/admin/alert-rules');
+    expect(String(calls[1][0])).toContain('/api/admin/alert-rules/r%2F1');
+    expect(calls[1][1].method).toBe('PATCH');
+    expect(JSON.parse(String(calls[1][1].body))).toEqual({ threshold: 0.5, enabled: false });
+    expect(String(calls[2][0])).toContain(
+      '/api/admin/alert-events?status=firing&page=2&pageSize=20',
+    );
+    expect(String(calls[3][0])).toContain('/api/admin/alert-rules/r%2F1/test');
+    expect(calls[3][1].method).toBe('POST');
+  });
+
+  it('告警规则校验失败有专门文案', () => {
+    expect(adminErrorText(new Error('admin_failed_400_invalid_patch'))).toBe(
+      '告警规则参数不合法',
+    );
+    expect(adminErrorText(new Error('admin_failed_404_alert_rule_not_found'))).toBe(
+      '告警规则不存在',
+    );
   });
 });

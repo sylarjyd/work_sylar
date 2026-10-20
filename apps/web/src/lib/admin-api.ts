@@ -1,4 +1,8 @@
 import type {
+  AdminAlertEventDto,
+  AdminAlertRuleDto,
+  AdminAlertRulePatch,
+  AdminAlertTestResultDto,
   AdminAuditItemDto,
   AdminCreditsRequest,
   AdminMessageDto,
@@ -82,6 +86,8 @@ export function adminErrorText(err: unknown): string {
     'admin_failed_400_invalid_kbChunkOverlap': '分块重叠必须小于分块大小',
     'admin_failed_400_invalid_kbChunkSize': '分块大小必须大于分块重叠',
     'admin_failed_400_invalid_value': '参数值超出允许范围',
+    'admin_failed_400_invalid_patch': '告警规则参数不合法',
+    'admin_failed_404_alert_rule_not_found': '告警规则不存在',
   };
   if (map[msg]) return map[msg];
   const failed = /^admin_failed_(\d{3})(?:_(.*))?$/.exec(msg);
@@ -289,4 +295,33 @@ export function getAdminMetricTimeseries(
       dimensionId: params.dimensionId,
     })}`,
   );
+}
+
+// ------------------------------------------------------------------ 告警
+export function listAdminAlertRules(): Promise<AdminAlertRuleDto[]> {
+  return request('/api/admin/alert-rules');
+}
+
+export function updateAdminAlertRule(
+  id: string,
+  patch: AdminAlertRulePatch,
+): Promise<AdminAlertRuleDto> {
+  return request(`/api/admin/alert-rules/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  });
+}
+
+export function listAdminAlertEvents(params: {
+  status?: string;
+  from?: string;
+  to?: string;
+  page?: number;
+  pageSize?: number;
+}): Promise<PageDto<AdminAlertEventDto>> {
+  return request(`/api/admin/alert-events${query(params)}`);
+}
+
+export function sendAdminAlertTest(id: string): Promise<AdminAlertTestResultDto> {
+  return request(`/api/admin/alert-rules/${encodeURIComponent(id)}/test`, { method: 'POST' });
 }
