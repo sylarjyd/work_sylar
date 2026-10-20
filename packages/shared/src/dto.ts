@@ -356,6 +356,7 @@ export interface AdminStepDto {
 export interface AdminRunDetailDto {
   id: string;
   taskId: string;
+  traceId: string | null;
   status: string;
   startedAt: string;
   endedAt: string | null;
@@ -460,4 +461,162 @@ export interface RuntimeSummaryDto {
   models: RuntimeModelSummaryDto[];
   fallbacks: number;
   mcpRestarts: number;
+}
+
+export type AdminOverviewRange = '24h' | '7d' | '30d';
+
+export interface AdminOverviewKpiDto {
+  runs: number;
+  failedRuns: number;
+  /** 已结束运行的成功率；窗口内没有已结束运行时为 null。 */
+  successRate: number | null;
+  inputTokens: number;
+  outputTokens: number;
+  credits: number;
+  avgDurationMs: number | null;
+  p95DurationMs: number | null;
+  unresolvedAlerts: number;
+}
+
+export interface AdminOverviewPointDto {
+  bucketStart: string;
+  runs: number;
+  failedRuns: number;
+  inputTokens: number;
+  outputTokens: number;
+  credits: number;
+  avgDurationMs: number | null;
+}
+
+export interface AdminOverviewModelCostDto {
+  model: string;
+  credits: number;
+}
+
+export interface AdminServiceHealthDto {
+  name: string;
+  up: boolean;
+  checkedAt: string;
+}
+
+export interface AdminOverviewDto {
+  range: AdminOverviewRange;
+  current: AdminOverviewKpiDto;
+  previous: AdminOverviewKpiDto;
+  series: AdminOverviewPointDto[];
+  modelCosts: AdminOverviewModelCostDto[];
+  serviceHealth: AdminServiceHealthDto[];
+  generatedAt: string;
+}
+
+export type AdminMetricGranularity = 'hour' | 'day';
+export type AdminMetricDimensionType = 'global' | 'model' | 'tenant' | 'tool';
+
+export interface AdminMetricPointDto {
+  bucketStart: string;
+  value: number;
+  count: number;
+}
+
+export interface AdminMetricSeriesDto {
+  metric: string;
+  dimensionType: AdminMetricDimensionType;
+  dimensionId: string;
+  points: AdminMetricPointDto[];
+}
+
+export interface AdminMetricTimeseriesDto {
+  from: string;
+  to: string;
+  granularity: AdminMetricGranularity;
+  series: AdminMetricSeriesDto[];
+}
+
+export interface AdminAlertRuleDto {
+  id: string;
+  key: string;
+  name: string;
+  metric: string;
+  comparator: 'gt' | 'lt';
+  threshold: number;
+  windowMinutes: number;
+  cooldownMinutes: number;
+  severity: 'warning' | 'critical';
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AdminAlertRulePatch {
+  threshold?: number;
+  windowMinutes?: number;
+  cooldownMinutes?: number;
+  severity?: 'warning' | 'critical';
+  enabled?: boolean;
+}
+
+export interface AdminAlertEventDto {
+  id: string;
+  ruleId: string;
+  ruleName: string;
+  status: 'firing' | 'resolved';
+  value: number;
+  message: string;
+  startedAt: string;
+  resolvedAt: string | null;
+  notifiedAt: string | null;
+  deliveryStatus: 'sent' | 'failed' | 'skipped' | null;
+  deliveryError: string | null;
+}
+
+export interface AdminAlertTestResultDto {
+  deliveryStatus: 'sent' | 'failed' | 'skipped';
+  deliveryError: string | null;
+  notifiedAt: string | null;
+}
+
+export type AdminTimelineNodeKind =
+  | 'accepted'
+  | 'think'
+  | 'tool'
+  | 'confirm'
+  | 'artifact'
+  | 'notice'
+  | 'finished';
+
+export type AdminTimelineNodeStatus =
+  | 'ok'
+  | 'failed'
+  | 'denied'
+  | 'blocked'
+  | 'running'
+  | 'done';
+
+export interface AdminTimelineNodeDto {
+  /** step 事件用 step id；合成节点用 `${runId}:${kind}`，保证前端 key 稳定。 */
+  id: string;
+  kind: AdminTimelineNodeKind;
+  label: string;
+  status: AdminTimelineNodeStatus;
+  startedAt: string;
+  endedAt: string | null;
+  durationMs: number | null;
+}
+
+export interface AdminRunTimelineDto {
+  runId: string;
+  status: string;
+  traceId: string | null;
+  startedAt: string;
+  endedAt: string | null;
+  durationMs: number | null;
+  nodes: AdminTimelineNodeDto[];
+  /** 节点超过 500 时只返回前 500，并置为 true。 */
+  truncated: boolean;
+  usage: {
+    inputTokens: number;
+    outputTokens: number;
+    credits: number | null;
+    models: unknown;
+  } | null;
 }

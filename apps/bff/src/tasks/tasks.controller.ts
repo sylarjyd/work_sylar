@@ -3,7 +3,7 @@ import { Body, Controller, Inject, Logger, Param, Post, Res, UseGuards } from '@
 import type { FastifyReply } from 'fastify';
 import type { AgentEvent, ArtifactRef, RunBilling, UsageEvent } from '@ai-office/shared';
 import { createSseParser, type CreateTaskRequest } from '@ai-office/shared';
-import { endSpan, injectTraceparent, startSpan } from '@ai-office/telemetry';
+import { currentTrace, endSpan, injectTraceparent, startSpan } from '@ai-office/telemetry';
 import { TasksService } from './tasks.service';
 import { ArtifactService } from '../artifacts/artifacts.service';
 import { BillingService } from '../billing/billing.service';
@@ -128,7 +128,15 @@ export class TasksController {
 
     let prepared: Awaited<ReturnType<TasksService['prepare']>>;
     try {
-      prepared = await this.tasks.prepare(sessionId, user.tenantId, user.sub, goal, runId);
+      prepared = await this.tasks.prepare(
+        sessionId,
+        user.tenantId,
+        user.sub,
+        goal,
+        runId,
+        // onRequest 已建立请求 span；这里把同一条 trace 固化到 run，便于事后按 trace 反查。
+        currentTrace()?.traceId ?? null,
+      );
     } catch (err) {
       // 建 task/run 失败：归还预占（best-effort），再交给 Nest 处理原异常。
       await this.billing.releaseHold(runId).catch(() => undefined);

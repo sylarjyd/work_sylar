@@ -22,6 +22,7 @@ interface RunSeed {
   status: string;
   startedAt: Date;
   endedAt: Date | null;
+  traceId?: string | null;
   steps: StepSeed[];
 }
 
@@ -68,6 +69,7 @@ const defaultRun: RunSeed = {
   status: 'done',
   startedAt: new Date('2026-10-01T00:00:00Z'),
   endedAt: new Date('2026-10-01T00:01:00Z'),
+  traceId: '0af7651916cd43dd8448eb211c80319c',
   steps: [
     { id: 'st1', seq: 0, type: 'think', payload: { text: 'hi' }, ts: new Date('2026-10-01T00:00:01Z') },
   ],
@@ -233,5 +235,14 @@ describe('AdminTasksService', () => {
     const { svc } = makeService();
     await expect(svc.detail('missing', actor)).rejects.toBeInstanceOf(NotFoundException);
     await expect(svc.runDetail('missing', {}, actor)).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('runDetail 回传 traceId，历史数据为 null', async () => {
+    const { svc } = makeService();
+    const detail = await svc.runDetail('r1', {}, actor);
+    expect(detail.traceId).toBe('0af7651916cd43dd8448eb211c80319c');
+
+    const legacy = makeService({ runs: [{ ...defaultRun, traceId: null }] });
+    await expect(legacy.svc.runDetail('r1', {}, actor)).resolves.toMatchObject({ traceId: null });
   });
 });

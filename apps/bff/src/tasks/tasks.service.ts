@@ -37,6 +37,7 @@ export class TasksService {
     userId: string,
     goal: string,
     runId: string,
+    traceId?: string | null,
   ): Promise<{ taskId: string; runId: string; tenantId: string; userId: string; messages: ChatMessage[] }> {
     await this.sessions.assertOwned(sessionId, tenantId, userId);
 
@@ -54,7 +55,7 @@ export class TasksService {
             data: { sessionId, goal, status: 'running' },
           });
           const run = await tx.run.create({
-            data: { id: runId, taskId: task.id, status: 'running' },
+            data: { id: runId, taskId: task.id, status: 'running', traceId: traceId ?? null },
           });
           // 用当前最大 seq + 1 而不是长度：历史消息删除后 seq 会有空洞。
           const nextSeq = prior.length > 0 ? prior[prior.length - 1].seq + 1 : 0;

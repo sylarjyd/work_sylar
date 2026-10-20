@@ -80,11 +80,15 @@ model Run {
   status    String    @default("running")
   startedAt DateTime  @default(now())
   endedAt   DateTime?
+  // 发起本次运行的前端/BFF traceId；历史数据允许为空。
+  traceId   String?
   task      Task      @relation(fields: [taskId], references: [id])
   steps     Step[]
   artifacts Artifact[]
 
   @@index([taskId])
+  @@index([traceId])
+  @@index([startedAt])
 }
 
 model Step {
@@ -97,6 +101,7 @@ model Step {
   run     Run      @relation(fields: [runId], references: [id])
 
   @@unique([runId, seq])
+  @@index([ts])
 }
 
 model Artifact {
@@ -260,6 +265,7 @@ model UsageRecord {
 
   @@index([tenantId, createdAt])
   @@index([status, createdAt])
+  @@index([createdAt])
 }
 
 model ModelPrice {
@@ -290,4 +296,57 @@ model AdminAuditLog {
   @@index([createdAt])
   @@index([targetType, targetId])
   @@index([actorId, createdAt])
+}
+
+// 小时级指标快照：bucketStart 为整点 UTC；value 按 metric 语义为求和/均值/分位值。
+model MetricBucket {
+  id            String   @id @default(uuid())
+  bucketStart   DateTime
+  metric        String
+  dimensionType String   @default("global") // global | model | tenant | tool
+  dimensionId   String   @default("")
+  value         Float
+  count         Int      @default(0)
+  updatedAt     DateTime @updatedAt
+
+  @@unique([bucketStart, metric, dimensionType, dimensionId])
+  @@index([metric, bucketStart])
+  @@index([dimensionType, dimensionId, bucketStart])
+}
+
+model AlertRule {
+  id              String   @id @default(uuid())
+  key             String   @unique
+  name            String
+  metric          String
+  comparator      String   // gt | lt
+  threshold       Float
+  windowMinutes   Int
+  cooldownMinutes Int
+  severity        String   // warning | critical
+  enabled         Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model AlertEvent {
+  id             String    @id @default(uuid())
+  ruleId         String
+  ruleName       String
+  status         String    // firing | resolved
+  value          Float
+  message        String
+  startedAt      DateTime
+  resolvedAt     DateTime?
+  notifiedAt     DateTime?
+  deliveryStatus String?   // sent | failed | skipped
+  deliveryError  String?
+  // firing 时为 ruleId，resolved 置 null：借 PostgreSQL 唯一索引允许多 NULL，
+  // 从数据库层保证每条规则最多一个未恢复事件，多实例并发也不会重复建。
+  openKey        String?   @unique
+  createdAt      DateTime  @default(now())
+
+  @@index([ruleId, startedAt])
+  @@index([status, startedAt])
+  @@index([startedAt])
 }

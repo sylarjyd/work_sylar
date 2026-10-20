@@ -171,4 +171,12 @@ describe('TasksService', () => {
     expect(ctx.db.taskUpdates).toHaveLength(1);
     expect(ctx.db.taskUpdates[0].where).toEqual({ id: 'task1' });
   });
+
+  it('prepare 持久化 traceId，未提供时写 null', async () => {
+    await svc.prepare('s1', 't1', 'u1', '目标', 'run1', 'trace-1');
+    expect(ctx.db.runs[0]).toMatchObject({ id: 'run1', traceId: 'trace-1' });
+
+    await svc.prepare('s1', 't1', 'u1', '目标', 'run2');
+    expect(ctx.db.runs[1].traceId).toBeNull();
+  });
 });

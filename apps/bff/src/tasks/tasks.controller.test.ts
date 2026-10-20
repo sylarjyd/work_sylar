@@ -18,8 +18,10 @@ import { BillingService } from '../billing/billing.service';
 import { SettingsService } from '../settings/settings.service';
 import { InsufficientCreditsError, PlanExpiredError, RateLimitedError } from '../billing/billing.errors';
 import { initTelemetry, shutdownTelemetry } from '@ai-office/telemetry';
+import pino from 'pino';
 import { BFF_METRICS } from '../observability/observability.metrics';
 import { createBffMetrics } from '../observability/observability.metrics';
+import { registerRequestTelemetry } from '../observability/request-telemetry';
 
 let upstream: Server;
 let app: NestFastifyApplication;
@@ -42,10 +44,11 @@ let getRunConfigError: unknown = null;
 const stored: {
   steps: unknown[];
   messages: unknown[];
+  runCreates: unknown[];
   runUpdates: unknown[];
   taskUpdates: unknown[];
   artifacts: unknown[];
-} = { steps: [], messages: [], runUpdates: [], taskUpdates: [], artifacts: [] };
+} = { steps: [], messages: [], runCreates: [], runUpdates: [], taskUpdates: [], artifacts: [] };
 
 const session = { id: 's1', tenantId: 't1', userId: 'u1', title: 'x', createdAt: new Date() };
 
@@ -122,7 +125,10 @@ const fakePrisma = {
     },
   },
   run: {
-    create: async ({ data }: { data: unknown }) => ({ id: (data as { id?: string }).id ?? 'run1', ...(data as object) }),
+    create: async ({ data }: { data: unknown }) => {
+      stored.runCreates.push(data);
+      return { id: (data as { id?: string }).id ?? 'run1', ...(data as object) };
+    },
     update: async (args: unknown) => {
       if (failRunUpdate) throw new Error('injected run.update failure');
       stored.runUpdates.push(args);
@@ -232,6 +238,12 @@ beforeAll(async () => {
   // 记录逃逸异常（行为与内置 BaseExceptionFilter 一致，仅多一次登记）。
   app.useGlobalFilters(new RecordingExceptionFilter(app.getHttpAdapter()));
   await app.init();
+  // 与 main.ts 一致：先建请求 span，控制器里的 currentTrace() 才有值可写入 run.traceId。
+  registerRequestTelemetry(
+    app.getHttpAdapter().getInstance(),
+    app.get(BFF_METRICS),
+    pino({ level: 'silent' }),
+  );
   await app.getHttpAdapter().getInstance().ready();
   await app.listen(0, '127.0.0.1');
   baseUrl = await app.getUrl();
@@ -242,6 +254,7 @@ beforeEach(() => {
   // 断言 toHaveLength(2) 会随执行顺序变成假阳性。
   stored.steps.length = 0;
   stored.messages.length = 0;
+  stored.runCreates.length = 0;
   stored.runUpdates.length = 0;
   stored.taskUpdates.length = 0;
   stored.artifacts.length = 0;
@@ -585,5 +598,21 @@ describe('TasksController', () => {
     expect(res.statusCode).toBe(200);
     // 无上游父 span 时应新建 root span：version=00、32 位 traceId、16 位 spanId、采样位=01。
     expect(lastTraceparent).toMatch(/^00-[0-9a-f]{32}-[0-9a-f]{16}-01$/);
+  });
+
+  it('run 落库当前请求的 traceId', async () => {
+    const token = signToken({ sub: 'u1', tenantId: 't1' });
+    const traceId = '0af7651916cd43dd8448eb211c80319c';
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/sessions/s1/tasks',
+      headers: {
+        authorization: `Bearer ${token}`,
+        traceparent: `00-${traceId}-b7ad6b7169203331-01`,
+      },
+      payload: { goal: 'g' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(stored.runCreates[0]).toMatchObject({ traceId });
   });
 });

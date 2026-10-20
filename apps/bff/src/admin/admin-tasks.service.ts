@@ -148,6 +148,7 @@ export class AdminTasksService {
     return {
       id: row.id,
       taskId: row.taskId,
+      traceId: row.traceId,
       status: row.status,
       startedAt: row.startedAt.toISOString(),
       endedAt: row.endedAt?.toISOString() ?? null,
