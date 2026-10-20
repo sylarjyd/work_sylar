@@ -256,4 +256,45 @@ describe('参数配置接口', () => {
     expect(res.statusCode).toBe(404);
     expect(JSON.parse(res.payload)).toMatchObject({ message: 'setting_not_found' });
   });
+
+  it('布尔与 secret 参数按类型返回，secret 不泄露明文', async () => {
+    const enabled = await settingsApp.inject({
+      method: 'PUT',
+      url: '/api/admin/settings/alertsEnabled',
+      headers: auth('admin'),
+      payload: { value: false },
+    });
+    expect(enabled.statusCode).toBe(200);
+    expect(JSON.parse(enabled.payload)).toMatchObject({
+      key: 'alertsEnabled',
+      type: 'boolean',
+      value: false,
+      source: 'db',
+    });
+
+    const secret = await settingsApp.inject({
+      method: 'PUT',
+      url: '/api/admin/settings/alertWebhookSecret',
+      headers: auth('admin'),
+      payload: { value: 'secret-token-9876' },
+    });
+    expect(secret.statusCode).toBe(200);
+    expect(JSON.parse(secret.payload)).toMatchObject({
+      type: 'secret',
+      configured: true,
+      maskedValue: '****9876',
+    });
+    expect(secret.payload).not.toContain('secret-token-9876');
+  });
+
+  it('类型不匹配返回 400 invalid_value', async () => {
+    const res = await settingsApp.inject({
+      method: 'PUT',
+      url: '/api/admin/settings/alertsEnabled',
+      headers: auth('admin'),
+      payload: { value: 'yes' },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.payload)).toMatchObject({ message: 'invalid_value' });
+  });
 });

@@ -388,15 +388,49 @@ export interface AdminModelsDto {
 
 export type SettingSource = 'db' | 'env' | 'default';
 
-export interface AdminSettingDto {
+export type SettingType = 'number' | 'string' | 'boolean' | 'secret';
+
+interface AdminSettingBaseDto {
   key: string;
-  value: number;
   source: SettingSource;
   updatedAt: string | null;
   updatedBy: string | null;
+}
+
+export interface AdminNumberSettingDto extends AdminSettingBaseDto {
+  type: 'number';
+  value: number;
   min: number;
   max: number;
 }
+
+export interface AdminStringSettingDto extends AdminSettingBaseDto {
+  type: 'string';
+  value: string;
+  maxLength: number;
+}
+
+export interface AdminBooleanSettingDto extends AdminSettingBaseDto {
+  type: 'boolean';
+  value: boolean;
+}
+
+export interface AdminSecretSettingDto extends AdminSettingBaseDto {
+  type: 'secret';
+  /** 永不回传明文：已配置时为脱敏串，未配置为 null。 */
+  maskedValue: string | null;
+  configured: boolean;
+  maxLength: number;
+}
+
+export type AdminSettingDto =
+  | AdminNumberSettingDto
+  | AdminStringSettingDto
+  | AdminBooleanSettingDto
+  | AdminSecretSettingDto;
+
+/** PUT 请求体 value：secret 传 null 表示显式清空。 */
+export type AdminSettingValue = number | string | boolean | null;
 
 export interface AdminAuditItemDto {
   id: string;

@@ -138,4 +138,93 @@ describe('SettingsService', () => {
     });
     await expect(svc.getKbConfig()).resolves.toEqual({ chunkSize: 800, chunkOverlap: 150 });
   });
+
+  it('按类型解析布尔、字符串与 secret，且不泄露明文', async () => {
+    const { svc } = makeService();
+    process.env.ALERTS_ENABLED = 'false';
+    process.env.ALERT_WEBHOOK_URL = 'https://hooks.example.com/alert';
+    process.env.ALERT_WEBHOOK_SECRET = 'secret-token-9876';
+    try {
+      const all = await svc.getAll();
+      const enabled = all.find((s) => s.key === 'alertsEnabled')!;
+      const url = all.find((s) => s.key === 'alertWebhookUrl')!;
+      const secret = all.find((s) => s.key === 'alertWebhookSecret')!;
+      expect(enabled).toMatchObject({ type: 'boolean', value: false, source: 'env' });
+      expect(url).toMatchObject({
+        type: 'string',
+        value: 'https://hooks.example.com/alert',
+        source: 'env',
+      });
+      expect(secret).toMatchObject({
+        type: 'secret',
+        configured: true,
+        maskedValue: '****9876',
+        source: 'env',
+      });
+      expect(JSON.stringify(secret)).not.toContain('secret-token-9876');
+    } finally {
+      delete process.env.ALERTS_ENABLED;
+      delete process.env.ALERT_WEBHOOK_URL;
+      delete process.env.ALERT_WEBHOOK_SECRET;
+    }
+  });
+
+  it('secret 更新与审计都只出现脱敏值', async () => {
+    const { svc, audits } = makeService();
+    const saved = await svc.update('alertWebhookSecret', 'secret-token-9876', actor);
+    expect(saved).toMatchObject({
+      type: 'secret',
+      configured: true,
+      maskedValue: '****9876',
+      source: 'db',
+    });
+    expect(JSON.stringify(saved)).not.toContain('secret-token-9876');
+    expect(JSON.stringify(audits)).not.toContain('secret-token-9876');
+
+    const cleared = await svc.update('alertWebhookSecret', null, actor);
+    expect(cleared).toMatchObject({
+      type: 'secret',
+      configured: false,
+      maskedValue: null,
+      source: 'db',
+    });
+  });
+
+  it('显式清空 secret 不会被 env 复活', async () => {
+    const { svc } = makeService();
+    process.env.ALERT_WEBHOOK_SECRET = 'env-secret-1234';
+    try {
+      await svc.update('alertWebhookSecret', null, actor);
+      const item = (await svc.getAll()).find((s) => s.key === 'alertWebhookSecret')!;
+      expect(item).toMatchObject({ configured: false, source: 'db' });
+      expect(JSON.stringify(item)).not.toContain('env-secret-1234');
+    } finally {
+      delete process.env.ALERT_WEBHOOK_SECRET;
+    }
+  });
+
+  it('alertWebhookUrl 仅接受 http/https', async () => {
+    const { svc } = makeService();
+    await expect(svc.update('alertWebhookUrl', 'ftp://example.com', actor)).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+    await expect(svc.update('alertWebhookUrl', 'not-a-url', actor)).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+    await expect(svc.update('alertWebhookUrl', 'https://example.com/hook', actor)).resolves.toMatchObject(
+      { value: 'https://example.com/hook' },
+    );
+  });
+
+  it('getAlertSettings 返回生效配置', async () => {
+    const { svc } = makeService();
+    await svc.update('alertsEnabled', false, actor);
+    await svc.update('alertWebhookUrl', 'https://example.com/hook', actor);
+    await svc.update('alertWebhookSecret', 'secret-token-9876', actor);
+    await expect(svc.getAlertSettings()).resolves.toEqual({
+      enabled: false,
+      webhookUrl: 'https://example.com/hook',
+      webhookSecret: 'secret-token-9876',
+    });
+  });
 });

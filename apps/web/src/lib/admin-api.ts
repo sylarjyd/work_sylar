@@ -11,6 +11,7 @@ import type {
   AdminSessionDetailDto,
   AdminSessionItemDto,
   AdminSettingDto,
+  AdminSettingValue,
   AdminSubscribeRequest,
   AdminTaskDetailDto,
   AdminTaskItemDto,
@@ -229,7 +230,7 @@ export function listAdminSettings(): Promise<AdminSettingDto[]> {
   return request('/api/admin/settings');
 }
 
-export function updateAdminSetting(key: string, value: number): Promise<AdminSettingDto> {
+export function updateAdminSetting(key: string, value: AdminSettingValue): Promise<AdminSettingDto> {
   return request(`/api/admin/settings/${encodeURIComponent(key)}`, {
     method: 'PUT',
     body: JSON.stringify({ value }),
