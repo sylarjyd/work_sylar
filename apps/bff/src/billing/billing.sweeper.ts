@@ -1,5 +1,6 @@
-import { Injectable, Logger, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
 import { BillingService } from './billing.service';
+import { BFF_METRICS, type BffMetrics } from '../observability/observability.metrics';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 /** 补偿扫描默认间隔；可由 BILLING_SWEEP_MS 覆盖。 */
@@ -16,7 +17,10 @@ export class BillingSweeper implements OnModuleInit, OnModuleDestroy {
   /** setInterval 在单轮耗时超过间隔时会并发进入下一轮，用运行时标志防止重入。 */
   private running = false;
 
-  constructor(private readonly billing: BillingService) {}
+  constructor(
+    private readonly billing: BillingService,
+    @Optional() @Inject(BFF_METRICS) private readonly metrics?: BffMetrics,
+  ) {}
 
   onModuleInit(): void {
     const raw = Number(process.env.BILLING_SWEEP_MS ?? DEFAULT_SWEEP_INTERVAL_MS);
@@ -49,9 +53,11 @@ export class BillingSweeper implements OnModuleInit, OnModuleDestroy {
         this.billing
           .settleStalePending(new Date(now.getTime() - STALE_PENDING_MS))
           .catch((err) => {
+            this.metrics?.billingSettleFailures.inc();
             this.logger.error(`[billing] 补偿结算扫描失败: ${(err as Error).message}`);
           }),
         this.billing.sweepOrphanHolds(now).catch((err) => {
+          this.metrics?.billingSettleFailures.inc();
           this.logger.error(`[billing] 孤儿预占扫描失败: ${(err as Error).message}`);
         }),
       ]);

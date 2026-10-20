@@ -4,6 +4,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
   type OnModuleDestroy,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
@@ -22,6 +23,7 @@ import { computeCredits } from './credits';
 import { aggregateUsage, parseModels } from './usage';
 import { InsufficientCreditsError, PlanExpiredError, RateLimitedError } from './billing.errors';
 import { RATE_LIMITER, type RateLimiter } from './billing.rate-limit';
+import { BFF_METRICS, type BffMetrics } from '../observability/observability.metrics';
 
 type Db = Prisma.TransactionClient;
 
@@ -69,6 +71,7 @@ export class BillingService implements OnModuleDestroy {
   constructor(
     private readonly prisma: PrismaService,
     @Inject(RATE_LIMITER) private readonly limiter: RateLimiter,
+    @Optional() @Inject(BFF_METRICS) private readonly metrics?: BffMetrics,
   ) {}
 
   /** 应用关闭时释放限流器的 Redis 连接，避免进程退出前残留连接。 */
@@ -199,7 +202,10 @@ export class BillingService implements OnModuleDestroy {
       throw new PlanExpiredError();
     }
     const rl = await this.limiter.hit(`run:${tenantId}`, plan.rpm);
-    if (!rl.allowed) throw new RateLimitedError(rl.retryAfter);
+    if (!rl.allowed) {
+      this.metrics?.rateLimitHits.inc({ scope: 'tenant' });
+      throw new RateLimitedError(rl.retryAfter);
+    }
 
     const now = new Date();
     return this.prisma.$transaction(async (tx) => {
@@ -557,6 +563,7 @@ export class BillingService implements OnModuleDestroy {
           await this.settle(row.runId);
         } catch (err) {
           failed.add(row.runId);
+          this.metrics?.billingSettleFailures.inc();
           this.logger.error(`[billing] 补偿结算失败 run=${row.runId}: ${(err as Error).message}`);
         }
       }
@@ -597,6 +604,7 @@ export class BillingService implements OnModuleDestroy {
         try {
           await this.settle(hold.runId);
         } catch (err) {
+          this.metrics?.billingSettleFailures.inc();
           this.logger.error(`[billing] 孤儿预占结算失败 run=${hold.runId}: ${(err as Error).message}`);
         }
         continue;
@@ -625,6 +633,7 @@ export class BillingService implements OnModuleDestroy {
         await this.releaseHold(hold.runId);
       } catch (err) {
         // 单个 hold 释放失败不应中断本轮其余 hold 的清理。
+        this.metrics?.billingSettleFailures.inc();
         this.logger.error(`[billing] 释放孤儿预占失败 run=${hold.runId}: ${(err as Error).message}`);
       }
     }

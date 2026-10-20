@@ -17,11 +17,16 @@ import { signToken } from '../auth/jwt';
 import { BillingService } from '../billing/billing.service';
 import { SettingsService } from '../settings/settings.service';
 import { InsufficientCreditsError, PlanExpiredError, RateLimitedError } from '../billing/billing.errors';
+import { initTelemetry, shutdownTelemetry } from '@ai-office/telemetry';
+import { BFF_METRICS } from '../observability/observability.metrics';
+import { createBffMetrics } from '../observability/observability.metrics';
 
 let upstream: Server;
 let app: NestFastifyApplication;
 let baseUrl: string;
 let runtimeUrl: string;
+// 上游收到的最近一次 traceparent，供断言 BFF 透传 W3C 追踪头。
+let lastTraceparent = '';
 // 上游收到的最近一次 /runs 请求体原文，供断言 BFF 透传的字段（如 userId）。
 let lastRunsBody = '';
 // 上游行为开关：正常流 / 中途发 error 事件 / 不发 usage / 慢速流（用于断连排空）/ 非 2xx。
@@ -143,6 +148,7 @@ const fakePrisma = {
 } as unknown as PrismaService;
 
 beforeAll(async () => {
+  initTelemetry({ serviceName: 'bff-task-test', serviceVersion: '1' });
   process.env.JWT_SECRET = 'test-secret';
 
   upstream = createServer((req, res) => {
@@ -151,6 +157,7 @@ beforeAll(async () => {
     req.on('data', (chunk) => (reqBody += chunk));
     req.on('end', () => {
       lastRunsBody = reqBody;
+      lastTraceparent = String(req.headers.traceparent ?? '');
       // runId 由 BFF 预生成：上游事件与产物 storageKey 必须使用请求体里的真实值，
       // 否则 ArtifactService 的前缀校验会拒绝落库。
       const runId = (JSON.parse(reqBody) as { runId?: string }).runId ?? 'run1';
@@ -217,6 +224,7 @@ beforeAll(async () => {
         },
       },
       { provide: PrismaService, useValue: fakePrisma },
+      { provide: BFF_METRICS, useValue: createBffMetrics({ defaultMetrics: false }) },
       { provide: ARTIFACT_STORAGE, useValue: { getObjectStream: async () => { throw new Error('unused'); } } },
     ],
   }).compile();
@@ -247,12 +255,14 @@ beforeEach(() => {
   beginRunError = null;
   escapedErrors.length = 0;
   lastRunsBody = '';
+  lastTraceparent = '';
   process.env.AGENT_RUNTIME_URL = runtimeUrl;
 });
 
 afterAll(async () => {
   await app.close();
   await new Promise<void>((r) => upstream.close(() => r()));
+  await shutdownTelemetry();
 });
 
 describe('TasksController', () => {
@@ -562,5 +572,18 @@ describe('TasksController', () => {
     ac.abort();
     // 排空是异步的：用轮询等待结算，避免固定 sleep 在慢机器上偶发假失败。
     await vi.waitFor(() => expect(billingCalls.some((c) => c[0] === 'settle')).toBe(true), { timeout: 2000 });
+  });
+
+  it('向上游注入合法 W3C traceparent', async () => {
+    const token = signToken({ sub: 'u1', tenantId: 't1' });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/sessions/s1/tasks',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { goal: 'g' },
+    });
+    expect(res.statusCode).toBe(200);
+    // 无上游父 span 时应新建 root span：version=00、32 位 traceId、16 位 spanId、采样位=01。
+    expect(lastTraceparent).toMatch(/^00-[0-9a-f]{32}-[0-9a-f]{16}-01$/);
   });
 });

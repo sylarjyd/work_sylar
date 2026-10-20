@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import { Body, Controller, Logger, Param, Post, Res, UseGuards } from '@nestjs/common';
+import { Body, Controller, Inject, Logger, Param, Post, Res, UseGuards } from '@nestjs/common';
 import type { FastifyReply } from 'fastify';
 import type { AgentEvent, ArtifactRef, RunBilling, UsageEvent } from '@ai-office/shared';
 import { createSseParser, type CreateTaskRequest } from '@ai-office/shared';
+import { endSpan, injectTraceparent, startSpan } from '@ai-office/telemetry';
 import { TasksService } from './tasks.service';
 import { ArtifactService } from '../artifacts/artifacts.service';
 import { BillingService } from '../billing/billing.service';
@@ -13,6 +14,8 @@ import { JwtGuard } from '../auth/jwt.guard';
 import { CurrentUser } from '../auth/current-user';
 import type { JwtPayload } from '../auth/jwt';
 import { writeHead } from '../stream/sse-proxy';
+import { BFF_METRICS, type BffMetrics } from '../observability/observability.metrics';
+import { RunTelemetry } from '../observability/run-telemetry';
 
 /** 上游建连超时：只约束 fetch 拿到响应头，不中断已建立的长流。 */
 const UPSTREAM_CONNECT_TIMEOUT_MS = 10_000;
@@ -71,6 +74,7 @@ export class TasksController {
     private readonly artifacts: ArtifactService,
     private readonly billing: BillingService,
     private readonly settings: SettingsService,
+    @Inject(BFF_METRICS) private readonly metrics: BffMetrics,
   ) {}
 
   @Post(':id/tasks')
@@ -132,99 +136,115 @@ export class TasksController {
     }
     const { taskId, tenantId, userId, messages } = prepared;
 
+    // 运行指标从建好 task/run 之后开始统计；结算失败计数也走同一 BFF 指标注册表。
+    const runTelemetry = new RunTelemetry(this.metrics);
+    const runStarted = Date.now();
+    let status: 'done' | 'failed' = 'done';
+    let latestUsage: UsageEvent | null = null;
+
     // 接管回复：本方法直接写 reply.raw，必须 hijack，否则 Nest/Fastify 会再自动发一次响应。
     reply.hijack();
 
-    // 客户端断开后停止写回复，但**继续排空上游**：否则 usage 与产物会漏落库。
-    // socket error 无监听会崩进程，所以 error 也挂同一个处理器。
-    let clientGone = false;
-    const onClientGone = (): void => {
-      clientGone = true;
-    };
-    reply.raw.on('error', onClientGone);
-    reply.raw.on('close', onClientGone);
-
-    let upstream: Response;
-    const connectController = new AbortController();
-    const connectTimer = setTimeout(() => connectController.abort(), UPSTREAM_CONNECT_TIMEOUT_MS);
-    connectTimer.unref?.();
     try {
-      upstream = await fetch(`${runtimeUrl}/runs`, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          // 配了共享密钥才带；不配时与未开启鉴权的 runtime 保持兼容。
-          ...(runtimeToken ? { 'x-agent-runtime-token': runtimeToken } : {}),
-        },
-        body: JSON.stringify({
-          runId,
-          sessionId,
-          tenantId,
-          userId,
-          goal,
-          messages,
-          billing,
-          config,
-        }),
-        signal: connectController.signal,
-      });
-    } catch {
-      // 传输层失败（含建连超时）：上游不可达，归还预占并回 502 而不是未捕获的 500。
-      await this.billing.releaseHold(runId).catch(() => undefined);
-      await this.safeFinish(runId, taskId, 'failed', '', sessionId);
-      writeHead(reply, 502, { 'content-type': 'application/json' });
-      reply.raw.end(JSON.stringify({ error: 'upstream_unreachable' }));
-      return;
-    } finally {
-      // 建连已有结果就撤销定时器：不能中断随后建立的长流。
-      clearTimeout(connectTimer);
-    }
+      // 客户端断开后停止写回复，但**继续排空上游**：否则 usage 与产物会漏落库。
+      // socket error 无监听会崩进程，所以 error 也挂同一个处理器。
+      let clientGone = false;
+      const onClientGone = (): void => {
+        clientGone = true;
+      };
+      reply.raw.on('error', onClientGone);
+      reply.raw.on('close', onClientGone);
 
-    if (!upstream.ok) {
-      // 上游非 2xx：归还预占，原样转发真实状态码与响应体，不伪装成 200 text/event-stream。
-      await this.billing.releaseHold(runId).catch(() => undefined);
-      await this.safeFinish(runId, taskId, 'failed', '', sessionId);
-      const contentType = upstream.headers.get('content-type') ?? 'application/json';
-      let body: string;
+      let upstream: Response;
+      const connectController = new AbortController();
+      const connectTimer = setTimeout(() => connectController.abort(), UPSTREAM_CONNECT_TIMEOUT_MS);
+      connectTimer.unref?.();
+      // 上游调用单独成 span，并把它的 traceparent 注入请求头，runtime 侧会作为子 span 续接。
+      const runtimeSpan = startSpan('runtime.run', { 'run.id': runId });
+      const upstreamHeaders: Record<string, string> = {
+        'content-type': 'application/json',
+        // 配了共享密钥才带；不配时与未开启鉴权的 runtime 保持兼容。
+        ...(runtimeToken ? { 'x-agent-runtime-token': runtimeToken } : {}),
+      };
+      injectTraceparent(upstreamHeaders, runtimeSpan);
       try {
-        body = await readBodyLimited(upstream);
-      } catch {
-        body = JSON.stringify({ error: 'upstream_error' });
-      }
-      if (!body) body = JSON.stringify({ error: 'upstream_error' });
-      try {
-        writeHead(reply, upstream.status, { 'content-type': contentType });
-        reply.raw.end(body);
+        upstream = await fetch(`${runtimeUrl}/runs`, {
+          method: 'POST',
+          headers: upstreamHeaders,
+          body: JSON.stringify({
+            runId,
+            sessionId,
+            tenantId,
+            userId,
+            goal,
+            messages,
+            billing,
+            config,
+          }),
+          signal: connectController.signal,
+        });
+        endSpan(runtimeSpan, upstream.ok);
       } catch (err) {
-        // 写响应失败也必须终止响应，否则已 hijack 的请求会一直挂起。
-        this.logger.error(`run ${runId} 转发上游错误响应失败: ${(err as Error).message}`);
-        try {
-          reply.raw.end();
-        } catch {
-          // 客户端已断开时 end() 可能抛错，忽略。
-        }
-      }
-      return;
-    }
-
-    if (!upstream.body) {
-      // 2xx 却没有 body：属于上游异常。不能回 200 + upstream_error，否则客户端会
-      // 误以为成功；明确回 502，并同样保证 end 容错。
-      await this.billing.releaseHold(runId).catch(() => undefined);
-      await this.safeFinish(runId, taskId, 'failed', '', sessionId);
-      try {
+        endSpan(runtimeSpan, false, err);
+        // 传输层失败（含建连超时）：上游不可达，归还预占并回 502 而不是未捕获的 500。
+        runTelemetry.forceFail();
+        await this.billing.releaseHold(runId).catch(() => undefined);
+        await this.safeFinish(runId, taskId, 'failed', '', sessionId);
         writeHead(reply, 502, { 'content-type': 'application/json' });
-        reply.raw.end(JSON.stringify({ error: 'upstream_empty_body' }));
-      } catch (err) {
-        this.logger.error(`run ${runId} 转发上游空响应体失败: ${(err as Error).message}`);
-        try {
-          reply.raw.end();
-        } catch {
-          // 客户端已断开时 end() 可能抛错，忽略。
-        }
+        reply.raw.end(JSON.stringify({ error: 'upstream_unreachable' }));
+        return;
+      } finally {
+        // 建连已有结果就撤销定时器：不能中断随后建立的长流。
+        clearTimeout(connectTimer);
       }
-      return;
-    }
+
+      if (!upstream.ok) {
+        // 上游非 2xx：归还预占，原样转发真实状态码与响应体，不伪装成 200 text/event-stream。
+        runTelemetry.forceFail();
+        await this.billing.releaseHold(runId).catch(() => undefined);
+        await this.safeFinish(runId, taskId, 'failed', '', sessionId);
+        const contentType = upstream.headers.get('content-type') ?? 'application/json';
+        let body: string;
+        try {
+          body = await readBodyLimited(upstream);
+        } catch {
+          body = JSON.stringify({ error: 'upstream_error' });
+        }
+        if (!body) body = JSON.stringify({ error: 'upstream_error' });
+        try {
+          writeHead(reply, upstream.status, { 'content-type': contentType });
+          reply.raw.end(body);
+        } catch (err) {
+          // 写响应失败也必须终止响应，否则已 hijack 的请求会一直挂起。
+          this.logger.error(`run ${runId} 转发上游错误响应失败: ${(err as Error).message}`);
+          try {
+            reply.raw.end();
+          } catch {
+            // 客户端已断开时 end() 可能抛错，忽略。
+          }
+        }
+        return;
+      }
+
+      if (!upstream.body) {
+        // 2xx 却没有 body：属于上游异常。不能回 200 + upstream_error，否则客户端会
+        // 误以为成功；明确回 502，并同样保证 end 容错。
+        runTelemetry.forceFail();
+        await this.billing.releaseHold(runId).catch(() => undefined);
+        await this.safeFinish(runId, taskId, 'failed', '', sessionId);
+        try {
+          writeHead(reply, 502, { 'content-type': 'application/json' });
+          reply.raw.end(JSON.stringify({ error: 'upstream_empty_body' }));
+        } catch (err) {
+          this.logger.error(`run ${runId} 转发上游空响应体失败: ${(err as Error).message}`);
+          try {
+            reply.raw.end();
+          } catch {
+            // 客户端已断开时 end() 可能抛错，忽略。
+          }
+        }
+        return;
+      }
 
     writeHead(reply, 200, {
       'content-type': 'text/event-stream',
@@ -236,8 +256,6 @@ export class TasksController {
     const decoder = new TextDecoder();
     const reader = upstream.body.getReader();
     const thinkTexts: string[] = [];
-    let status: 'done' | 'failed' = 'done';
-    let latestUsage: UsageEvent | null = null;
 
     try {
       for (;;) {
@@ -297,6 +315,7 @@ export class TasksController {
             await this.billing.settle(runId);
           } catch (err) {
             // settle 失败时 hold 与 pending 都还在，由补偿任务重试。
+            this.metrics.billingSettleFailures.inc();
             this.logger.error(`run ${runId} 计费结算失败（保留 pending 待补偿）: ${(err as Error).message}`);
           }
         }
@@ -313,6 +332,10 @@ export class TasksController {
       } catch {
         // 客户端已断开时 end() 可能抛错，忽略。
       }
+    }
+    } finally {
+      // 所有返回路径（含 502、非 2xx、空 body）都经这里收尾；finish 自身幂等。
+      runTelemetry.finish(status, latestUsage, billing, (Date.now() - runStarted) / 1000);
     }
   }
 

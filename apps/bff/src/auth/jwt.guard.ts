@@ -1,5 +1,6 @@
 import { CanActivate, ExecutionContext, Injectable, UnauthorizedException } from '@nestjs/common';
 import type { FastifyRequest } from 'fastify';
+import { addSpanAttributes, updateContext } from '@ai-office/telemetry';
 import { PrismaService } from '../db/prisma.service';
 import { verifyToken, type JwtPayload } from './jwt';
 
@@ -42,6 +43,10 @@ export class JwtGuard implements CanActivate {
       role: user.role,
       email: user.email,
     };
+    // 鉴权在 onRequest 之后执行：这里把用户/租户回填进 ALS，后续日志自动带上；
+    // span 属性只放稳定 ID，不放邮箱等 PII。
+    updateContext({ userId: payload.sub, tenantId: user.tenantId });
+    addSpanAttributes({ 'enduser.id': payload.sub, 'tenant.id': user.tenantId });
     return true;
   }
 }
