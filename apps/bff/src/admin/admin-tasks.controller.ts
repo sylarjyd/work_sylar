@@ -1,6 +1,12 @@
 import { Controller, Get, Param, Query, Req, UseGuards } from '@nestjs/common';
 import type { FastifyRequest } from 'fastify';
-import type { AdminRunDetailDto, AdminTaskDetailDto, AdminTaskItemDto, PageDto } from '@ai-office/shared';
+import type {
+  AdminRunDetailDto,
+  AdminRunTimelineDto,
+  AdminTaskDetailDto,
+  AdminTaskItemDto,
+  PageDto,
+} from '@ai-office/shared';
 import { JwtGuard } from '../auth/jwt.guard';
 import { AdminGuard } from '../auth/admin.guard';
 import { CurrentUser } from '../auth/current-user';
@@ -36,5 +42,14 @@ export class AdminTasksController {
     @Query() query: Record<string, unknown>,
   ): Promise<AdminRunDetailDto> {
     return this.tasks.runDetail(id, query ?? {}, actorOf(user, req));
+  }
+
+  @Get('runs/:id/timeline')
+  runTimeline(
+    @CurrentUser() user: JwtPayload,
+    @Req() req: FastifyRequest,
+    @Param('id') id: string,
+  ): Promise<AdminRunTimelineDto> {
+    return this.tasks.runTimeline(id, actorOf(user, req));
   }
 }

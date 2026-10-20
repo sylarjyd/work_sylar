@@ -245,4 +245,69 @@ describe('AdminTasksService', () => {
     const legacy = makeService({ runs: [{ ...defaultRun, traceId: null }] });
     await expect(legacy.svc.runDetail('r1', {}, actor)).resolves.toMatchObject({ traceId: null });
   });
+
+  it('runTimeline 聚合节点、回传 traceId 与用量且不泄露正文', async () => {
+    const { svc, audits } = makeService({
+      runs: [
+        {
+          ...defaultRun,
+          traceId: 'trace-1',
+          steps: [
+            {
+              id: 's1',
+              seq: 0,
+              type: 'tool_call',
+              payload: { tool: 'web.search', input: { q: '敏感入参' } },
+              ts: new Date('2026-10-01T00:00:01Z'),
+            },
+            {
+              id: 's2',
+              seq: 1,
+              type: 'tool_result',
+              payload: { tool: 'web.search', ok: true, preview: '敏感结果' },
+              ts: new Date('2026-10-01T00:00:03Z'),
+            },
+          ],
+        },
+      ],
+    });
+    const timeline = await svc.runTimeline('r1', actor);
+    expect(timeline).toMatchObject({
+      runId: 'r1',
+      traceId: 'trace-1',
+      status: 'done',
+      durationMs: 60_000,
+      truncated: false,
+      usage: { credits: 7 },
+    });
+    expect(timeline.nodes.map((node) => node.kind)).toEqual(['accepted', 'tool', 'finished']);
+    expect(JSON.stringify(timeline)).not.toContain('敏感');
+    expect(audits[0]).toMatchObject({ action: 'run.timeline_view', targetId: 'r1' });
+  });
+
+  it('runTimeline 超过 500 个 step 时标记 truncated', async () => {
+    const { svc } = makeService({
+      runs: [
+        {
+          ...defaultRun,
+          steps: Array.from({ length: 501 }, (_, index) => ({
+            id: `s${index}`,
+            seq: index,
+            type: 'think',
+            payload: {},
+            ts: new Date('2026-10-01T00:00:01Z'),
+          })),
+        },
+      ],
+    });
+    const timeline = await svc.runTimeline('r1', actor);
+    expect(timeline.truncated).toBe(true);
+    expect(timeline.nodes.length).toBeLessThanOrEqual(500);
+    expect(timeline.nodes[timeline.nodes.length - 1].kind).toBe('notice');
+  });
+
+  it('runTimeline 不存在抛 404', async () => {
+    const { svc } = makeService();
+    await expect(svc.runTimeline('missing', actor)).rejects.toBeInstanceOf(NotFoundException);
+  });
 });

@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { Prisma } from '@prisma/client';
 import type {
   AdminRunDetailDto,
+  AdminRunTimelineDto,
   AdminTaskDetailDto,
   AdminTaskItemDto,
   PageDto,
@@ -10,6 +11,7 @@ import { PrismaService } from '../db/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import type { AdminActor } from '../audit/audit.types';
 import { optionalString, parsePage } from './admin.util';
+import { buildTimelineNodes, TIMELINE_STEP_LIMIT } from './run-timeline';
 
 /** 列表/详情中的目标只做预览，避免管理端一次拉回超长 prompt。 */
 const GOAL_PREVIEW_LIMIT = 200;
@@ -170,6 +172,57 @@ export class AdminTasksService {
             outputTokens: usage.outputTokens,
             credits: usage.credits,
             status: usage.status,
+            models: usage.models,
+          }
+        : null,
+    };
+  }
+
+  async runTimeline(id: string, actor: AdminActor): Promise<AdminRunTimelineDto> {
+    const row = await this.prisma.run.findUnique({
+      where: { id },
+      include: {
+        steps: { orderBy: { seq: 'asc' }, take: TIMELINE_STEP_LIMIT },
+        _count: { select: { steps: true } },
+      },
+    });
+    if (!row) throw new NotFoundException('run_not_found');
+
+    const usage = await this.prisma.usageRecord.findUnique({ where: { runId: id } });
+    await this.audit.bestEffort(actor, {
+      action: 'run.timeline_view',
+      targetType: 'run',
+      targetId: id,
+    });
+
+    const { nodes, truncated } = buildTimelineNodes(
+      row,
+      row.steps.map((step) => ({
+        id: step.id,
+        seq: step.seq,
+        type: step.type,
+        payload: step.payload as Record<string, unknown>,
+        ts: step.ts,
+      })),
+      row._count.steps,
+    );
+
+    return {
+      runId: row.id,
+      status: row.status,
+      traceId: row.traceId,
+      startedAt: row.startedAt.toISOString(),
+      endedAt: row.endedAt?.toISOString() ?? null,
+      durationMs: row.endedAt
+        ? Math.max(0, row.endedAt.getTime() - row.startedAt.getTime())
+        : null,
+      nodes,
+      truncated,
+      usage: usage
+        ? {
+            inputTokens: usage.inputTokens,
+            outputTokens: usage.outputTokens,
+            credits: usage.credits,
             models: usage.models,
           }
         : null,

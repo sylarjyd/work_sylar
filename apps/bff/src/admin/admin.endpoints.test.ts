@@ -11,6 +11,11 @@ import { AdminPlansController } from './admin-plans.controller';
 import { AdminSessionsController } from './admin-sessions.controller';
 import { AdminTasksController } from './admin-tasks.controller';
 import { AdminModelsController } from './admin-models.controller';
+import { AdminObservabilityController } from './admin-observability.controller';
+import { AdminObservabilityService } from './admin-observability.service';
+import { AdminAlertsController } from './admin-alerts.controller';
+import { AdminAlertsService } from './admin-alerts.service';
+import { AdminTasksService } from './admin-tasks.service';
 import { AuditService } from '../audit/audit.service';
 import { SettingsService } from '../settings/settings.service';
 import { PrismaService } from '../db/prisma.service';
@@ -93,7 +98,7 @@ describe('ç®¡ç†ç«¯é‰´æƒ', () => {
 });
 
 describe('AppModule è£…é…', () => {
-  it('ç®¡ç†ç«¯ 8 ä¸ªæŽ§åˆ¶å™¨å‡å·²è£…é…', async () => {
+  it('ç®¡ç†ç«¯ 10 ä¸ªæŽ§åˆ¶å™¨å‡å·²è£…é…', async () => {
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
       .overrideProvider(PrismaService)
       .useValue(fakePrisma)
@@ -107,6 +112,10 @@ describe('AppModule è£…é…', () => {
       expect(moduleRef.get(AdminModelsController)).toBeInstanceOf(AdminModelsController);
       expect(moduleRef.get(AdminSettingsController)).toBeInstanceOf(AdminSettingsController);
       expect(moduleRef.get(AdminAuditController)).toBeInstanceOf(AdminAuditController);
+      expect(moduleRef.get(AdminObservabilityController)).toBeInstanceOf(
+        AdminObservabilityController,
+      );
+      expect(moduleRef.get(AdminAlertsController)).toBeInstanceOf(AdminAlertsController);
     } finally {
       await moduleRef.close();
     }
@@ -296,5 +305,96 @@ describe('å‚æ•°é…ç½®æŽ¥å£', () => {
     });
     expect(res.statusCode).toBe(400);
     expect(JSON.parse(res.payload)).toMatchObject({ message: 'invalid_value' });
+  });
+});
+
+describe('¸ÅÀÀ¡¢¸æ¾¯ÓëÊ±¼äÏß½Ó¿Ú¼øÈ¨', () => {
+  let adminApp: NestFastifyApplication;
+  const overviewStub = {
+    overview: async () => ({ range: '24h' }),
+    timeseries: async () => ({
+      from: '2026-10-01T00:00:00.000Z',
+      to: '2026-10-02T00:00:00.000Z',
+      granularity: 'hour',
+      series: [],
+    }),
+  };
+  const alertsStub = {
+    listRules: async () => [],
+    updateRule: async () => ({ id: 'r1' }),
+    listEvents: async () => ({ items: [], total: 0, page: 1, pageSize: 20 }),
+    sendTest: async () => ({
+      deliveryStatus: 'skipped',
+      deliveryError: 'webhook_not_configured',
+      notifiedAt: null,
+    }),
+  };
+  const tasksStub = { runTimeline: async () => ({ runId: 'r1', nodes: [] }) };
+
+  beforeAll(async () => {
+    const moduleRef = await Test.createTestingModule({
+      controllers: [AdminObservabilityController, AdminAlertsController, AdminTasksController],
+      providers: [
+        { provide: AdminObservabilityService, useValue: overviewStub },
+        { provide: AdminAlertsService, useValue: alertsStub },
+        { provide: AdminTasksService, useValue: tasksStub },
+        { provide: PrismaService, useValue: fakePrisma },
+      ],
+    }).compile();
+    adminApp = moduleRef.createNestApplication<NestFastifyApplication>(new FastifyAdapter());
+    await adminApp.init();
+    await adminApp.getHttpAdapter().getInstance().ready();
+  });
+
+  afterAll(async () => {
+    await adminApp.close();
+  });
+
+  const routes: Array<{ method: 'GET' | 'PATCH' | 'POST'; url: string; payload?: unknown }> = [
+    { method: 'GET', url: '/api/admin/overview' },
+    {
+      method: 'GET',
+      url: '/api/admin/metrics/timeseries?metrics=runs_started&from=2026-10-01T00:00:00Z&to=2026-10-02T00:00:00Z',
+    },
+    { method: 'GET', url: '/api/admin/alert-rules' },
+    { method: 'PATCH', url: '/api/admin/alert-rules/r1', payload: { enabled: true } },
+    { method: 'GET', url: '/api/admin/alert-events' },
+    { method: 'POST', url: '/api/admin/alert-rules/r1/test' },
+    { method: 'GET', url: '/api/admin/runs/r1/timeline' },
+  ];
+
+  it('ÆÕÍ¨³ÉÔ±·ÃÎÊÐÂÔö½Ó¿ÚÈ«²¿·µ»Ø 403', async () => {
+    const headers = { authorization: `Bearer ${signToken({ sub: 'u1', tenantId: 't1' })}` };
+    for (const route of routes) {
+      const res = await adminApp.inject({ ...route, headers });
+      expect(res.statusCode).toBe(403);
+    }
+  });
+
+  it('¹ÜÀíÔ±¿É·ÃÎÊ¸ÅÀÀ¡¢¸æ¾¯¹æÔòÓëÊ±¼äÏß', async () => {
+    const headers = { authorization: `Bearer ${signToken({ sub: 'admin', tenantId: 't1' })}` };
+    const overviewRes = await adminApp.inject({
+      method: 'GET',
+      url: '/api/admin/overview',
+      headers,
+    });
+    expect(overviewRes.statusCode).toBe(200);
+    expect(JSON.parse(overviewRes.payload)).toMatchObject({ range: '24h' });
+
+    const rulesRes = await adminApp.inject({
+      method: 'GET',
+      url: '/api/admin/alert-rules',
+      headers,
+    });
+    expect(rulesRes.statusCode).toBe(200);
+    expect(JSON.parse(rulesRes.payload)).toEqual([]);
+
+    const timelineRes = await adminApp.inject({
+      method: 'GET',
+      url: '/api/admin/runs/r1/timeline',
+      headers,
+    });
+    expect(timelineRes.statusCode).toBe(200);
+    expect(JSON.parse(timelineRes.payload)).toMatchObject({ runId: 'r1' });
   });
 });
