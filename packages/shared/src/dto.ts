@@ -425,3 +425,21 @@ export interface RunConfig {
   confirmTimeoutMs?: number;
   codeExecTimeoutMs?: number;
 }
+
+export interface HealthCheckDto {
+  ok: boolean;
+  latencyMs?: number;
+  /** Redis 未配置时标记为跳过，不视为失败。 */
+  skipped?: boolean;
+  error?: string;
+}
+
+export interface HealthReadyDto {
+  status: 'ready' | 'degraded';
+  version: string;
+  checks: {
+    db: HealthCheckDto;
+    redis: HealthCheckDto;
+    runtime: HealthCheckDto;
+  };
+}

@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { PrismaModule } from './db/prisma.module';
+import { ObservabilityModule } from './observability/observability.module';
 import { AuthController } from './auth/auth.controller';
 import { AuthService } from './auth/auth.service';
 import { SessionsController } from './sessions/sessions.controller';
@@ -18,7 +19,7 @@ import { SettingsModule } from './settings/settings.module';
 
 /** 应用装配根：数据库、知识库、连接器、计费、管理端模块在此汇合；参数配置模块供管理端与运行/摄取链路读取。 */
 @Module({
-  imports: [PrismaModule, BillingModule, KbModule, ConnectorModule, SettingsModule, AdminModule],
+  imports: [ObservabilityModule, PrismaModule, BillingModule, KbModule, ConnectorModule, SettingsModule, AdminModule],
   controllers: [AuthController, SessionsController, TasksController, RunsController, ArtifactController],
   providers: [
     AuthService,
