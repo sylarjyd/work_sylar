@@ -7,6 +7,7 @@ import { clearToken, getRole } from '../lib/api';
 import { adminRedirectPath } from '../lib/admin-guard';
 
 const NAV = [
+  { href: '/admin/overview', label: '运行概览' },
   { href: '/admin/users', label: '用户管理' },
   { href: '/admin/tenants', label: '会员管理' },
   { href: '/admin/plans', label: '套餐目录' },

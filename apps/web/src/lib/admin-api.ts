@@ -2,7 +2,12 @@ import type {
   AdminAuditItemDto,
   AdminCreditsRequest,
   AdminMessageDto,
+  AdminMetricDimensionType,
+  AdminMetricGranularity,
+  AdminMetricTimeseriesDto,
   AdminModelsDto,
+  AdminOverviewDto,
+  AdminOverviewRange,
   AdminModelPriceDto,
   AdminPlanDto,
   AdminPlanInput,
@@ -254,4 +259,34 @@ export function listAdminAudit(
   },
 ): Promise<PageDto<AdminAuditItemDto>> {
   return request(`/api/admin/audit${query(params)}`);
+}
+
+// ------------------------------------------------------------------ 可观测性
+export function getAdminOverview(range: AdminOverviewRange): Promise<AdminOverviewDto> {
+  return request(`/api/admin/overview${query({ range })}`);
+}
+
+export interface AdminTimeseriesQuery {
+  metrics: string;
+  from: string;
+  to: string;
+  granularity?: AdminMetricGranularity;
+  dimensionType?: AdminMetricDimensionType;
+  dimensionId?: string;
+}
+
+export function getAdminMetricTimeseries(
+  params: AdminTimeseriesQuery,
+): Promise<AdminMetricTimeseriesDto> {
+  // 显式展开字段：query 只接受简单记录，接口类型不能直接当作 Record 传入。
+  return request(
+    `/api/admin/metrics/timeseries${query({
+      metrics: params.metrics,
+      from: params.from,
+      to: params.to,
+      granularity: params.granularity,
+      dimensionType: params.dimensionType,
+      dimensionId: params.dimensionId,
+    })}`,
+  );
 }

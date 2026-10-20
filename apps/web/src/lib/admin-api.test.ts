@@ -2,6 +2,8 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   adminErrorText,
   createModelPrice,
+  getAdminMetricTimeseries,
+  getAdminOverview,
   isForbidden,
   listAdminUsers,
   resetAdminSetting,
@@ -138,5 +140,33 @@ describe('admin-api', () => {
     const err = await listAdminUsers({ page: 1 }).catch((e) => e);
     expect(err.message).toBe('admin_failed_400');
     expect(adminErrorText(err)).toBe('操作失败，请检查输入');
+  });
+
+  it('概览与序列请求带上范围、指标与维度参数', async () => {
+    stubWindow();
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({}), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await getAdminOverview('7d');
+    await getAdminMetricTimeseries({
+      metrics: 'credits',
+      from: '2026-10-01T00:00:00.000Z',
+      to: '2026-10-02T00:00:00.000Z',
+      granularity: 'day',
+      dimensionType: 'model',
+    });
+
+    const urls = fetchMock.mock.calls.map((call) => String((call as unknown as [string])[0]));
+    expect(urls[0]).toContain('/api/admin/overview?range=7d');
+    expect(urls[1]).toContain(
+      '/api/admin/metrics/timeseries?metrics=credits&from=2026-10-01T00%3A00%3A00.000Z&to=2026-10-02T00%3A00%3A00.000Z&granularity=day&dimensionType=model',
+    );
+    expect(urls[1]).not.toContain('dimensionId=');
   });
 });
