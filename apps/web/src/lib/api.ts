@@ -11,6 +11,7 @@ import type {
   SessionSummary,
   UsageAggregateDto,
 } from '@ai-office/shared';
+import { newRequestId, newTraceparent } from './trace';
 
 const BFF_URL = process.env.NEXT_PUBLIC_BFF_URL ?? 'http://localhost:4000';
 const TOKEN_KEY = 'ai_office_token';
@@ -44,6 +45,9 @@ export async function authFetch(path: string, init: RequestInit = {}): Promise<R
     headers: {
       'content-type': 'application/json',
       ...(token ? { authorization: `Bearer ${token}` } : {}),
+      // 每次调用新建 trace：BFF 会把它作为父上下文继续派生。
+      traceparent: newTraceparent(),
+      'x-request-id': newRequestId(),
       ...(init.headers ?? {}),
     },
   });
@@ -75,7 +79,11 @@ export function authErrorMessage(err: unknown): string {
 export async function register(email: string, password: string): Promise<AuthResponse> {
   const res = await fetch(`${BFF_URL}/api/auth/register`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: {
+      'content-type': 'application/json',
+      traceparent: newTraceparent(),
+      'x-request-id': newRequestId(),
+    },
     body: JSON.stringify({ email, password }),
   });
   if (!res.ok) throw new Error(`register_failed_${res.status}`);
@@ -88,7 +96,11 @@ export async function register(email: string, password: string): Promise<AuthRes
 export async function login(email: string, password: string): Promise<AuthResponse> {
   const res = await fetch(`${BFF_URL}/api/auth/login`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: {
+      'content-type': 'application/json',
+      traceparent: newTraceparent(),
+      'x-request-id': newRequestId(),
+    },
     body: JSON.stringify({ email, password }),
   });
   if (!res.ok) throw new Error(`login_failed_${res.status}`);
@@ -167,9 +179,14 @@ export async function uploadKbDoc(file: File): Promise<KbDocDto> {
   const token = getToken();
   const form = new FormData();
   form.append('file', file);
+  const headers: Record<string, string> = {
+    traceparent: newTraceparent(),
+    'x-request-id': newRequestId(),
+  };
+  if (token) headers.authorization = `Bearer ${token}`;
   const res = await fetch(`${BFF_URL}/api/kb/docs`, {
     method: 'POST',
-    headers: token ? { authorization: `Bearer ${token}` } : {},
+    headers,
     body: form,
   });
   if (res.status === 401) {

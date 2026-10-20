@@ -30,6 +30,9 @@ describe('confirmRun', () => {
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(String(url)).toContain('/api/runs/r1/confirm');
     expect(JSON.parse(init.body as string)).toEqual({ confirmId: 'c1', approved: true });
+    const headers = (init.headers ?? {}) as Record<string, string>;
+    expect(headers.traceparent).toMatch(/^00-[0-9a-f]{32}-[0-9a-f]{16}-01$/);
+    expect(headers['x-request-id']).toMatch(/^[A-Za-z0-9-]{1,64}$/);
   });
 });
 
@@ -90,6 +93,8 @@ describe('uploadKbDoc', () => {
     const headers = (init.headers ?? {}) as Record<string, string>;
     expect(headers['content-type']).toBeUndefined();
     expect(headers.authorization).toBe('Bearer tok');
+    expect(headers.traceparent).toMatch(/^00-[0-9a-f]{32}-[0-9a-f]{16}-01$/);
+    expect(headers['x-request-id']).toMatch(/^[A-Za-z0-9-]{1,64}$/);
   });
 });
 
@@ -131,5 +136,31 @@ describe('billing api', () => {
     vi.stubGlobal('fetch', fetchMock);
     await getUsage('model');
     expect(String((fetchMock.mock.calls[0] as unknown[])[0])).toContain('groupBy=model');
+  });
+});
+
+describe('login 追踪头', () => {
+  it('login 注入 traceparent 与 x-request-id', async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            token: 'tok',
+            user: { id: 'u1', email: 'a@b.c', role: 'user' },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    vi.stubGlobal('window', {
+      localStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
+    });
+
+    const { login } = await import('./api');
+    await login('a@b.c', 'pw');
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    const headers = init.headers as Record<string, string>;
+    expect(headers.traceparent).toMatch(/^00-[0-9a-f]{32}-[0-9a-f]{16}-01$/);
+    expect(headers['x-request-id']).toMatch(/^[A-Za-z0-9-]{1,64}$/);
   });
 });
