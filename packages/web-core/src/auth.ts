@@ -9,6 +9,7 @@ import { newRequestId, newTraceparent } from './trace';
 export const BFF_URL = process.env.NEXT_PUBLIC_BFF_URL ?? 'http://localhost:4000';
 const TOKEN_KEY = 'ai_office_token';
 const ROLE_KEY = 'ai_office_role';
+const EMAIL_KEY = 'ai_office_email';
 
 export function getToken(): string | null {
   return typeof window === 'undefined' ? null : window.localStorage.getItem(TOKEN_KEY);
@@ -26,9 +27,18 @@ function setRole(role: string): void {
   window.localStorage.setItem(ROLE_KEY, role);
 }
 
+export function getEmail(): string | null {
+  return typeof window === 'undefined' ? null : window.localStorage.getItem(EMAIL_KEY);
+}
+
+function setEmail(email: string): void {
+  window.localStorage.setItem(EMAIL_KEY, email);
+}
+
 export function clearToken(): void {
   window.localStorage.removeItem(TOKEN_KEY);
   window.localStorage.removeItem(ROLE_KEY);
+  window.localStorage.removeItem(EMAIL_KEY);
 }
 
 export async function authFetch(path: string, init: RequestInit = {}): Promise<Response> {
@@ -83,6 +93,7 @@ export async function register(email: string, password: string): Promise<AuthRes
   const data = (await res.json()) as AuthResponse;
   setToken(data.token);
   setRole(data.user.role);
+  setEmail(data.user.email);
   return data;
 }
 
@@ -100,5 +111,6 @@ export async function login(email: string, password: string): Promise<AuthRespon
   const data = (await res.json()) as AuthResponse;
   setToken(data.token);
   setRole(data.user.role);
+  setEmail(data.user.email);
   return data;
 }

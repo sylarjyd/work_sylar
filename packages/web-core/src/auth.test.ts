@@ -1,0 +1,42 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { clearToken, getEmail, getRole, getToken } from './auth';
+
+function createStorage(): Storage {
+  const map = new Map<string, string>();
+  return {
+    get length() {
+      return map.size;
+    },
+    clear: () => map.clear(),
+    getItem: (key: string) => map.get(key) ?? null,
+    key: (index: number) => [...map.keys()][index] ?? null,
+    removeItem: (key: string) => {
+      map.delete(key);
+    },
+    setItem: (key: string, value: string) => {
+      map.set(key, String(value));
+    },
+  };
+}
+
+beforeEach(() => {
+  vi.stubGlobal('window', { localStorage: createStorage() });
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+describe('登录态存储', () => {
+  it('clearToken 同时清除 token / role / email', () => {
+    window.localStorage.setItem('ai_office_token', 't');
+    window.localStorage.setItem('ai_office_role', 'admin');
+    window.localStorage.setItem('ai_office_email', 'demo@example.com');
+
+    clearToken();
+
+    expect(getToken()).toBeNull();
+    expect(getRole()).toBeNull();
+    expect(getEmail()).toBeNull();
+  });
+});

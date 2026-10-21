@@ -17,6 +17,7 @@ export {
   authErrorMessage,
   authFetch,
   clearToken,
+  getEmail,
   getRole,
   getToken,
   isUnauthorized,
