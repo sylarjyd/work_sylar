@@ -100,10 +100,44 @@ function Set-DotEnvValue([string]$Path, [string]$Key, [string]$Value) {
     [System.IO.File]::WriteAllLines((Resolve-Path -LiteralPath $Path).Path, $lines, $encoding)
 }
 
+# .env.docker 含数据库口令、JWT/加密密钥，必须只允许当前用户、管理员与 SYSTEM 读取。
+# Windows 默认继承父目录 ACL，bash 侧用 umask/chmod，这里显式收紧 DACL；失败则中止部署。
+function Protect-EnvFile([string]$Path) {
+    $full = (Resolve-Path -LiteralPath $Path).Path
+    $acl = New-Object System.Security.AccessControl.FileSecurity
+    $acl.SetAccessRuleProtection($true, $false)
+    $identities = @(
+        [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+        New-Object System.Security.Principal.SecurityIdentifier('S-1-5-32-544') # BUILTIN\Administrators
+        New-Object System.Security.Principal.SecurityIdentifier('S-1-5-18')       # NT AUTHORITY\SYSTEM
+    )
+    foreach ($sid in $identities) {
+        $rule = New-Object System.Security.AccessControl.FileSystemAccessRule -ArgumentList @(
+            $sid,
+            [System.Security.AccessControl.FileSystemRights]::FullControl,
+            [System.Security.AccessControl.InheritanceFlags]::None,
+            [System.Security.AccessControl.PropagationFlags]::None,
+            [System.Security.AccessControl.AccessControlType]::Allow
+        )
+        $acl.AddAccessRule($rule)
+    }
+    try {
+        [System.IO.File]::SetAccessControl($full, $acl)
+    } catch {
+        throw "无法收紧 $Path 的文件权限（需要 NTFS）：$($_.Exception.Message)"
+    }
+}
+
 function Initialize-EnvFile {
-    if (Test-Path $EnvFile) { return }
+    if (Test-Path $EnvFile) {
+        # 既有文件可能带着父目录继承来的宽权限，每次运行都收紧一次。
+        Protect-EnvFile $EnvFile
+        return
+    }
     Write-Step "生成 $EnvFile（随机密钥；模型配置优先复用根 .env）"
     Copy-Item -LiteralPath '.env.docker.example' -Destination $EnvFile
+    # 先收紧权限再写入任何密钥，避免出现短暂的可读窗口。
+    Protect-EnvFile $EnvFile
 
     $secrets = @{
         POSTGRES_PASSWORD    = (New-Hex 16)
