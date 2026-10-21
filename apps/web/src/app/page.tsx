@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import type { AgentEvent, ArtifactDto, SessionSummary } from '@ai-office/shared';
 import { AppShell } from '../components/app-shell';
@@ -44,8 +44,12 @@ function EventRow({
   ev: AgentEvent;
   onOpenArtifacts: () => void;
 }) {
-  const [copied, setCopied] = useState(false);
+  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
+  const copyTimer = useRef<number | undefined>(undefined);
   const text = renderStep(ev);
+
+  useEffect(() => () => window.clearTimeout(copyTimer.current), []);
+
   if (!text) return null;
 
   let meta = '事件';
@@ -76,14 +80,24 @@ function EventRow({
   }
 
   async function copy() {
+    let next: 'copied' | 'failed' = 'copied';
     try {
       await navigator.clipboard.writeText(text ?? '');
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1500);
     } catch {
-      // 剪贴板不可用时保持静默，不打断对话流。
+      // 内网 HTTP 或权限被拒时退化为可见的失败提示，不打断对话流。
+      next = 'failed';
     }
+    setCopyState(next);
+    window.clearTimeout(copyTimer.current);
+    copyTimer.current = window.setTimeout(() => setCopyState('idle'), 1500);
   }
+
+  const copyLabel =
+    copyState === 'copied'
+      ? `已复制${meta}内容`
+      : copyState === 'failed'
+        ? `复制${meta}内容失败`
+        : `复制${meta}内容`;
 
   return (
     <div className="wb-event">
@@ -100,12 +114,18 @@ function EventRow({
       </div>
       <button
         type="button"
-        className="wb-copy"
+        className={`wb-copy${copyState === 'failed' ? ' failed' : ''}`}
         onClick={() => void copy()}
-        aria-label={copied ? '已复制' : '复制'}
-        title={copied ? '已复制' : '复制'}
+        aria-label={copyLabel}
+        title={copyLabel}
       >
-        {copied ? <IconCheck size={14} /> : <IconCopy size={14} />}
+        {copyState === 'copied' ? (
+          <IconCheck size={14} />
+        ) : copyState === 'failed' ? (
+          <IconX size={14} />
+        ) : (
+          <IconCopy size={14} />
+        )}
       </button>
     </div>
   );
@@ -124,6 +144,10 @@ export default function Home() {
   const [runId, setRunId] = useState('');
   const [decisions, setDecisions] = useState<Record<string, boolean>>({});
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const stickToBottomRef = useRef(true);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
+  const artifactReqRef = useRef(0);
 
   useEffect(() => {
     if (!getToken()) {
@@ -148,13 +172,17 @@ export default function Home() {
   }
 
   async function refreshArtifacts(sid: string) {
+    const req = ++artifactReqRef.current;
     if (!sid) {
       setArtifacts([]);
       return;
     }
     try {
-      setArtifacts(await listArtifacts(sid));
+      const list = await listArtifacts(sid);
+      if (req !== artifactReqRef.current) return;
+      setArtifacts(list);
     } catch (err) {
+      if (req !== artifactReqRef.current) return;
       if (isUnauthorized(err)) {
         router.push('/login');
         return;
@@ -183,6 +211,9 @@ export default function Home() {
     setSubmittedGoal('');
     setDecisions({});
     setError('');
+    stickToBottomRef.current = true;
+    artifactReqRef.current += 1;
+    setArtifacts([]);
   }
 
   function handleSelect(id: string) {
@@ -205,17 +236,20 @@ export default function Home() {
   }
 
   async function run() {
+    const currentGoal = goal;
     setEvents([]);
-    setSubmittedGoal(goal);
+    setSubmittedGoal(currentGoal);
+    setGoal('');
     setRunning(true);
     setError('');
     setDecisions({});
+    composerRef.current?.focus();
     let sid = sessionId;
     try {
       // sessionId 为 state，newSession 的 setSessionId 不会同步更新本次渲染闭包里的值，
       // 故必须用 newSession 返回的 id 直接发起请求，否则会 POST 到空 id 的会话。
       if (!sid) sid = (await newSession()).id;
-      const res = await streamTask(sid, goal);
+      const res = await streamTask(sid, currentGoal);
       if (!res.ok) {
         // 错误响应通常带 JSON body 但没有 SSE 帧；不在此拦截就会静默结束、既不报错也无事件。
         const detail = await res.text().catch(() => '');
@@ -290,10 +324,24 @@ export default function Home() {
   const inConversation = running || events.length > 0 || submittedGoal !== '';
   const confirmCard = currentConfirmCard(events);
 
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || !stickToBottomRef.current) return;
+    el.scrollTop = el.scrollHeight;
+  }, [events.length, running, confirmCard?.confirmId, submittedGoal]);
+
+  useEffect(() => {
+    // 发送后视图从 Hero 切到会话，输入器会重新挂载，run() 里的同步 focus 会随旧节点卸载丢失。
+    // 放到提交后的 effect 中重新聚焦，确保 readOnly 期间焦点仍在输入器。
+    if (!running) return;
+    composerRef.current?.focus({ preventScroll: true });
+  }, [running]);
+
   const composer = (
     <div className="wb-composer-wrap">
       <div className="wb-composer">
         <textarea
+          ref={composerRef}
           value={goal}
           onChange={(e) => setGoal(e.target.value)}
           onKeyDown={(e) => {
@@ -304,7 +352,7 @@ export default function Home() {
           }}
           placeholder="今天帮你做些什么？写下目标，智能体会规划并执行…"
           rows={2}
-          disabled={running}
+          readOnly={running}
           aria-label="任务目标"
         />
         <div className="wb-composer-foot">
@@ -341,14 +389,22 @@ export default function Home() {
             type="button"
             className={`wb-icon-btn wb-drawer-trigger${drawerOpen ? ' active' : ''}`}
             onClick={() => setDrawerOpen((v) => !v)}
-            aria-label="成果"
+            aria-label={artifacts.length ? `成果（${artifacts.length} 个文件）` : '成果'}
             aria-expanded={drawerOpen}
             title="成果"
           >
             <IconFile size={17} />
-            {artifacts.length > 0 && <span className="wb-badge">{artifacts.length}</span>}
+            {artifacts.length > 0 && (
+              <span className="wb-badge" aria-hidden="true">
+                {artifacts.length}
+              </span>
+            )}
           </button>
         </div>
+      </div>
+
+      <div className="wb-sr-only" role="status" aria-live="polite">
+        {running ? '智能体执行中' : submittedGoal && events.length > 0 ? '执行已结束' : ''}
       </div>
 
       {error && (
@@ -360,7 +416,14 @@ export default function Home() {
       <div className="wb-workbench">
         {inConversation ? (
           <div className="wb-conv">
-            <div className="wb-conv-scroll">
+            <div
+              ref={scrollRef}
+              className="wb-conv-scroll"
+              onScroll={(e) => {
+                const el = e.currentTarget;
+                stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+              }}
+            >
               <div className="wb-thread">
                 {submittedGoal && (
                   <div className="wb-user-msg">
@@ -386,7 +449,7 @@ export default function Home() {
                 (() => {
                   const decided = decisions[confirmCard.confirmId];
                   return (
-                    <div className="wb-confirm">
+                    <div className="wb-confirm" role="alert">
                       <div className="wb-confirm-title">需要确认：{confirmCard.tool}</div>
                       <div className="wb-confirm-sub">该工具会访问外部资源，请确认后再执行。</div>
                       <pre className="wb-confirm-args">{JSON.stringify(confirmCard.args, null, 2)}</pre>
