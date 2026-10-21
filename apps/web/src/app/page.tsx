@@ -148,6 +148,7 @@ export default function Home() {
   const stickToBottomRef = useRef(true);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const artifactReqRef = useRef(0);
+  const lastUserScrollRef = useRef(0);
 
   useEffect(() => {
     if (!getToken()) {
@@ -193,7 +194,7 @@ export default function Home() {
 
   useEffect(() => {
     // 跑流期间不刷新：新会话在建流时会 setSessionId 触发本 effect，若并发拉取会覆盖乐观卡片；
-    // 流结束后由 run() 的 finally 统一刷新，故这里等待 running 归位。
+    // 结束后 running 归位，由本 effect 统一刷新落库产物（新会话与已有会话同一路径）。
     if (running) return;
     void refreshArtifacts(sessionId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -222,6 +223,10 @@ export default function Home() {
     resetConversation();
   }
 
+  function markUserScroll() {
+    lastUserScrollRef.current = Date.now();
+  }
+
   async function handleNewSession() {
     try {
       await newSession();
@@ -237,6 +242,8 @@ export default function Home() {
 
   async function run() {
     const currentGoal = goal;
+    stickToBottomRef.current = true;
+    artifactReqRef.current += 1;
     setEvents([]);
     setSubmittedGoal(currentGoal);
     setGoal('');
@@ -295,7 +302,6 @@ export default function Home() {
       setError(errorText(err));
     } finally {
       setRunning(false);
-      void refreshArtifacts(sid);
     }
   }
 
@@ -420,9 +426,14 @@ export default function Home() {
               ref={scrollRef}
               className="wb-conv-scroll"
               onScroll={(e) => {
+                if (Date.now() - lastUserScrollRef.current > 400) return;
                 const el = e.currentTarget;
                 stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
               }}
+              onWheel={markUserScroll}
+              onTouchMove={markUserScroll}
+              onPointerDown={markUserScroll}
+              onKeyDown={markUserScroll}
             >
               <div className="wb-thread">
                 {submittedGoal && (
