@@ -75,12 +75,14 @@ export function AppShell({
     const cachedEmail = getEmail() ?? '';
     setRole(cachedRole);
     setEmail(cachedEmail);
-    // 早先签发的 token 没有邮箱缓存：用 /me 回填，避免用户区一直显示「?」。
-    if (cachedEmail || !getToken()) return;
+    // 先用本地缓存渲染，再用 /me 刷新：补齐存量 token 缺失的邮箱，并同步角色变更。
+    const token = getToken();
+    if (!token) return;
     let cancelled = false;
     fetchMe()
       .then((user) => {
-        if (cancelled) return;
+        // 退出或切换账号后 token 会变化，迟到响应不再覆盖新状态。
+        if (cancelled || getToken() !== token) return;
         setRole(user.role);
         setEmail(user.email);
       })

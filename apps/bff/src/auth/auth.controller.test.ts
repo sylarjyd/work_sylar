@@ -175,8 +175,10 @@ describe('AuthController', () => {
     expect(res.statusCode).toBe(400);
   });
 
-  it('GET /api/auth/me 返回当前用户身份（供存量 token 回填邮箱）', async () => {
+  it('GET /api/auth/me 返回库中最新的角色与邮箱（供存量 token 回填）', async () => {
     await seedUser('a@b.com', 'pw123456');
+    // 先登录再在库里提权，证明 /me 读的是最新角色而非 token 或默认值。
+    users.set('a@b.com', { ...users.get('a@b.com')!, role: 'admin' });
     const login = await app.inject({
       method: 'POST',
       url: '/api/auth/login',
@@ -192,7 +194,7 @@ describe('AuthController', () => {
     expect(JSON.parse(res.payload)).toEqual({
       id: users.get('a@b.com')!.id,
       email: 'a@b.com',
-      role: 'member',
+      role: 'admin',
     });
   });
 

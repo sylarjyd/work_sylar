@@ -117,14 +117,18 @@ export async function login(email: string, password: string): Promise<AuthRespon
 
 /**
  * 用当前 token 拉取并回填身份信息。
- * 早先签发的 token 不含邮箱，登录后首次打开页面调用本函数补齐本地缓存。
+ * 每次打开页面调用，既补齐早先 token 缺失的邮箱，也让角色变更及时反映。
  * 401 由 authFetch 统一清除登录态并抛出 unauthorized。
  */
 export async function fetchMe(): Promise<AuthUser> {
+  const token = getToken();
   const res = await authFetch('/api/auth/me');
   if (!res.ok) throw new Error(`me_failed_${res.status}`);
   const user = (await res.json()) as AuthUser;
-  setRole(user.role);
-  setEmail(user.email);
+  // 请求期间可能已退出或切换账号：仅当 token 未变时才写回，避免迟到响应污染新登录态。
+  if (token && getToken() === token) {
+    setRole(user.role);
+    setEmail(user.email);
+  }
   return user;
 }

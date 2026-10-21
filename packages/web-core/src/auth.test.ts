@@ -71,6 +71,27 @@ describe('登录态存储', () => {
     expect(getToken()).toBeNull();
   });
 
+  it('fetchMe 返回时若 token 已更换则不写回，避免覆盖新登录态', async () => {
+    window.localStorage.setItem('ai_office_token', 'old');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        // 模拟请求在途时用户退出并登录了另一个账号。
+        window.localStorage.setItem('ai_office_token', 'new');
+        return new Response(JSON.stringify({ id: 'u1', email: 'old@example.com', role: 'admin' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }),
+    );
+
+    await fetchMe();
+
+    expect(getToken()).toBe('new');
+    expect(getEmail()).toBeNull();
+    expect(getRole()).toBeNull();
+  });
+
   it.each([
     ['login', login, '/api/auth/login'],
     ['register', register, '/api/auth/register'],
