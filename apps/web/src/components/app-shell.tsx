@@ -2,10 +2,30 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useEffect, useState, type ReactNode } from 'react';
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from 'react';
 import type { SessionSummary } from '@ai-office/shared';
-import { clearToken, getRole } from '../lib/api';
-import { IconBook, IconChat, IconLogout, IconPlug, IconPlus, IconSpark, IconWallet } from './icons';
+import { clearToken, getEmail, getRole } from '../lib/api';
+import { relativeTime } from '../lib/format';
+import { filterSessions } from '../lib/session-filter';
+import {
+  IconBook,
+  IconChat,
+  IconGrid,
+  IconLogout,
+  IconPlug,
+  IconPlus,
+  IconSearch,
+  IconSidebar,
+  IconSpark,
+  IconWallet,
+} from './icons';
 
 type ActiveNav = 'workbench' | 'kb' | 'connectors' | 'billing';
 
@@ -41,92 +61,189 @@ export function AppShell({
   sessionDisabled,
 }: AppShellProps) {
   const router = useRouter();
-  // 角色只在挂载后读取：SSR 阶段没有 localStorage，渲染期读取会触发 hydration 不一致。
+  // 角色与邮箱只在挂载后读取：SSR 阶段没有 localStorage，渲染期读取会触发 hydration 不一致。
   const [role, setRole] = useState('');
-  useEffect(() => setRole(getRole() ?? ''), []);
+  const [email, setEmail] = useState('');
+  const [collapsed, setCollapsed] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const searchRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    setRole(getRole() ?? '');
+    setEmail(getEmail() ?? '');
+  }, []);
+
+  // 折叠状态挂载后读取，避免服务端渲染与水合结果不一致；
+  // 没有手动选择时，窄屏默认收起，用户手动展开后以手动选择为准。
+  useEffect(() => {
+    const stored = window.localStorage.getItem('wb.sidebar.collapsed');
+    if (stored === '1') setCollapsed(true);
+    else if (stored === '0') setCollapsed(false);
+    else if (window.matchMedia('(max-width: 960px)').matches) setCollapsed(true);
+  }, []);
+
+  useEffect(() => {
+    if (searchOpen) searchRef.current?.focus();
+  }, [searchOpen]);
+
+  const visibleSessions = useMemo(
+    () => filterSessions(sessions ?? [], query),
+    [sessions, query],
+  );
+
+  function persistCollapsed(next: boolean) {
+    setCollapsed(next);
+    window.localStorage.setItem('wb.sidebar.collapsed', next ? '1' : '0');
+    if (next) {
+      setSearchOpen(false);
+      setQuery('');
+    }
+  }
+
+  function toggleCollapsed() {
+    persistCollapsed(!collapsed);
+  }
+
+  function toggleSearch() {
+    // 窄屏自动收起时点击搜索，视为用户手动展开：显式落盘，优先于自动规则。
+    if (collapsed) persistCollapsed(false);
+    setSearchOpen((prev) => {
+      const next = !prev;
+      if (!next) setQuery('');
+      return next;
+    });
+  }
+
+  function onSearchKeyDown(e: KeyboardEvent<HTMLInputElement>) {
+    if (e.key === 'Escape') {
+      setSearchOpen(false);
+      setQuery('');
+    }
+  }
 
   function logout() {
     clearToken();
     router.push('/login');
   }
 
+  const avatarLetter = email ? email[0].toUpperCase() : '?';
+
   return (
-    <div className="shell">
-      <aside className="sidebar">
-        <div className="brand">
-          <div className="brand-mark">
-            <IconSpark size={17} />
+    <div className={`shell wb-shell${collapsed ? ' sidebar-collapsed' : ''}`}>
+      <aside className={`sidebar wb-sidebar${collapsed ? ' collapsed' : ''}`} aria-label="侧栏">
+        <div className="wb-side-head">
+          <div className="wb-brand">
+            <div className="wb-brand-mark">
+              <IconSpark size={17} />
+            </div>
+            {!collapsed && <div className="wb-brand-name">AI 办公智能体</div>}
           </div>
-          <div>
-            <div className="brand-name">AI 办公智能体</div>
-            <div className="brand-sub">智能工作台</div>
+          <div className="wb-side-tools">
+            <button
+              type="button"
+              className="wb-icon-btn wb-collapse-btn"
+              onClick={toggleCollapsed}
+              aria-label={collapsed ? '展开侧栏' : '收起侧栏'}
+              title={collapsed ? '展开侧栏' : '收起侧栏'}
+            >
+              <IconSidebar size={16} />
+            </button>
+            <button
+              type="button"
+              className={`wb-icon-btn wb-search-btn${searchOpen ? ' active' : ''}`}
+              onClick={toggleSearch}
+              aria-label="搜索会话"
+              aria-expanded={searchOpen}
+              title="搜索会话"
+            >
+              <IconSearch size={16} />
+            </button>
           </div>
         </div>
+
+        {!collapsed && searchOpen && (
+          <div className="wb-search">
+            <IconSearch size={14} />
+            <input
+              ref={searchRef}
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={onSearchKeyDown}
+              placeholder="搜索最近任务"
+              aria-label="搜索会话"
+            />
+          </div>
+        )}
 
         {onNewSession ? (
           <button
             type="button"
-            className="nav-item new-task"
+            className="wb-new-task"
             onClick={onNewSession}
             disabled={sessionDisabled}
             aria-label="新建任务"
             title="新建任务"
           >
             <IconPlus size={16} />
-            <span className="nav-label">新建任务</span>
+            {!collapsed && <span>新建任务</span>}
           </button>
         ) : (
-          <Link className="nav-item new-task" href="/" aria-label="新建任务" title="新建任务">
+          <Link className="wb-new-task" href="/" aria-label="新建任务" title="新建任务">
             <IconPlus size={16} />
-            <span className="nav-label">新建任务</span>
+            {!collapsed && <span>新建任务</span>}
           </Link>
         )}
 
-        <nav className="nav" aria-label="主导航">
+        <nav className="wb-nav" aria-label="主导航">
           {NAV.map(({ key, href, label, icon: Icon }) => (
             <Link
               key={key}
               href={href}
-              className={`nav-item${active === key ? ' active' : ''}`}
+              className={`wb-nav-item${active === key ? ' active' : ''}`}
               aria-current={active === key ? 'page' : undefined}
               aria-label={label}
               title={label}
             >
               <Icon size={16} />
-              <span className="nav-label">{label}</span>
+              {!collapsed && <span>{label}</span>}
             </Link>
           ))}
           {role === 'admin' && ADMIN_URL && (
             <a
-              className="nav-item"
+              className="wb-nav-item"
               href={ADMIN_URL}
               target="_blank"
               rel="noreferrer"
               aria-label="运营平台"
               title="运营平台"
             >
-              <span className="nav-label">运营平台</span>
+              <IconGrid size={16} />
+              {!collapsed && <span>运营平台</span>}
             </a>
           )}
         </nav>
 
-        {sessions !== undefined && (
-          <div className="side-section">
-            <div className="side-label">最近任务</div>
-            <div className="session-list">
-              {sessions.length === 0 ? (
-                <div className="side-empty">暂无会话</div>
+        {sessions !== undefined && !collapsed && (
+          <div className="wb-recent">
+            <div className="wb-recent-label">最近</div>
+            <div className="wb-session-list">
+              {visibleSessions.length === 0 ? (
+                <div className="wb-side-empty">
+                  {query ? '没有匹配的会话' : '暂无会话'}
+                </div>
               ) : (
-                sessions.map((s) => (
+                visibleSessions.map((s) => (
                   <button
                     key={s.id}
                     type="button"
-                    className={`session-item${s.id === sessionId ? ' active' : ''}`}
+                    className={`wb-session${s.id === sessionId ? ' active' : ''}`}
                     onClick={() => onSelectSession?.(s.id)}
                     disabled={sessionDisabled}
                     title={s.title}
                   >
-                    {s.title}
+                    <span className="wb-session-title">{s.title}</span>
+                    <span className="wb-session-time">{relativeTime(s.createdAt)}</span>
                   </button>
                 ))
               )}
@@ -134,14 +251,30 @@ export function AppShell({
           </div>
         )}
 
-        <div className="side-foot">
-          {role && <span className="role-chip">{role === 'admin' ? '管理员' : '成员'}</span>}
-          <button type="button" className="icon-btn" onClick={logout} title="退出登录" aria-label="退出登录">
+        <div className="wb-user">
+          <span className="wb-avatar" aria-hidden="true">
+            {avatarLetter}
+          </span>
+          {!collapsed && (
+            <div className="wb-user-main">
+              <span className="wb-user-email" title={email || undefined}>
+                {email || (role === 'admin' ? '管理员' : '成员')}
+              </span>
+              {email && <span className="wb-user-role">{role === 'admin' ? '管理员' : '成员'}</span>}
+            </div>
+          )}
+          <button
+            type="button"
+            className="wb-icon-btn"
+            onClick={logout}
+            aria-label="退出登录"
+            title="退出登录"
+          >
             <IconLogout size={16} />
           </button>
         </div>
       </aside>
-      <main className="main">{children}</main>
+      <main className="main wb-main">{children}</main>
     </div>
   );
 }

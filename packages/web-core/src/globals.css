@@ -2373,3 +2373,430 @@ a {
     transition: none;
   }
 }
+
+/* ============================== 工作台外壳 ============================== */
+
+.wb-shell {
+  /* 不下载字体文件：系统装了 Inter 就用，否则按现有字体栈回落。 */
+  font-family: Inter, var(--font);
+  --wb-canvas: #ffffff;
+  --wb-sidebar: #f2f2f2;
+  --wb-ink: rgba(0, 0, 0, 0.9);
+  --wb-ink-2: rgba(0, 0, 0, 0.55);
+  --wb-ink-3: rgba(0, 0, 0, 0.38);
+  --wb-line: rgba(0, 0, 0, 0.1);
+  --wb-line-strong: rgba(0, 0, 0, 0.15);
+  --wb-hover: #ebebeb;
+  --wb-active: #e8e8e8;
+  background: var(--wb-canvas);
+}
+
+.wb-main {
+  background: var(--wb-canvas);
+}
+
+.wb-sidebar {
+  flex: 0 0 272px;
+  width: 272px;
+  padding: 14px 12px;
+  background: var(--wb-sidebar);
+  border-right: 0;
+}
+
+.wb-side-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 2px 4px 14px;
+}
+
+.wb-brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+
+.wb-brand-mark {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  color: #fff;
+  background: linear-gradient(135deg, #00d69a, #00a878);
+  border-radius: 9px;
+}
+
+.wb-brand-name {
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 650;
+  color: var(--wb-ink);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.wb-side-tools {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 2px;
+}
+
+.wb-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  color: var(--wb-ink-2);
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.wb-icon-btn:hover,
+.wb-icon-btn.active {
+  color: var(--wb-ink);
+  background: var(--wb-hover);
+}
+
+.wb-search {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0 2px 10px;
+  padding: 7px 9px;
+  color: var(--wb-ink-3);
+  background: #fff;
+  border: 1px solid var(--wb-line);
+  border-radius: 10px;
+}
+
+.wb-search input {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  font-size: 13px;
+  color: var(--wb-ink);
+  background: transparent;
+  border: 0;
+  outline: none;
+}
+
+.wb-new-task {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--wb-ink);
+  text-align: left;
+  background: #fff;
+  border: 1px solid var(--wb-line-strong);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.wb-new-task:hover:not(:disabled) {
+  border-color: rgba(0, 0, 0, 0.28);
+}
+
+.wb-new-task:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.wb-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.wb-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 10px;
+  font-size: 13.5px;
+  color: var(--wb-ink-2);
+  text-align: left;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.wb-nav-item svg {
+  flex: 0 0 auto;
+  opacity: 0.75;
+}
+
+.wb-nav-item:hover {
+  color: var(--wb-ink);
+  background: var(--wb-hover);
+}
+
+.wb-nav-item.active {
+  font-weight: 600;
+  color: var(--wb-ink);
+  background: var(--wb-active);
+}
+
+.wb-nav-item.active svg {
+  color: var(--mint-strong);
+  opacity: 1;
+}
+
+.wb-recent {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  margin-top: 16px;
+}
+
+.wb-recent-label {
+  padding: 0 10px 6px;
+  font-size: 11.5px;
+  color: var(--wb-ink-3);
+}
+
+.wb-session-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+}
+
+.wb-session {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  font-size: 13px;
+  color: var(--wb-ink-2);
+  text-align: left;
+  background: none;
+  border: 0;
+  border-radius: 9px;
+  cursor: pointer;
+}
+
+.wb-session:hover:not(:disabled) {
+  color: var(--wb-ink);
+  background: var(--wb-hover);
+}
+
+.wb-session.active {
+  font-weight: 600;
+  color: var(--wb-ink);
+  background: var(--wb-active);
+}
+
+.wb-session:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.wb-session-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.wb-session-time {
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--wb-ink-3);
+}
+
+.wb-side-empty {
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--wb-ink-3);
+}
+
+.wb-user {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding-top: 12px;
+  margin-top: auto;
+}
+
+.wb-avatar {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #fff;
+  background: linear-gradient(135deg, #00d69a, #00a878);
+  border-radius: 50%;
+}
+
+.wb-user-main {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.35;
+}
+
+.wb-user-email {
+  overflow: hidden;
+  font-size: 12.5px;
+  color: var(--wb-ink);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.wb-user-role {
+  font-size: 11px;
+  color: var(--wb-ink-3);
+}
+
+.wb-shell.sidebar-collapsed .wb-sidebar {
+  flex-basis: 64px;
+  width: 64px;
+  padding: 14px 10px;
+}
+
+.wb-shell.sidebar-collapsed .wb-side-head {
+  flex-direction: column;
+  gap: 8px;
+  padding: 2px 0 14px;
+}
+
+.wb-shell.sidebar-collapsed .wb-side-tools {
+  flex-direction: column;
+}
+
+.wb-shell.sidebar-collapsed .wb-nav-item,
+.wb-shell.sidebar-collapsed .wb-new-task {
+  justify-content: center;
+  padding: 9px;
+}
+
+.wb-shell.sidebar-collapsed .wb-user {
+  justify-content: center;
+}
+
+@media (max-width: 1100px) and (min-width: 961px) {
+  .wb-sidebar {
+    flex-basis: 248px;
+    width: 248px;
+  }
+}
+
+@media (max-width: 960px) and (min-width: 761px) {
+  /* 窄屏默认由 JS 收起；用户手动展开后按 248px 渲染，手动选择优先。 */
+  .wb-sidebar {
+    flex-basis: 248px;
+    width: 248px;
+  }
+
+  .wb-shell.sidebar-collapsed .wb-sidebar {
+    flex-basis: 64px;
+    width: 64px;
+    padding: 14px 10px;
+  }
+}
+
+@media (max-width: 760px) {
+  .wb-shell {
+    flex-direction: column;
+    height: auto;
+    min-height: 100vh;
+    overflow: visible;
+  }
+
+  .wb-sidebar {
+    flex-direction: row;
+    flex-basis: auto;
+    gap: 6px;
+    align-items: center;
+    width: 100%;
+    height: auto;
+    padding: 10px 12px;
+    overflow-x: auto;
+    border-bottom: 1px solid var(--wb-line);
+  }
+
+  .wb-shell.sidebar-collapsed .wb-sidebar {
+    flex-basis: auto;
+    width: 100%;
+    padding: 10px 12px;
+  }
+
+  .wb-shell.sidebar-collapsed .wb-side-head {
+    flex-direction: row;
+    padding: 0;
+  }
+
+  .wb-shell.sidebar-collapsed .wb-side-tools {
+    flex-direction: row;
+  }
+
+  .wb-side-head {
+    flex: 0 0 auto;
+    padding: 0;
+  }
+
+  .wb-brand-name,
+  .wb-recent,
+  .wb-user-main,
+  .wb-search,
+  .wb-search-btn,
+  .wb-collapse-btn {
+    display: none;
+  }
+
+  .wb-side-tools {
+    display: none;
+  }
+
+  .wb-new-task {
+    flex: 0 0 auto;
+    width: auto;
+    margin: 0;
+  }
+
+  .wb-nav {
+    flex-direction: row;
+    gap: 4px;
+  }
+
+  .wb-nav-item,
+  .wb-new-task {
+    padding: 8px 10px;
+  }
+
+  .wb-nav-item span,
+  .wb-new-task span {
+    display: none;
+  }
+
+  .wb-user {
+    flex: 0 0 auto;
+    padding: 0;
+    margin: 0 0 0 auto;
+  }
+
+  .wb-main {
+    height: auto;
+    overflow: visible;
+  }
+}
