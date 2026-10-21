@@ -501,6 +501,11 @@ a {
   margin: 0 auto;
 }
 
+/* 运营端以数据表格为主，宽屏下铺满主区，避免两侧留白浪费空间。客户端保持 1180px 阅读宽度。 */
+.admin-shell .page {
+  max-width: none;
+}
+
 .page-head {
   display: flex;
   align-items: flex-end;

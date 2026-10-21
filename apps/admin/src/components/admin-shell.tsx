@@ -47,7 +47,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
   if (!ready) return <div className="admin-loading">校验权限…</div>;
 
   return (
-    <div className="shell">
+    <div className="shell admin-shell">
       <aside className="sidebar">
         <div className="brand">
           <div className="brand-mark">管</div>
