@@ -4,9 +4,11 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import type { AgentEvent, ArtifactDto, SessionSummary } from '@ai-office/shared';
 import { AppShell } from '../components/app-shell';
+import { ArtifactDrawer } from '../components/artifact-drawer';
 import {
+  IconArrowUpRight,
   IconCheck,
-  IconDownload,
+  IconCopy,
   IconFile,
   IconSend,
   IconSpark,
@@ -14,7 +16,6 @@ import {
   IconX,
 } from '../components/icons';
 import { errorText } from '@ai-office/web-core';
-import { formatBytes } from '../lib/format';
 import { createSseParser } from '../lib/sse-parser';
 import {
   confirmRun,
@@ -36,7 +37,14 @@ const SUGGESTIONS = [
   { label: '生成演示稿', goal: '根据项目方案生成一份演示稿' },
 ];
 
-function EventRow({ ev }: { ev: AgentEvent }) {
+function EventRow({
+  ev,
+  onOpenArtifacts,
+}: {
+  ev: AgentEvent;
+  onOpenArtifacts: () => void;
+}) {
+  const [copied, setCopied] = useState(false);
   const text = renderStep(ev);
   if (!text) return null;
 
@@ -67,13 +75,38 @@ function EventRow({ ev }: { ev: AgentEvent }) {
     icon = <IconFile size={15} />;
   }
 
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(text ?? '');
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // 剪贴板不可用时保持静默，不打断对话流。
+    }
+  }
+
   return (
-    <div className="thread-item">
-      <div className={`thread-icon ${iconCls}`}>{icon}</div>
-      <div className="thread-body">
-        <div className="thread-meta">{meta}</div>
-        <div className="thread-text">{text}</div>
+    <div className="wb-event">
+      <div className={`wb-event-icon ${iconCls}`}>{icon}</div>
+      <div className="wb-event-body">
+        <div className="wb-event-meta">{meta}</div>
+        <div className="wb-event-text">{text}</div>
+        {ev.type === 'artifact' && (
+          <button type="button" className="wb-event-action" onClick={onOpenArtifacts}>
+            查看成果
+            <IconArrowUpRight size={13} />
+          </button>
+        )}
       </div>
+      <button
+        type="button"
+        className="wb-copy"
+        onClick={() => void copy()}
+        aria-label={copied ? '已复制' : '复制'}
+        title={copied ? '已复制' : '复制'}
+      >
+        {copied ? <IconCheck size={14} /> : <IconCopy size={14} />}
+      </button>
     </div>
   );
 }
@@ -90,6 +123,7 @@ export default function Home() {
   const [error, setError] = useState('');
   const [runId, setRunId] = useState('');
   const [decisions, setDecisions] = useState<Record<string, boolean>>({});
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
   useEffect(() => {
     if (!getToken()) {
@@ -257,8 +291,8 @@ export default function Home() {
   const confirmCard = currentConfirmCard(events);
 
   const composer = (
-    <div className="composer-wrap">
-      <div className="composer">
+    <div className="wb-composer-wrap">
+      <div className="wb-composer">
         <textarea
           value={goal}
           onChange={(e) => setGoal(e.target.value)}
@@ -273,12 +307,12 @@ export default function Home() {
           disabled={running}
           aria-label="任务目标"
         />
-        <div className="composer-foot">
-          <span className="composer-hint">Enter 发送 · Shift + Enter 换行</span>
+        <div className="wb-composer-foot">
+          <span className="wb-composer-hint">Enter 发送 · Shift + Enter 换行</span>
           <div className="spacer" />
           <button
             type="button"
-            className="send-btn"
+            className="wb-send"
             onClick={() => void run()}
             disabled={running || !goal.trim()}
             aria-label="开始执行"
@@ -300,45 +334,49 @@ export default function Home() {
       onNewSession={() => void handleNewSession()}
       sessionDisabled={running}
     >
-      <div className="topbar">
-        <span className="topbar-title">{current?.title ?? '新任务'}</span>
-        <div className="topbar-actions">
+      <div className="wb-topbar">
+        <span className="wb-topbar-title">{current?.title ?? '新任务'}</span>
+        <div className="wb-topbar-actions">
           <button
             type="button"
-            className="btn btn-sm"
-            onClick={() => void handleNewSession()}
-            disabled={running}
+            className={`wb-icon-btn wb-drawer-trigger${drawerOpen ? ' active' : ''}`}
+            onClick={() => setDrawerOpen((v) => !v)}
+            aria-label="成果"
+            aria-expanded={drawerOpen}
+            title="成果"
           >
-            新会话
+            <IconFile size={17} />
+            {artifacts.length > 0 && <span className="wb-badge">{artifacts.length}</span>}
           </button>
         </div>
       </div>
 
       {error && (
-        <div className="banner banner-error banner-inset" role="alert">
+        <div className="banner banner-error wb-banner" role="alert">
           {error}
         </div>
       )}
 
-      <div className="workbench">
+      <div className="wb-workbench">
         {inConversation ? (
-          <div className="conv">
-            <div className="conv-scroll">
-              <div className="thread">
+          <div className="wb-conv">
+            <div className="wb-conv-scroll">
+              <div className="wb-thread">
                 {submittedGoal && (
-                  <div className="thread-item user">
-                    <div className="thread-body">
-                      <div className="thread-meta">你</div>
-                      <div className="thread-text">{submittedGoal}</div>
-                    </div>
+                  <div className="wb-user-msg">
+                    <div className="wb-user-text">{submittedGoal}</div>
                   </div>
                 )}
                 {events.map((ev) => (
-                  <EventRow key={ev.seq} ev={ev} />
+                  <EventRow
+                    key={ev.seq}
+                    ev={ev}
+                    onOpenArtifacts={() => setDrawerOpen(true)}
+                  />
                 ))}
                 {running && (
-                  <div className="running-line">
-                    <span className="spinner" />
+                  <div className="wb-running">
+                    <span className="wb-spinner" />
                     智能体执行中…
                   </div>
                 )}
@@ -348,12 +386,12 @@ export default function Home() {
                 (() => {
                   const decided = decisions[confirmCard.confirmId];
                   return (
-                    <div className="confirm-card">
-                      <div className="confirm-title">需要确认：{confirmCard.tool}</div>
-                      <div className="confirm-sub">该工具会访问外部资源，请确认后再执行。</div>
-                      <pre className="confirm-args">{JSON.stringify(confirmCard.args, null, 2)}</pre>
+                    <div className="wb-confirm">
+                      <div className="wb-confirm-title">需要确认：{confirmCard.tool}</div>
+                      <div className="wb-confirm-sub">该工具会访问外部资源，请确认后再执行。</div>
+                      <pre className="wb-confirm-args">{JSON.stringify(confirmCard.args, null, 2)}</pre>
                       {decided === undefined ? (
-                        <div className="confirm-actions">
+                        <div className="wb-confirm-actions">
                           <button
                             type="button"
                             className="btn btn-primary btn-sm"
@@ -370,7 +408,7 @@ export default function Home() {
                           </button>
                         </div>
                       ) : (
-                        <span className="confirm-done">
+                        <span className="wb-confirm-done">
                           <IconCheck size={14} />
                           {decided ? '已允许' : '已拒绝'}（等待执行结果…）
                         </span>
@@ -379,72 +417,43 @@ export default function Home() {
                   );
                 })()}
             </div>
-            <div className="composer-dock">{composer}</div>
+            <div className="wb-composer-dock">
+              {composer}
+              <p className="wb-disclaimer">内容由 AI 生成，请核实重要信息。</p>
+            </div>
           </div>
         ) : (
-          <div className="hero">
-            <h1 className="hero-greet">
+          <div className="wb-hero">
+            <h1 className="wb-hero-title">
               AI 办公智能体，<em>我帮你</em>
             </h1>
-            <p className="hero-sub">把目标交给智能体：它会调研、写文档、做表格、生成演示稿。</p>
-            <div className="hero-chips">
+            <p className="wb-hero-sub">把目标交给智能体：它会调研、写文档、做表格、生成演示稿。</p>
+            {composer}
+            <div className="wb-suggestions">
               {SUGGESTIONS.map((s) => (
                 <button
                   key={s.label}
                   type="button"
-                  className="chip"
+                  className="wb-suggestion"
                   onClick={() => setGoal(s.goal)}
                 >
-                  {s.label}
+                  <span>{s.label}</span>
+                  <IconArrowUpRight size={15} />
                 </button>
               ))}
             </div>
-            {composer}
+            <p className="wb-disclaimer">内容由 AI 生成，请核实重要信息。</p>
           </div>
         )}
 
-        <aside className="rail">
-          <div className="rail-head">
-            <span className="rail-title">成果</span>
-            <span className="rail-sub">
-              {artifacts.length > 0 ? `${artifacts.length} 个文件` : '任务产出'}
-            </span>
-          </div>
-          {artifacts.length === 0 ? (
-            <div className="rail-empty">任务产出的文档会出现在这里</div>
-          ) : (
-            <div className="artifact-list">
-              {artifacts.map((a, i) => (
-                <div key={a.id || `pending-${i}`} className="artifact-card">
-                  <div className={`artifact-icon ${a.kind}`}>{a.kind.toUpperCase()}</div>
-                  <div className="artifact-main">
-                    <div className="artifact-name">{a.filename}</div>
-                    <div className="artifact-meta">
-                      {formatBytes(a.size)} · v{a.version || 0} ·{' '}
-                      {new Date(a.createdAt).toLocaleString('zh-CN')}
-                    </div>
-                    <div className="artifact-actions">
-                      {a.id ? (
-                        <button
-                          type="button"
-                          className="btn btn-sm"
-                          onClick={() =>
-                            void downloadArtifact(a.id, a.filename).catch((e) => setError(errorText(e)))
-                          }
-                        >
-                          <IconDownload size={13} />
-                          下载
-                        </button>
-                      ) : (
-                        <span className="artifact-meta">落库中…</span>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </aside>
+        <ArtifactDrawer
+          open={drawerOpen}
+          artifacts={artifacts}
+          onClose={() => setDrawerOpen(false)}
+          onDownload={(a) =>
+            void downloadArtifact(a.id, a.filename).catch((e) => setError(errorText(e)))
+          }
+        />
       </div>
     </AppShell>
   );

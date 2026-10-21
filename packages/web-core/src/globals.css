@@ -2805,3 +2805,497 @@ a {
     overflow: visible;
   }
 }
+
+/* ============================== 工作台页面 ============================== */
+
+.wb-topbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 32px 8px;
+}
+
+.wb-topbar-title {
+  overflow: hidden;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--wb-ink);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.wb-topbar-actions {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.wb-drawer-trigger {
+  position: relative;
+}
+
+.wb-badge {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  display: grid;
+  place-items: center;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  font-size: 9.5px;
+  font-weight: 700;
+  line-height: 1;
+  color: #fff;
+  background: #1a1a1a;
+  border-radius: 999px;
+}
+
+.wb-banner {
+  margin: 0 32px 10px;
+}
+
+.wb-workbench {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.wb-conv {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.wb-conv-scroll {
+  flex: 1;
+  min-height: 0;
+  padding: 8px 32px 20px;
+  overflow-y: auto;
+}
+
+.wb-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: 100%;
+  max-width: 904px;
+  padding-top: 10px;
+  margin: 0 auto;
+}
+
+.wb-user-msg {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.wb-user-text {
+  max-width: 78%;
+  padding: 12px 16px;
+  font-size: 14.5px;
+  line-height: 1.65;
+  color: var(--wb-ink);
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--wb-sidebar);
+  border-radius: 16px;
+}
+
+.wb-event {
+  position: relative;
+  display: flex;
+  gap: 10px;
+  padding: 2px 0;
+  animation: wb-rise 0.2s ease-out;
+}
+
+.wb-event-icon {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  color: var(--wb-ink-2);
+  background: #f4f4f4;
+  border-radius: 7px;
+}
+
+.wb-event-icon.think {
+  color: #6d5bb8;
+  background: #f3f1fd;
+}
+
+.wb-event-icon.tool {
+  color: var(--mint-ink);
+  background: var(--mint-soft);
+}
+
+.wb-event-icon.result.fail {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.wb-event-icon.artifact {
+  color: #a86908;
+  background: #fff4e0;
+}
+
+.wb-event-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.wb-event-meta {
+  margin-bottom: 1px;
+  font-size: 11px;
+  color: var(--wb-ink-2); /* 修订：原 ink-3 对比度不足 */
+}
+
+.wb-event-text {
+  font-size: 14.5px;
+  line-height: 1.7;
+  color: var(--wb-ink);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.wb-event-action {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  padding: 4px 9px;
+  margin-top: 7px;
+  font-size: 12px;
+  color: var(--wb-ink);
+  background: #fff;
+  border: 1px solid var(--wb-line-strong);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.wb-event-action:hover {
+  background: var(--wb-hover);
+}
+
+.wb-copy {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  color: var(--wb-ink-2); /* 修订：原 ink-3 图标对比度不足 */
+  background: transparent;
+  border: 0;
+  border-radius: 7px;
+  opacity: 0;
+  cursor: pointer;
+  transition: opacity 0.15s, background 0.15s, color 0.15s;
+}
+
+.wb-event:hover .wb-copy,
+.wb-copy:focus-visible {
+  opacity: 1;
+}
+
+.wb-copy:hover {
+  color: var(--wb-ink);
+  background: var(--wb-hover);
+}
+
+.wb-running {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  font-size: 13px;
+  color: var(--wb-ink-2);
+}
+
+.wb-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid #d8d8d8;
+  border-top-color: #1a1a1a;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+.wb-confirm {
+  width: 100%;
+  max-width: 904px;
+  padding: 16px 18px;
+  margin: 14px auto 0;
+  background: var(--amber-soft);
+  border: 1px solid var(--amber-line);
+  border-radius: 12px;
+}
+
+.wb-confirm-title {
+  font-size: 14px;
+  font-weight: 650;
+  color: var(--wb-ink);
+}
+
+.wb-confirm-sub {
+  font-size: 12.5px;
+  color: var(--amber-ink);
+}
+
+.wb-confirm-args {
+  max-height: 180px;
+  padding: 10px 12px;
+  margin: 10px 0 12px;
+  overflow: auto;
+  font-family: var(--mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+  background: rgba(255, 255, 255, 0.75);
+  border: 1px solid #f1e2c2;
+  border-radius: 10px;
+}
+
+.wb-confirm-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.wb-confirm-done {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--amber-ink);
+}
+
+.wb-composer-dock {
+  padding: 10px 32px 18px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0), #fff 22%);
+}
+
+.wb-composer-wrap {
+  width: 100%;
+  max-width: 936px;
+  margin: 0 auto;
+}
+
+.wb-composer {
+  padding: 12px 14px 10px;
+  background: #fff;
+  border: 1px solid var(--wb-line-strong);
+  border-radius: 24px;
+  box-shadow: 0 16px 32px -8px rgba(0, 0, 0, 0.06), 0 2px 4px -4px rgba(0, 0, 0, 0.1);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.wb-composer:focus-within {
+  border-color: rgba(0, 0, 0, 0.28);
+  box-shadow: 0 16px 32px -8px rgba(0, 0, 0, 0.08), 0 2px 4px -4px rgba(0, 0, 0, 0.12);
+}
+
+.wb-composer textarea {
+  width: 100%;
+  min-height: 64px;
+  max-height: 200px;
+  padding: 2px;
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--wb-ink);
+  resize: none;
+  background: transparent;
+  border: 0;
+  outline: none;
+}
+
+.wb-composer textarea::placeholder {
+  color: var(--wb-ink-3);
+}
+
+.wb-composer-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.wb-composer-hint {
+  margin-left: 2px;
+  font-size: 12px;
+  color: var(--wb-ink-2); /* 修订：原 ink-3 对比度不足 */
+}
+
+.wb-composer-foot .spacer {
+  flex: 1;
+}
+
+.wb-send {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  color: #fff;
+  background: #1a1a1a;
+  border: 0;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.1s;
+}
+
+.wb-send:hover:not(:disabled) {
+  background: #333;
+}
+
+.wb-send:active:not(:disabled) {
+  transform: scale(0.96);
+}
+
+.wb-send:disabled {
+  color: #a3a3a3;
+  background: #e3e3e3;
+  cursor: not-allowed;
+}
+
+.wb-disclaimer {
+  margin-top: 10px;
+  font-size: 11.5px;
+  color: var(--wb-ink-2); /* 修订：原 ink-3 对比度不足 */
+  text-align: center;
+}
+
+.wb-hero {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 32px 40px;
+  overflow-y: auto;
+}
+
+.wb-hero-title {
+  margin-bottom: 10px;
+  font-size: clamp(32px, 4vw, 44px);
+  font-weight: 750;
+  letter-spacing: -0.03em;
+  line-height: 1.15;
+  color: var(--wb-ink);
+  text-align: center;
+}
+
+.wb-hero-title em {
+  font-style: normal;
+  color: var(--mint-strong);
+}
+
+.wb-hero-sub {
+  margin-bottom: 28px;
+  font-size: 14px;
+  color: var(--wb-ink-2);
+  text-align: center;
+}
+
+.wb-suggestions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  max-width: 936px;
+  margin-top: 18px;
+}
+
+.wb-suggestion {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 12px 16px;
+  font-size: 13.5px;
+  color: var(--wb-ink);
+  text-align: left;
+  background: #fff;
+  border: 1px solid var(--wb-line);
+  border-radius: 14px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.wb-suggestion:hover {
+  background: #fafafa;
+  border-color: var(--wb-line-strong);
+}
+
+.wb-suggestion svg {
+  color: var(--wb-ink-2); /* 修订：原 ink-3 图标对比度不足 */
+}
+
+@keyframes wb-rise {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (hover: none) {
+  .wb-copy {
+    opacity: 1;
+  }
+}
+
+@media (max-width: 1100px) and (min-width: 961px) {
+  .wb-conv-scroll,
+  .wb-composer-dock,
+  .wb-hero {
+    padding-right: 24px;
+    padding-left: 24px;
+  }
+}
+
+@media (max-width: 760px) {
+  .wb-topbar {
+    padding: 12px 16px 6px;
+  }
+
+  .wb-banner {
+    margin: 0 16px 10px;
+  }
+
+  .wb-conv-scroll,
+  .wb-composer-dock,
+  .wb-hero {
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+
+  .wb-hero {
+    padding-top: 40px;
+    padding-bottom: 32px;
+  }
+
+  .wb-workbench {
+    flex-direction: column;
+    overflow-y: auto;
+  }
+
+  .wb-conv {
+    flex: 0 0 auto;
+    min-height: calc(100vh - 56px);
+  }
+
+  .wb-conv-scroll {
+    overflow: visible;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wb-event {
+    animation: none;
+  }
+}
