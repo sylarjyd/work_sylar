@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { clearToken, getEmail, getRole, getToken } from './auth';
+import { clearToken, getEmail, getRole, getToken, login, register } from './auth';
 
 function createStorage(): Storage {
   const map = new Map<string, string>();
@@ -38,5 +38,31 @@ describe('登录态存储', () => {
     expect(getToken()).toBeNull();
     expect(getRole()).toBeNull();
     expect(getEmail()).toBeNull();
+  });
+
+  it.each([
+    ['login', login, '/api/auth/login'],
+    ['register', register, '/api/auth/register'],
+  ])('%s 成功后持久化 token / role / email', async (_name, action, path) => {
+    const fetchMock = vi.fn(async (url: string) =>
+      new Response(
+        JSON.stringify({
+          token: 't',
+          user: { id: 'u1', email: 'demo@example.com', role: 'admin' },
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await action('demo@example.com', 'demo-password');
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining(path),
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(getToken()).toBe('t');
+    expect(getRole()).toBe('admin');
+    expect(getEmail()).toBe('demo@example.com');
   });
 });
