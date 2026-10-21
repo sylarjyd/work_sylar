@@ -109,6 +109,7 @@ if ($LASTEXITCODE -ne 0) { throw '共享包构建失败' }
 $services = @(
     @{ Name = 'bff'; Filter = '@ai-office/bff' },
     @{ Name = 'web'; Filter = '@ai-office/web' },
+    @{ Name = 'admin'; Filter = '@ai-office/admin' },
     @{ Name = 'runtime'; Filter = '@ai-office/agent-runtime' }
 )
 
@@ -137,12 +138,14 @@ Write-Step '等待服务就绪'
 $allReady = $true
 if (-not (Wait-Port 4000 'BFF' $TimeoutSeconds)) { $allReady = $false }
 if (-not (Wait-Port 3000 'Web' $TimeoutSeconds)) { $allReady = $false }
+if (-not (Wait-Port 3001 '运营端' $TimeoutSeconds)) { $allReady = $false }
 if (-not (Wait-Port 4001 'Agent Runtime' $TimeoutSeconds)) { $allReady = $false }
 
 if ($allReady) {
     Write-Host ''
     Write-Host '项目已启动：' -ForegroundColor Green
-    Write-Host '  Web      http://localhost:3000'
+    Write-Host '  Web      http://localhost:3000  （客户工作台）'
+    Write-Host '  Admin    http://localhost:3001  （运营平台，需管理员账号）'
     Write-Host '  BFF      http://localhost:4000'
     Write-Host '  Runtime  http://127.0.0.1:4001'
 } else {

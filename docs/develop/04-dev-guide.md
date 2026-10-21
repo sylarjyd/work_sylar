@@ -38,11 +38,13 @@ work_sylar/
 │  ├─ db/schema.sql            # 数据库 DDL（与 Prisma 对齐）
 │  └─ superpowers/             # 上游设计文档与各里程碑 spec/plan
 ├─ packages/
-│  └─ shared/                  # @ai-office/shared：跨层契约（协议 + DTO）
+│  ├─ shared/                  # @ai-office/shared：跨层契约（协议 + DTO）
+│  └─ web-core/                # @ai-office/web-core：两端共用的认证/追踪/错误文案/全局样式
 └─ apps/
    ├─ agent-runtime/           # @ai-office/agent-runtime：Agent 引擎
    ├─ bff/                      # @ai-office/bff：NestJS 应用服务
-   └─ web/                      # @ai-office/web：Next.js 网页端
+   ├─ web/                      # @ai-office/web：客户工作台（3000）
+   └─ admin/                    # @ai-office/admin：运营平台（3001，独立部署，仅管理员）
 ```
 
 ### 2.1 `packages/shared`
@@ -140,7 +142,23 @@ apps/bff/
 
 **职责**：面向前端的应用服务（认证/多租户/会话/任务编排入口/SSE 网关/产物元数据与下载代理）。
 
-### 2.4 `apps/web`
+### 2.4 `packages/web-core`
+
+```
+packages/web-core/
+├─ package.json                # TS 源码直接导出；exports: "." 与 "./globals.css"
+└─ src/
+   ├─ index.ts                 # 再导出 auth + errors + trace
+   ├─ auth.ts                  # BFF_URL、token/role 存取、authFetch、login/register
+   ├─ trace.ts                 # traceparent / request-id 生成
+   ├─ errors.ts                # 错误文案
+   ├─ globals.css              # 两端唯一的全局样式来源
+   └─ *.test.ts
+```
+
+**职责**：客户工作台与运营平台共用的浏览器侧基础设施。由两端 `transpilePackages` 直接编译源码，无独立构建产物。
+
+### 2.5 `apps/web`
 
 ```
 apps/web/
@@ -148,15 +166,50 @@ apps/web/
 ├─ next-env.d.ts
 └─ src/
    ├─ app/
-   │  ├─ layout.tsx            # 根布局（lang=zh-CN）
+   │  ├─ layout.tsx            # 根布局（lang=zh-CN，导入 web-core/globals.css）
    │  ├─ page.tsx              # 工作台（目标输入 + 事件流 + 成果区）
-   │  └─ login/page.tsx        # 登录/注册
+   │  ├─ login/page.tsx        # 登录/注册
+   │  ├─ billing/page.tsx      # 计费
+   │  ├─ connectors/page.tsx   # 连接器
+   │  └─ kb/page.tsx           # 知识库
+   ├─ components/
+   │  └─ app-shell.tsx         # 侧栏/顶栏；管理员的“运营平台”外链
    └─ lib/
-      ├─ api.ts                # BFF 调用封装（令牌、401 处理、下载）
+      ├─ api.ts                # 客户业务 API（认证函数从 web-core re-export）
       ├─ sse-parser.ts         # 复用 shared 解析器
       ├─ render-step.ts        # AgentEvent → 文本
       └─ *.test.ts
 ```
+
+**职责**：面向终端客户的公网应用，不含任何运营页面。
+
+### 2.6 `apps/admin`
+
+```
+apps/admin/
+├─ package.json                # dev=next dev -p 3001；build；start -p 3001
+├─ next-env.d.ts
+└─ src/
+   ├─ app/
+   │  ├─ layout.tsx            # “运营平台”，robots noindex
+   │  ├─ page.tsx              # redirect('/overview')
+   │  ├─ login/page.tsx        # 运营端独立登录（仅 admin）
+   │  └─ (console)/            # AdminShell 包裹，URL 无前缀
+   │     ├─ overview/ alerts/ users/ tenants/ plans/
+   │     ├─ sessions/ tasks/ models/ settings/ audit/
+   │     └─ layout.tsx
+   ├─ components/
+   │  ├─ admin-shell.tsx       # 导航、退出、“返回工作台”外链
+   │  └─ metric-chart.tsx
+   └─ lib/
+      ├─ admin-api.ts          # /api/admin/* 调用（认证走 web-core）
+      ├─ admin-guard.ts        # 非管理员 → /login
+      ├─ alert-draft.ts
+      ├─ chart-geometry.ts
+      └─ run-timeline.ts
+```
+
+**职责**：平台运营后台，通常部署在内网。与客户端不共享登录态，需单独用管理员账号登录；直连 `/api/admin/*` 仍由服务端 `AdminGuard` 鉴权。
 
 ---
 
@@ -175,7 +228,8 @@ pnpm --filter @ai-office/bff db:push           # 同步表结构到数据库
 
 | 命令 | 作用 |
 |---|---|
-| `pnpm dev` | 并行启动 runtime(4001)/bff(4000)/web(3000) |
+| `pnpm dev` | 并行启动 runtime(4001)/bff(4000)/web(3000)/admin(3001) |
+| `pnpm --filter @ai-office/admin dev` | 单独启动运营端（3001） |
 | `pnpm build` | 全量构建（turbo，依赖感知） |
 | `pnpm test` | 全量测试 |
 | `pnpm --filter @ai-office/bff test` | 仅 bff 测试 |
@@ -198,10 +252,11 @@ pnpm --filter @ai-office/bff db:push           # 同步表结构到数据库
 ### 4.2 依赖方向（不可违反）
 
 ```
-web ──▶ shared
+web   ──▶ web-core ──▶ shared
+admin ──▶ web-core ──▶ shared
 bff ──▶ shared
 runtime ──▶ shared
-（shared 不依赖任何 app）
+（shared / web-core 不依赖任何 app；web 与 admin 互不依赖）
 ```
 
 ### 4.3 注释规范
@@ -365,6 +420,7 @@ pnpm --filter @ai-office/bff typecheck             # 类型
 
 1. `pnpm --filter @ai-office/bff db:push && pnpm --filter @ai-office/bff db:seed:billing`
 2. 注册一个普通账号；再用 `pnpm --filter @ai-office/bff admin:promote <email>` 提升为管理员。
-3. 启动 `pnpm dev`，用管理员登录后从侧栏进入「管理后台」。
+3. 启动 `pnpm dev`（或单独 `pnpm --filter @ai-office/admin dev`），打开 `http://localhost:3001`，用管理员账号登录；客户端 `http://localhost:3000` 侧栏会出现「运营平台」外链（`NEXT_PUBLIC_ADMIN_URL`，开发默认 3001）。
 4. 依次验证：用户禁用后既有 token 立即 401；为租户开通套餐与调额；创建/停用套餐；修改模型价格；归档会话后普通用户列表不可见；修改 `maxRounds` 后下一次运行按新值停止；审计页能查到上述记录。
-5. 运行 `pnpm test` 与 `pnpm build`。
+5. 边界验证：普通账号在运营端登录应被拒绝并清除登录态；未登录访问 `/overview` 跳 `/login`；客户端访问 `/admin/users` 应 404；运营端登录态不写入客户端 origin。
+6. 运行 `pnpm test` 与 `pnpm build`。

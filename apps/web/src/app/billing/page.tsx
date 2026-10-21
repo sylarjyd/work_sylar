@@ -17,7 +17,7 @@ import {
   listCreditLedger,
   listPlans,
 } from '../../lib/api';
-import { errorText } from '../../lib/errors';
+import { errorText } from '@ai-office/web-core';
 
 const TYPE_LABEL: Record<string, string> = {
   grant: '发放',

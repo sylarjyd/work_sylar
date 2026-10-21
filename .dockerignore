@@ -1,0 +1,24 @@
+# 构建上下文只保留源码与锁文件；产物在镜像内构建。
+# Dockerfile/.dockerignore 由构建器单独读取，排除后修改它们不会让 COPY . . 失效。
+.git
+.gitignore
+Dockerfile
+.dockerignore
+.idea
+.run
+.turbo
+.playwright-mcp
+node_modules
+**/node_modules
+dist
+**/dist
+.next
+**/.next
+**/*.tsbuildinfo
+logs
+docs
+*.log
+# 密钥绝不进构建上下文（部署配置单独由 env_file 注入）。
+.env
+.env.*
+.env.docker

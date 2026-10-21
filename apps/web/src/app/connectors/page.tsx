@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import type { ConnectorDto } from '@ai-office/shared';
 import { AppShell } from '../../components/app-shell';
 import { IconLock, IconPlug, IconPlus, IconTrash, IconX } from '../../components/icons';
-import { errorText } from '../../lib/errors';
+import { errorText } from '@ai-office/web-core';
 import {
   createConnector,
   deleteConnector,

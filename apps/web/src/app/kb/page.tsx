@@ -6,7 +6,7 @@ import type { KbDocDto } from '@ai-office/shared';
 import { AppShell } from '../../components/app-shell';
 import { IconBook, IconFile, IconTrash, IconUpload } from '../../components/icons';
 import { deleteKbDoc, getToken, isUnauthorized, listKbDocs, uploadKbDoc } from '../../lib/api';
-import { errorText } from '../../lib/errors';
+import { errorText } from '@ai-office/web-core';
 import { formatBytes } from '../../lib/format';
 
 const ACCEPT = '.txt,.md,.csv,.docx,.xlsx,.pdf';

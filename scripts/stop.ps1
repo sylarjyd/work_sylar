@@ -32,7 +32,7 @@ function Stop-FromPidFile([string]$Path, [string]$Name) {
 }
 
 Write-Step '停止应用服务'
-foreach ($name in @('runtime', 'web', 'bff')) {
+foreach ($name in @('runtime', 'admin', 'web', 'bff')) {
     Stop-FromPidFile (Join-Path $runDir ($name + '.pid')) $name
 }
 

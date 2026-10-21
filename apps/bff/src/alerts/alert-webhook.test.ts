@@ -15,7 +15,7 @@ const event = {
   message: '最近 15 分钟运行失败率为 31%，超过阈值 20%',
   startedAt: new Date('2026-10-20T06:00:00.000Z'),
 };
-const payload = buildAlertPayload('alert.fired', rule, event, 'https://web.example/admin/alerts');
+const payload = buildAlertPayload('alert.fired', rule, event, 'https://web.example/alerts');
 const target = { url: 'https://hooks.example/alert', secret: 'topsecret', maxPerHour: 60 };
 const NOW = Date.UTC(2026, 9, 20, 10, 0, 0);
 
@@ -128,8 +128,9 @@ describe('AlertWebhookNotifier', () => {
   it('测试告警使用固定 id 且 dashboardUrl 可推导', () => {
     expect(ALERT_TEST_PAYLOAD_ID).toBe('test');
     expect(alertDashboardUrl({ ADMIN_WEB_URL: 'https://office.example/' })).toBe(
-      'https://office.example/admin/alerts',
+      'https://office.example/alerts',
     );
-    expect(alertDashboardUrl({})).toBe('http://localhost:3000/admin/alerts');
+    expect(alertDashboardUrl({})).toBe('http://localhost:3001/alerts');
+    expect(alertDashboardUrl({ ADMIN_WEB_URL: '   ' })).toBe('http://localhost:3001/alerts');
   });
 });

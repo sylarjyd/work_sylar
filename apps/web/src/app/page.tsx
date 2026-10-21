@@ -13,7 +13,7 @@ import {
   IconTool,
   IconX,
 } from '../components/icons';
-import { errorText } from '../lib/errors';
+import { errorText } from '@ai-office/web-core';
 import { formatBytes } from '../lib/format';
 import { createSseParser } from '../lib/sse-parser';
 import {

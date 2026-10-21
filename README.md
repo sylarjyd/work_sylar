@@ -7,7 +7,7 @@
 
 ```bash
 pnpm install
-pnpm dev        # 并行启动 agent-runtime(4001) / bff(4000) / web(3000)
+pnpm dev        # 并行启动 agent-runtime(4001) / bff(4000) / web(3000) / admin(3001)
 pnpm test       # 全量测试
 pnpm build      # 全量构建
 ```
@@ -58,9 +58,38 @@ pnpm --filter @ai-office/bff db:push    # 同步表结构
 
 - 连接器 / MCP：接入外部 MCP Server（stdio），自动发现其工具并纳入 Agent 工具箱；`/connectors` 页由管理员新增/启停/删除（凭证加密入库），工具调用沿用 M3 确认卡片
 
+## 一键容器部署
+
+需要已安装 Docker（含 Compose）。Windows 双击/命令行执行 `deploy.cmd`，Linux/macOS 执行 `./deploy.sh`：
+
+```bash
+./deploy.sh              # 构建镜像并启动客户端栈（不含运营端）
+./deploy.sh --with-admin # 同机额外启动运营端（内网访问）
+./deploy.sh --admin-only # 只部署运营端（独立内网主机）
+./deploy.sh --no-build   # 复用已有镜像
+./deploy.sh --logs       # 启动后跟随日志
+./deploy.sh --down       # 停止容器（保留数据卷）
+./deploy.sh --down --purge   # 停止并清空数据卷
+```
+
+首次运行会基于 `.env.docker.example` 生成 `.env.docker`：随机生成数据库/对象存储/JWT/加密/token/webhook 密钥，并尽量复用根 `.env` 里的模型与嵌入配置。`.env.docker` 含明文密钥，已被 git 忽略，请勿提交。
+
+整套服务：`web`(3000)、`bff`(4000)、`agent-runtime`(4001，仅容器内网)、Postgres/MinIO/Redis（不映射到宿主机），以及一次性的 `db-init`（建 vector 扩展、同步表结构、写入计费种子数据）。端口与对外 BFF 地址在 `.env.docker` 中用 `WEB_PORT` / `BFF_PORT` / `WEB_BFF_URL` 调整；`WEB_BFF_URL` 是 Web 的**构建期**变量，修改后需重新构建。
+
+**运营端是独立应用**（`apps/admin`，默认 3001），通常部署在内网，不随客户端栈默认启动。`--with-admin` 默认只绑定 `127.0.0.1`；内网访问需设置 `ADMIN_WEB_BIND`，并配好防火墙/反向代理，不要把 BFF 管理接口暴露到公网。运营端使用自己的登录页，只接受管理员账号；`ADMIN_BFF_URL` 是其**构建期** BFF 地址。管理员提权（在客户端栈中执行）：
+
+```bash
+./deploy.sh --no-build   # 确保已启动
+docker compose --env-file .env.docker exec bff node scripts/promote-admin.mjs <邮箱>
+```
+
+详细说明见 `docs/deploy/06-deployment.md` §11。
+
 ## 包结构
 
 - `packages/shared` —— 协议类型与 SSE 编解码
+- `packages/web-core` —— 客户端与运营端共用的认证/追踪/错误文案与全局样式
 - `apps/agent-runtime` —— Agent 运行时（真模型 Agent Loop + 检索/抓取 + 文档生成工具、对象存储写入）
 - `apps/bff` —— NestJS(Fastify) 应用服务
-- `apps/web` —— Next.js 网页端
+- `apps/web` —— Next.js 客户工作台（3000）
+- `apps/admin` —— Next.js 运营平台（3001，独立部署，仅管理员）

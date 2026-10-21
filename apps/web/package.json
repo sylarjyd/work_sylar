@@ -11,7 +11,8 @@
     "next": "^15.1.5",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "@ai-office/shared": "workspace:*"
+    "@ai-office/shared": "workspace:*",
+    "@ai-office/web-core": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.9.0",

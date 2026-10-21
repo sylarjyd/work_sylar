@@ -67,8 +67,10 @@ export function alertTarget(config: {
 }
 
 export function alertDashboardUrl(env: NodeJS.ProcessEnv = process.env): string {
-  const base = (env.ADMIN_WEB_URL ?? 'http://localhost:3000').replace(/\/+$/, '');
-  return `${base}/admin/alerts`;
+  // 运营端是独立应用，路由没有 /admin 前缀；空字符串视为未配置，回退默认地址。
+  const configured = env.ADMIN_WEB_URL?.trim();
+  const base = (configured || 'http://localhost:3001').replace(/\/+$/, '');
+  return `${base}/alerts`;
 }
 
 export function buildAlertPayload(

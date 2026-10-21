@@ -18,6 +18,40 @@ importers:
         specifier: ^2.1.8
         version: 2.1.9(@types/node@26.6.5)(terser@5.51.2)
 
+  apps/admin:
+    dependencies:
+      '@ai-office/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
+      '@ai-office/web-core':
+        specifier: workspace:*
+        version: link:../../packages/web-core
+      next:
+        specifier: ^15.1.5
+        version: 15.5.28(@opentelemetry/api@1.9.1)(@types/node@22.20.5)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
+      react:
+        specifier: ^19.0.0
+        version: 19.3.1
+      react-dom:
+        specifier: ^19.0.0
+        version: 19.3.1(react@19.3.1)
+    devDependencies:
+      '@types/node':
+        specifier: ^22.9.0
+        version: 22.20.5
+      '@types/react':
+        specifier: ^19.0.0
+        version: 19.3.0
+      '@types/react-dom':
+        specifier: ^19.0.0
+        version: 19.3.0(@types/react@19.3.0)
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.20.5)(terser@5.51.2)
+
   apps/agent-runtime:
     dependencies:
       '@ai-office/shared':
@@ -163,6 +197,9 @@ importers:
       '@ai-office/shared':
         specifier: workspace:*
         version: link:../../packages/shared
+      '@ai-office/web-core':
+        specifier: workspace:*
+        version: link:../../packages/web-core
       next:
         specifier: ^15.1.5
         version: 15.5.28(@opentelemetry/api@1.9.1)(@types/node@22.20.5)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
@@ -240,6 +277,19 @@ importers:
       tsup:
         specifier: ^8.3.5
         version: 8.5.1(@swc/core@1.16.18)(jiti@2.7.0)(postcss@8.5.30)(tsx@4.23.15)(typescript@5.9.3)(yaml@2.9.1)
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@26.6.5)(terser@5.51.2)
+
+  packages/web-core:
+    dependencies:
+      '@ai-office/shared':
+        specifier: workspace:*
+        version: link:../shared
+    devDependencies:
       typescript:
         specifier: ^5.6.3
         version: 5.9.3

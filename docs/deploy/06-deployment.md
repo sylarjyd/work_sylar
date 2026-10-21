@@ -11,12 +11,13 @@
 
 ## 1. 部署拓扑
 
-### 1.1 本地开发（单机三进程 + docker 依赖）
+### 1.1 本地开发（单机四进程 + docker 依赖）
 
 ```mermaid
 flowchart LR
     subgraph Dev["开发机"]
-        WEB["web :3000"]
+        WEB["web :3000<br/>客户工作台"]
+        ADMIN["admin :3001<br/>运营平台"]
         BFF["bff :4000"]
         RT["runtime :4001"]
         PG[("Postgres :5432")]
@@ -24,7 +25,9 @@ flowchart LR
         RD[("Redis :6379")]
     end
     Browser["浏览器"] --> WEB
+    Operator["运营人员浏览器"] --> ADMIN
     Browser -->|CORS| BFF
+    Operator -->|CORS| BFF
     BFF --> RT
     BFF --> PG
     BFF --> S3
@@ -39,6 +42,8 @@ flowchart LR
     U["用户浏览器"] -->|HTTPS| NG["Nginx / LB<br/>TLS 终止 · SSE 关闭缓冲"]
     NG -->|/api, /api/*/tasks(SSE)| BFF["bff (无状态, 可多实例)"]
     NG -->|/| WEB["web (Next.js)"]
+    O["运营人员（内网）"] -->|HTTPS / 内网| ADM["admin (Next.js, 独立部署)"]
+    ADM -->|/api/admin/*| BFF
     BFF -->|"HTTP+SSE (内网, 带 token)"| RT["runtime (内网, 绑内网地址+token)"]
     BFF --> PG[("Postgres 16")]
     BFF --> S3[("对象存储 S3/MinIO")]
@@ -47,6 +52,7 @@ flowchart LR
 ```
 
 > runtime **绝不**直接暴露到公网；仅 BFF 经内网访问，且携带共享 token。
+> 运营端（admin）是独立应用，通常部署在内网；`/api/admin/*` 仍由 BFF 鉴权，运营端暴露面必须限制在受控网络。
 
 ---
 
@@ -54,7 +60,7 @@ flowchart LR
 
 | 组件 | 版本 | 说明 |
 |---|---|---|
-| Node.js | ≥ 22（实测 22.13.1） | 三个 Node 服务 |
+| Node.js | ≥ 22（实测 22.13.1） | 四个 Node 服务（bff / runtime / web / admin） |
 | pnpm | 10.19.0 | 安装依赖（`corepack enable` 或全局安装） |
 | Postgres | 16 | 元数据存储 |
 | 对象存储 | MinIO 或云 S3 | 产物字节 |
@@ -87,7 +93,9 @@ flowchart LR
 | `CODE_EXEC_TIMEOUT_MS` | `5000` | 沙箱单次执行墙钟上限 |
 | `CODE_EXEC_MAX_OLD_SPACE_MB` | `128` | 沙箱子进程堆上限 |
 | `CODE_EXEC_MAX_OUTPUT_BYTES` | `65536` | 沙箱 stdout 累计截断阈值 |
-| `NEXT_PUBLIC_BFF_URL` | `http://localhost:4000` | **构建期**注入（Next.js 公开变量），生产为对外 BFF 地址 |
+| `NEXT_PUBLIC_BFF_URL` | `http://localhost:4000` | **构建期**注入（Next.js 公开变量），生产为对外 BFF 地址；web 与 admin 各自构建 |
+| `NEXT_PUBLIC_ADMIN_URL` | `http://localhost:3001` | **构建期**，客户端里“运营平台”外链；留空则客户端不显示入口 |
+| `NEXT_PUBLIC_WORKSPACE_URL` | `http://localhost:3000` | **构建期**，运营端“返回工作台”外链；留空则运营端不显示入口 |
 | `EMBEDDING_BASE_URL` | `https://api.siliconflow.cn/v1` | 按嵌入服务端点 |
 | `EMBEDDING_API_KEY` | 空 | 真实 key（空则走 Mock 嵌入，不可用于生产） |
 | `EMBEDDING_MODEL` | `BAAI/bge-large-zh-v1.5` | 按嵌入服务模型 |
@@ -115,7 +123,7 @@ flowchart LR
 | `ALERT_EVAL_MS` | `60000` | 评估间隔，最小 5000；`0` 关闭评估但仍会播种规则 |
 | `ALERT_MAX_PER_HOUR` | `60` | Webhook 滚动一小时投递上限（含测试告警） |
 | `ALERT_WEBHOOK_URL` / `ALERT_WEBHOOK_SECRET` | 空 | 初始 Webhook 配置；管理端写入的 DB 值优先，secret 仅以掩码展示 |
-| `ADMIN_WEB_URL` | `http://localhost:3000` | 告警消息中的管理端跳转地址 |
+| `ADMIN_WEB_URL` | `http://localhost:3001` | 运营端地址：告警消息跳转（`/alerts`）与客户端外链来源；空值回退该默认地址 |
 
 > `JWT_SECRET` 未设置时 BFF 会抛错（fail-fast）；`AGENT_RUNTIME_TOKEN` 未设置时 runtime 仅放行回环来源（fail-closed）——生产两者都必须设置。
 
@@ -130,7 +138,7 @@ pnpm install --frozen-lockfile
 pnpm build                 # turbo：按依赖顺序构建 shared → 各 app
 ```
 
-产物：`packages/shared/dist`、`apps/agent-runtime/dist/server.js`、`apps/bff/dist/main.js`、`apps/web/.next`。
+产物：`packages/shared/dist`、`apps/agent-runtime/dist/server.js`、`apps/bff/dist/main.js`、`apps/web/.next`、`apps/admin/.next`。
 
 ### 4.2 启动命令
 
@@ -139,7 +147,8 @@ pnpm build                 # turbo：按依赖顺序构建 shared → 各 app
 | shared | （构建产物，无独立进程） | — |
 | agent-runtime | `pnpm --filter @ai-office/agent-runtime start` | `node dist/server.js`；启动时 `ensureBucket` 幂等建桶 |
 | bff | `pnpm --filter @ai-office/bff start` | `node dist/main.js` |
-| web | `pnpm --filter @ai-office/web start` | `next start -p 3000` |
+| web | `pnpm --filter @ai-office/web start` | `next start -p 3000`；客户工作台 |
+| admin | `pnpm --filter @ai-office/admin start` | `next start -p 3001`；运营平台，需单独用管理员账号登录 |
 
 > 生产用进程管理器（systemd / PM2 / Docker / K8s）托管，配置自动重启与日志收集。
 
@@ -308,22 +317,77 @@ server {
 
 ---
 
-## 11. Docker 参考（可选）
+## 11. Docker 一键部署
 
-本地依赖（Postgres + MinIO + Redis，compose 文件位于 `apps/bff`）：
+本地开发依赖（Postgres + MinIO + Redis，compose 文件位于 `apps/bff`，端口映射到宿主机）：
 
 ```bash
 pnpm --filter @ai-office/bff db:up      # 等价于在 apps/bff 下执行 docker compose up -d
 ```
 
-生产容器化建议（**要点**，非最终清单）：
+整套应用另有根目录编排（`Dockerfile` + `docker-compose.yml` + `deploy.cmd` / `deploy.sh`）：
 
-- `web`/`bff`/`runtime` 各自构建镜像（多阶段构建，仅含产物与运行时依赖）。
-- 镜像**钉 Node 基础镜像版本**；非 root 用户运行。
-- 用 `docker compose` / K8s 编排；密钥走 secrets，不写进镜像。
-- `NEXT_PUBLIC_BFF_URL` 在 web **构建期**注入。
+```bash
+./deploy.sh                  # 构建并启动客户端栈（不含运营端）
+./deploy.sh --with-admin     # 同机额外启动运营端
+./deploy.sh --admin-only     # 只构建并启动运营端（内网独立主机）
+./deploy.sh --no-build       # 复用已有镜像
+./deploy.sh --logs           # 启动后跟随日志
+./deploy.sh --down           # 停止（保留数据卷）
+./deploy.sh --down --purge   # 停止并删除数据卷
+```
 
-> 仓库当前**未提供**生产 Dockerfile 与编排文件，为 M5 上线准备的待办项。
+Windows 用 `deploy.cmd`，参数对应 `-WithAdmin` / `-AdminOnly` / `-NoBuild` / `-Logs` / `-Down` / `-Purge` / `-EnvFile`。脚本会优先用 `docker compose`，不可用时回退到独立的 `docker-compose`。
+
+`--admin-only` 只针对 `admin-web` 服务执行 `up --no-deps`，不会启动客户端栈、BFF 或数据库；它适合把运营端单独部署到内网主机（BFF 通过内网地址被访问）。默认 `./deploy.sh` 不启用 `admin` profile，运营端不会被创建。
+
+### 11.1 服务与网络
+
+| 服务 | 作用 | 宿主机端口 |
+|---|---|---|
+| `postgres` | `pgvector/pgvector:pg16` | 不映射 |
+| `redis` | 限流（AOF 持久化） | 不映射 |
+| `minio` | 对象存储，控制台 9001 | 不映射 |
+| `db-init` | 一次性初始化：`CREATE EXTENSION vector` → `db push` → 列注释 → 计费种子 | — |
+| `agent-runtime` | Agent 运行时，固定 `0.0.0.0:4001`，仅容器内网可达 | 不映射 |
+| `bff` | NestJS 应用服务 | `${BFF_PORT:-4000}` |
+| `web` | Next.js 客户工作台 | `${WEB_PORT:-3000}` |
+| `admin-web` | Next.js 运营平台，`profiles: ["admin"]`，默认不启动 | `${ADMIN_WEB_BIND:-127.0.0.1}:${ADMIN_WEB_PORT:-3001}` |
+
+- 服务间用 compose 服务名互访（`postgres:5432`、`redis:6379`、`minio:9000`、`agent-runtime:4001`）。
+- `bff` 只有在 Postgres/Redis 健康、`db-init` 成功、runtime 健康后才启动。
+- `agent-runtime` 入口会先轮询 `minio:9000/minio/health/live`（MinIO 镜像不带 curl，无法做 compose healthcheck），再 `exec` 主进程。
+- `admin-web` 不依赖核心栈、不注入 `.env.docker`（镜像内不含任何密钥），可单独构建、单独部署；默认只绑定回环地址。
+- 数据卷：`pgdata`、`redis-data`、`minio-data`；`--purge` 会一并删除。
+- 所有服务非 root（`node` 用户）运行，日志 `json-file` 轮转（10MB × 3）。
+
+### 11.2 配置与密钥
+
+首次运行由脚本从 `.env.docker.example` 生成 `.env.docker`（`umask 077` / `chmod 600`，已被 git 忽略）：
+
+- 自动生成 `POSTGRES_PASSWORD`、`MINIO_ROOT_PASSWORD`、`JWT_SECRET`、`CONNECTOR_ENC_KEY`、`AGENT_RUNTIME_TOKEN`、`INTERNAL_TOKEN`、`ALERT_WEBHOOK_SECRET`。
+- 从根 `.env` 复用 `DEEPSEEK_API_KEY`、`MODEL_*`、`TAVILY_API_KEY`、`EMBEDDING_*`（存在时才覆盖）。
+- 密钥缺失时 compose 通过 `${VAR:?}` **启动即失败**，不会以空密钥运行。
+- 脚本检查 `BFF_PORT` / `WEB_PORT` 是否被占用（项目已运行时跳过，便于重复执行）。
+
+`WEB_BFF_URL` 注入 web 的 `NEXT_PUBLIC_BFF_URL`，属于 **Next.js 构建期**变量：浏览器访问的 BFF 地址变了必须重新构建（`./deploy.sh` 不带 `--no-build`）。服务端/容器内调用仍走 `BFF_INTERNAL_URL`。生产对外暴露时建议置于反向代理之后并启用 HTTPS。
+
+运营端的构建期变量是另一组：
+
+- `ADMIN_BFF_URL` 注入 admin 的 `NEXT_PUBLIC_BFF_URL`（运营人员浏览器直连的 BFF 地址）；`WORKSPACE_URL` 注入“返回工作台”外链。
+- `ADMIN_WEB_URL` 是运营端对外地址：BFF 用它生成告警跳转（`${ADMIN_WEB_URL}/alerts`），web 用它生成“运营平台”外链。留空时 web 不显示入口，告警回退 `http://localhost:3001`。
+- 以上三个变量变化后都需要重建对应镜像；运营端容器只需要 `NODE_ENV=production`，不要给它挂载 `.env.docker`。
+- `ADMIN_WEB_BIND` 默认 `127.0.0.1`。要让内网其他机器访问，设为内网网卡 IP（或 `0.0.0.0`），并在主机防火墙/安全组限制来源；反向代理需启用 HTTPS，并限制 `/api/admin/*` 只对运营网段可达。
+
+### 11.3 初始化与运维
+
+- `db-init` 是幂等的一次性任务：新建库时建扩展并同步表结构；已有库重跑只会同步、写入/更新计费种子，不会清数据。
+- 管理员提权：`docker compose --env-file .env.docker exec bff node scripts/promote-admin.mjs <邮箱>`。
+- 改 `.env.docker` 后重新执行部署脚本（重建会重启相关容器）；仅改密钥等运行时变量可用 `--no-build`。
+- 首次登录前无账号，直接打开 Web 注册即可；随后按上面的命令提权，才能在运营端登录。模型 Key 为空时 Agent 走 Mock，仅适合链路验证。
+- 运营端与客户端是不同 origin，登录态（localStorage）互不共享：运营人员需要在 `http://<admin>:3001/login` 单独登录；普通账号会被拒绝并清除登录态。
+- 单独部署运营端（如另一台内网主机）：`./deploy.sh --admin-only`（Windows：`.\deploy.cmd -AdminOnly`），并在构建前把 `ADMIN_BFF_URL` 设为该主机可达的 BFF 内网地址。若完全没有源码，也可在别处构建 `ai-office/admin:<版本>` 镜像后 `docker load`，再用 `docker run -d -p <内网IP>:3001:3001 ai-office/admin:<版本>` 启动。
+- 该编排未替代 K8s/云托管：多实例、密钥托管、数据库备份、TLS 终止仍需按 §10 清单补齐。MinIO 镜像与 Node 基础镜像均钉版本，升级时同步更新 `docker-compose.yml` / `Dockerfile`。
 
 ---
 
@@ -432,7 +496,7 @@ curl -X POST http://localhost:4000/api/billing/admin/credits \
 ## 管理端（M5b-1）
 
 - 管理员预置：`pnpm --filter @ai-office/bff admin:promote <email>`；注册用户一律 `member`。
-- 入口：以管理员登录后，工作台侧栏出现「管理后台」，路由前缀 `/admin`；普通用户直连 `/api/admin/*` 返回 403。
+- 入口：运营平台是独立应用（`apps/admin`，默认 `http://localhost:3001`），使用管理员账号在其登录页单独登录；客户端侧栏对管理员显示“运营平台”外链（需配置 `NEXT_PUBLIC_ADMIN_URL`）。普通用户直连 `/api/admin/*` 返回 403。
 - 权限：所有管理接口位于 `/api/admin/*`，受 `JwtGuard + AdminGuard` 保护；`JwtGuard` 每次请求查库，禁用用户立即失效。
 - 写操作非破坏性：用户仅可启用/禁用、改角色；会话仅可归档；套餐仅可停用；模型价格可删除但被启用套餐引用时拒绝。
 - 审计：写操作与业务写入同事务落 `AdminAuditLog`；敏感查看（用户/租户/会话/消息/任务/运行详情）尽力记录；不记录消息正文、密钥与工具入参全文。
@@ -440,8 +504,8 @@ curl -X POST http://localhost:4000/api/billing/admin/credits \
 
 ## 管理端（M5b-2 可观测性）
 
-- 概览 `/admin/overview`：24h/7d/30d KPI、运行/Token/时长趋势、按模型堆叠积分、模型成本与三服务健康；60 秒静默刷新，标签页隐藏时暂停。
-- 告警 `/admin/alerts`：规则就地编辑、事件状态筛选与分页、发送测试告警；测试与真实投递共用每小时配额。
+- 概览 `/overview`：24h/7d/30d KPI、运行/Token/时长趋势、按模型堆叠积分、模型成本与三服务健康；60 秒静默刷新，标签页隐藏时暂停。
+- 告警 `/alerts`：规则就地编辑、事件状态筛选与分页、发送测试告警；测试与真实投递共用每小时配额。
 - 时间线：任务页打开运行后自动加载，最多 500 个节点，超出时提示省略数量；不包含 prompt 与工具入参/结果正文。
 - 所有管理端接口仍受 `JwtGuard + AdminGuard` 保护；写操作与审计同事务。
 

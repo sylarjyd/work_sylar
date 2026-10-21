@@ -261,7 +261,7 @@ describe('AdminAlertsService', () => {
           value: 0.5,
           message: '测试告警：运行失败率',
         },
-        dashboardUrl: 'https://ops.example/admin/alerts',
+        dashboardUrl: 'https://ops.example/alerts',
       });
       expect(sent[0].target).toMatchObject({
         url: 'https://hooks.example/a',

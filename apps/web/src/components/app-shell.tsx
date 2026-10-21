@@ -9,6 +9,11 @@ import { IconBook, IconChat, IconLogout, IconPlug, IconPlus, IconSpark, IconWall
 
 type ActiveNav = 'workbench' | 'kb' | 'connectors' | 'billing';
 
+// 运营端是独立应用（通常部署在内网），这里只放外链；未配置时对管理员也不显示。
+// 构建期内联：生产镜像需要在构建时传入 NEXT_PUBLIC_ADMIN_URL。
+const ADMIN_URL =
+  process.env.NEXT_PUBLIC_ADMIN_URL || (process.env.NODE_ENV === 'development' ? 'http://localhost:3001' : '');
+
 interface AppShellProps {
   active: ActiveNav;
   children: ReactNode;
@@ -91,15 +96,17 @@ export function AppShell({
               <span className="nav-label">{label}</span>
             </Link>
           ))}
-          {role === 'admin' && (
-            <Link
+          {role === 'admin' && ADMIN_URL && (
+            <a
               className="nav-item"
-              href="/admin/users"
-              aria-label="管理后台"
-              title="管理后台"
+              href={ADMIN_URL}
+              target="_blank"
+              rel="noreferrer"
+              aria-label="运营平台"
+              title="运营平台"
             >
-              <span className="nav-label">管理后台</span>
-            </Link>
+              <span className="nav-label">运营平台</span>
+            </a>
           )}
         </nav>
 
