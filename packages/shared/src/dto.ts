@@ -6,6 +6,16 @@ export interface ChatMessage {
 }
 
 /**
+ * BFF 按运行时解密的厂商路由。
+ * 只在下发给 runtime 的请求体中出现，绝不下发到浏览器。
+ */
+export interface RunModelRoute {
+  model: string;
+  baseUrl: string;
+  apiKey: string;
+}
+
+/**
  * web → bff → runtime 的「下达目标」请求。
  * runId 由 BFF 生成并透传给 runtime，保证落库（run/step）与 SSE 事件流对齐。
  */
@@ -22,6 +32,8 @@ export interface RunRequest {
   billing?: RunBilling;
   /** 管理端参数配置；缺省或非法值由 runtime 夹取。 */
   config?: RunConfig;
+  /** 本次运行可用的模型路由（按优先级）；缺省时 runtime 使用启动时的静态网关。 */
+  modelRoutes?: RunModelRoute[];
 }
 
 export interface RegisterRequest {
@@ -48,12 +60,16 @@ export interface AuthResponse {
 
 export interface CreateSessionRequest {
   title?: string;
+  /** 新建任务时选定的模型；缺省用运营端默认模型。 */
+  model?: string;
 }
 
 export interface SessionSummary {
   id: string;
   title: string;
   createdAt: string;
+  /** 会话固定使用的模型；历史会话在首次运行后回填。 */
+  model: string | null;
 }
 
 export interface MessageDto {
@@ -168,10 +184,25 @@ export interface ModelPriceDto {
   outputMilliCreditsPer1k: number;
 }
 
+/** Web 端模型选择器的一项；不含 Base URL、密钥或内部 ID。 */
+export interface ClientModelDto {
+  model: string;
+  displayName: string;
+  providerName: string;
+}
+
+/** `GET /api/models` 响应：仅当前套餐可用的已启用模型。 */
+export interface ClientModelsDto {
+  models: ClientModelDto[];
+  defaultModel: string | null;
+}
+
 /** BFF 下发给 runtime 的计费约束；缺省时不限预算（仅测试/兼容）。 */
 export interface RunBilling {
   maxCredits: number;
   allowedModels: string[];
+  /** 用户本次选中的模型；runtime 据此把它排到候选第一位。 */
+  selectedModel?: string;
   prices: Record<string, ModelPriceDto>;
 }
 

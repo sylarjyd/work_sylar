@@ -16,7 +16,12 @@ export class SessionsService {
       where: { tenantId, userId, status: { not: 'archived' } },
       orderBy: { createdAt: 'desc' },
     });
-    return rows.map((s) => ({ id: s.id, title: s.title, createdAt: s.createdAt.toISOString() }));
+    return rows.map((s) => ({
+      id: s.id,
+      title: s.title,
+      createdAt: s.createdAt.toISOString(),
+      model: s.model ?? null,
+    }));
   }
 
   async create(
@@ -27,7 +32,12 @@ export class SessionsService {
     const s = await this.prisma.session.create({
       data: { tenantId, userId, title: req.title ?? '新会话' },
     });
-    return { id: s.id, title: s.title, createdAt: s.createdAt.toISOString() };
+    return {
+      id: s.id,
+      title: s.title,
+      createdAt: s.createdAt.toISOString(),
+      model: s.model ?? null,
+    };
   }
 
   /**

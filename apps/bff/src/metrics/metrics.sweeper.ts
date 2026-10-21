@@ -211,7 +211,7 @@ export class MetricsSweeper implements OnModuleInit, OnModuleDestroy {
         }),
       ),
       this.query(() =>
-        this.prisma.modelPrice.findMany({
+        this.prisma.modelConfig.findMany({
           select: {
             model: true,
             inputMilliCreditsPer1k: true,

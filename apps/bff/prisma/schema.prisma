@@ -39,6 +39,8 @@ model Session {
   userId    String
   title     String   @default("新会话")
   status    String   @default("active")
+  // 创建任务时选定的模型；历史会话为空，首次成功预占后回填。
+  model     String?
   createdAt DateTime @default(now())
   tenant    Tenant   @relation(fields: [tenantId], references: [id])
   user      User     @relation(fields: [userId], references: [id])
@@ -268,11 +270,32 @@ model UsageRecord {
   @@index([createdAt])
 }
 
-model ModelPrice {
-  model                   String   @id
+model ModelProvider {
+  id         String        @id @default(uuid())
+  name       String        @unique
+  baseUrl    String
+  apiKeyEnc  String
+  apiKeyHint String?
+  createdAt  DateTime      @default(now())
+  updatedAt  DateTime      @updatedAt
+  models     ModelConfig[]
+}
+
+model ModelConfig {
+  model                   String         @id
+  providerId              String?
+  displayName             String?
+  enabled                 Boolean        @default(false)
+  sortOrder               Int            @default(0)
   inputMilliCreditsPer1k  Int
   outputMilliCreditsPer1k Int
-  updatedAt               DateTime @updatedAt
+  updatedAt               DateTime       @updatedAt
+  provider                ModelProvider? @relation(fields: [providerId], references: [id], onDelete: Restrict)
+
+  // 保留原表名，存量价格行无需迁移数据。
+  @@map("ModelPrice")
+  @@index([providerId])
+  @@index([enabled, sortOrder])
 }
 
 model Setting {

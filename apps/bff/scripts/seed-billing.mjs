@@ -67,7 +67,7 @@ try {
     await prisma.plan.upsert({ where: { id: plan.id }, create: plan, update: plan });
   }
   for (const price of prices) {
-    await prisma.modelPrice.upsert({ where: { model: price.model }, create: price, update: price });
+    await prisma.modelConfig.upsert({ where: { model: price.model }, create: price, update: price });
   }
   console.log(`已写入 ${plans.length} 个套餐、${prices.length} 条模型价格`);
 } finally {

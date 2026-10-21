@@ -666,7 +666,7 @@ export class BillingService implements OnModuleDestroy {
   private async loadPrices(
     client: Db | PrismaService,
   ): Promise<Record<string, { inputMilliCreditsPer1k: number; outputMilliCreditsPer1k: number }>> {
-    const rows = await client.modelPrice.findMany();
+    const rows = await client.modelConfig.findMany();
     return Object.fromEntries(
       rows.map((r) => [
         r.model,

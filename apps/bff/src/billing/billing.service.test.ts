@@ -177,7 +177,7 @@ function makeDb() {
         return { count: targets.length };
       },
     },
-    modelPrice: { findMany: async () => [...db.prices] },
+    modelConfig: { findMany: async () => [...db.prices] },
     run: {
       findUnique: async ({ where }: any) => {
         const row = db.runs.find((r) => r.id === where.id);

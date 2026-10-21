@@ -4,7 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import type { ModelPrice } from '@prisma/client';
+import type { ModelConfig } from '@prisma/client';
 import type {
   AdminModelPriceDto,
   AdminModelProviderDto,
@@ -52,7 +52,7 @@ function modelName(raw: unknown): string {
   return raw.trim();
 }
 
-function toDto(row: ModelPrice): AdminModelPriceDto {
+function toDto(row: ModelConfig): AdminModelPriceDto {
   return {
     model: row.model,
     inputMilliCreditsPer1k: row.inputMilliCreditsPer1k,
@@ -70,7 +70,7 @@ export class AdminModelsService {
   ) {}
 
   async catalog(): Promise<AdminModelsDto> {
-    const rows = await this.prisma.modelPrice.findMany({ orderBy: { model: 'asc' } });
+    const rows = await this.prisma.modelConfig.findMany({ orderBy: { model: 'asc' } });
     return { providers: listProviders(process.env), prices: rows.map(toDto) };
   }
 
@@ -84,7 +84,7 @@ export class AdminModelsService {
 
     try {
       const row = await this.prisma.$transaction(async (tx) => {
-        const created = await tx.modelPrice.create({
+        const created = await tx.modelConfig.create({
           data: { model, inputMilliCreditsPer1k: input, outputMilliCreditsPer1k: output },
         });
         await this.audit.write(tx, actor, {
@@ -115,7 +115,7 @@ export class AdminModelsService {
     try {
       const row = await this.prisma.$transaction(async (tx) => {
         // before 快照与更新同事务读取，避免审计记录与实际变更不一致。
-        const before = await tx.modelPrice.findUnique({ where: { model: name } });
+        const before = await tx.modelConfig.findUnique({ where: { model: name } });
         if (!before) throw new NotFoundException('model_price_not_found');
 
         const data: { inputMilliCreditsPer1k?: number; outputMilliCreditsPer1k?: number } = {};
@@ -127,7 +127,7 @@ export class AdminModelsService {
         }
         if (Object.keys(data).length === 0) throw new BadRequestException('invalid_patch');
 
-        const updated = await tx.modelPrice.update({ where: { model: name }, data });
+        const updated = await tx.modelConfig.update({ where: { model: name }, data });
         await this.audit.write(tx, actor, {
           action: 'modelPrice.update',
           targetType: 'modelPrice',
@@ -172,7 +172,7 @@ export class AdminModelsService {
         });
         if (subscribed) throw new BadRequestException('model_in_use');
 
-        await tx.modelPrice.delete({ where: { model: name } });
+        await tx.modelConfig.delete({ where: { model: name } });
         await this.audit.write(tx, actor, {
           action: 'modelPrice.delete',
           targetType: 'modelPrice',

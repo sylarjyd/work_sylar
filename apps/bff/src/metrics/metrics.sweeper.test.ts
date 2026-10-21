@@ -53,7 +53,7 @@ function makePrisma(runs: SeedRun[] = []) {
     },
     usageRecord: { findMany: async () => [] },
     step: { findMany: async () => [] },
-    modelPrice: { findMany: async () => [] },
+    modelConfig: { findMany: async () => [] },
     metricBucket: {
       upsert: async (args: any) => {
         upserts.push(args);

@@ -5,8 +5,8 @@ import { SessionsService } from './sessions.service';
 import type { PrismaService } from '../db/prisma.service';
 
 const all = [
-  { id: 's1', tenantId: 't1', userId: 'u1', title: 'active', status: 'active', createdAt: new Date() },
-  { id: 's2', tenantId: 't1', userId: 'u1', title: 'archived', status: 'archived', createdAt: new Date() },
+  { id: 's1', tenantId: 't1', userId: 'u1', title: 'active', status: 'active', model: null, createdAt: new Date() },
+  { id: 's2', tenantId: 't1', userId: 'u1', title: 'archived', status: 'archived', model: null, createdAt: new Date() },
 ];
 
 function makeService() {

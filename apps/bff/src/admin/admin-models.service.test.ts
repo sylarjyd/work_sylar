@@ -14,7 +14,7 @@ function makeService(inUse = false, activeSubInUse = false) {
   ]);
   const audits: unknown[] = [];
   const db = {
-    modelPrice: {
+    modelConfig: {
       findMany: async () => [...prices.values()],
       findUnique: async ({ where }: { where: { model: string } }) => prices.get(where.model) ?? null,
       create: async ({ data }: { data: { model: string; inputMilliCreditsPer1k: number; outputMilliCreditsPer1k: number } }) => {
