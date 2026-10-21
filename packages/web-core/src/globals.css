@@ -2188,3 +2188,181 @@ a {
   color: var(--amber-ink);
   background: var(--amber-soft);
 }
+
+/* ============================ 工作台成果抽屉 ============================ */
+
+.wb-drawer-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.wb-drawer-layer.open {
+  visibility: visible;
+  pointer-events: auto;
+}
+
+.wb-drawer-backdrop {
+  position: absolute;
+  inset: 0;
+  background: transparent;
+}
+
+.wb-drawer {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  bottom: 16px;
+  display: flex;
+  flex-direction: column;
+  width: 360px;
+  background: #fff;
+  border: 1px solid var(--wb-line);
+  border-radius: 16px;
+  box-shadow: var(--shadow-2);
+  opacity: 0;
+  transform: translateX(12px);
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+
+.wb-drawer-layer.open .wb-drawer {
+  opacity: 1;
+  transform: none;
+}
+
+.wb-drawer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 16px 12px;
+  border-bottom: 1px solid var(--wb-line);
+}
+
+.wb-drawer-title {
+  font-size: 15px;
+  font-weight: 650;
+  color: var(--wb-ink);
+}
+
+.wb-drawer-sub {
+  margin-top: 2px;
+  font-size: 11.5px;
+  color: var(--wb-ink-3);
+}
+
+.wb-drawer-body {
+  flex: 1;
+  min-height: 0;
+  padding: 14px;
+  overflow-y: auto;
+}
+
+.wb-drawer-empty {
+  padding: 24px 16px;
+  font-size: 12.5px;
+  color: var(--wb-ink-3);
+  text-align: center;
+  border: 1px dashed var(--wb-line-strong);
+  border-radius: 12px;
+}
+
+.wb-artifact-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.wb-artifact-card {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 12px;
+  background: #fff;
+  border: 1px solid var(--wb-line);
+  border-radius: 12px;
+}
+
+.wb-artifact-icon {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: #fff;
+  border-radius: 9px;
+  background: #6b6b6b;
+}
+
+.wb-artifact-icon.docx {
+  background: #2f6fed;
+}
+
+.wb-artifact-icon.xlsx {
+  background: #1f9d55;
+}
+
+.wb-artifact-icon.pptx {
+  background: #e06a2b;
+}
+
+.wb-artifact-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.wb-artifact-name {
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.35;
+  word-break: break-all;
+  color: var(--wb-ink);
+}
+
+.wb-artifact-meta {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--wb-ink-3);
+}
+
+.wb-download {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 7px;
+  padding: 4px 9px;
+  font-size: 12px;
+  color: var(--wb-ink);
+  background: #fff;
+  border: 1px solid var(--wb-line-strong);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.wb-download:hover {
+  background: var(--wb-hover);
+}
+
+@media (max-width: 760px) {
+  .wb-drawer-backdrop {
+    background: rgba(0, 0, 0, 0.24);
+  }
+
+  .wb-drawer {
+    top: 12px;
+    right: 12px;
+    bottom: 12px;
+    left: 12px;
+    width: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wb-drawer {
+    transition: none;
+  }
+}
