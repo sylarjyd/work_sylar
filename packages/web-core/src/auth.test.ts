@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { clearToken, getEmail, getRole, getToken, login, register } from './auth';
+import { clearToken, fetchMe, getEmail, getRole, getToken, login, register } from './auth';
 
 function createStorage(): Storage {
   const map = new Map<string, string>();
@@ -38,6 +38,37 @@ describe('登录态存储', () => {
     expect(getToken()).toBeNull();
     expect(getRole()).toBeNull();
     expect(getEmail()).toBeNull();
+  });
+
+  it('fetchMe 用 token 拉取身份并回填 role / email', async () => {
+    window.localStorage.setItem('ai_office_token', 't');
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ id: 'u1', email: 'demo@example.com', role: 'admin' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const user = await fetchMe();
+
+    expect(user).toEqual({ id: 'u1', email: 'demo@example.com', role: 'admin' });
+    expect(getEmail()).toBe('demo@example.com');
+    expect(getRole()).toBe('admin');
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/api/auth/me'),
+      expect.objectContaining({
+        headers: expect.objectContaining({ authorization: 'Bearer t' }),
+      }),
+    );
+  });
+
+  it('fetchMe 返回 401 时清空登录态并抛出 unauthorized', async () => {
+    window.localStorage.setItem('ai_office_token', 't');
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 401 })));
+
+    await expect(fetchMe()).rejects.toThrow('unauthorized');
+    expect(getToken()).toBeNull();
   });
 
   it.each([

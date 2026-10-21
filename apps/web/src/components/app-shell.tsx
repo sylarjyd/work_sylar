@@ -11,7 +11,7 @@ import {
   type ReactNode,
 } from 'react';
 import type { SessionSummary } from '@ai-office/shared';
-import { clearToken, getEmail, getRole } from '../lib/api';
+import { clearToken, fetchMe, getEmail, getRole, getToken, isUnauthorized } from '../lib/api';
 import { relativeTime } from '../lib/format';
 import { filterSessions } from '../lib/session-filter';
 import {
@@ -71,9 +71,26 @@ export function AppShell({
   const searchButtonRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
-    setRole(getRole() ?? '');
-    setEmail(getEmail() ?? '');
-  }, []);
+    const cachedRole = getRole() ?? '';
+    const cachedEmail = getEmail() ?? '';
+    setRole(cachedRole);
+    setEmail(cachedEmail);
+    // 早先签发的 token 没有邮箱缓存：用 /me 回填，避免用户区一直显示「?」。
+    if (cachedEmail || !getToken()) return;
+    let cancelled = false;
+    fetchMe()
+      .then((user) => {
+        if (cancelled) return;
+        setRole(user.role);
+        setEmail(user.email);
+      })
+      .catch((err) => {
+        if (!cancelled && isUnauthorized(err)) router.replace('/login');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [router]);
 
   // 折叠状态挂载后读取，避免服务端渲染与水合结果不一致；
   // 没有手动选择时，窄屏默认收起，用户手动展开后以手动选择为准。

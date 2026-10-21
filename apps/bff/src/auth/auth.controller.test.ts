@@ -21,6 +21,8 @@ const fakePrisma = {
   user: {
     findFirst: async ({ where }: { where: { email: { equals: string } } }) =>
       users.get(where.email.equals.toLowerCase()) ?? null,
+    findUnique: async ({ where }: { where: { id: string } }) =>
+      [...users.values()].find((u) => u.id === where.id) ?? null,
     create: async ({ data }: { data: { email: string; passwordHash: string; role: string } }) => {
       const row = { id: `u${users.size + 1}`, tenantId: `t${users.size + 1}`, status: 'active', ...data };
       users.set(data.email, row);
@@ -171,5 +173,31 @@ describe('AuthController', () => {
       payload: { email: 42, password: 'pw123456' },
     });
     expect(res.statusCode).toBe(400);
+  });
+
+  it('GET /api/auth/me 返回当前用户身份（供存量 token 回填邮箱）', async () => {
+    await seedUser('a@b.com', 'pw123456');
+    const login = await app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      payload: { email: 'a@b.com', password: 'pw123456' },
+    });
+    const token = JSON.parse(login.payload).token as string;
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/auth/me',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.payload)).toEqual({
+      id: users.get('a@b.com')!.id,
+      email: 'a@b.com',
+      role: 'member',
+    });
+  });
+
+  it('GET /api/auth/me 缺少 token 返回 401', async () => {
+    const res = await app.inject({ method: 'GET', url: '/api/auth/me' });
+    expect(res.statusCode).toBe(401);
   });
 });

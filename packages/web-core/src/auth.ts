@@ -1,4 +1,4 @@
-import type { AuthResponse } from '@ai-office/shared';
+import type { AuthResponse, AuthUser } from '@ai-office/shared';
 import { newRequestId, newTraceparent } from './trace';
 
 /**
@@ -113,4 +113,18 @@ export async function login(email: string, password: string): Promise<AuthRespon
   setRole(data.user.role);
   setEmail(data.user.email);
   return data;
+}
+
+/**
+ * 用当前 token 拉取并回填身份信息。
+ * 早先签发的 token 不含邮箱，登录后首次打开页面调用本函数补齐本地缓存。
+ * 401 由 authFetch 统一清除登录态并抛出 unauthorized。
+ */
+export async function fetchMe(): Promise<AuthUser> {
+  const res = await authFetch('/api/auth/me');
+  if (!res.ok) throw new Error(`me_failed_${res.status}`);
+  const user = (await res.json()) as AuthUser;
+  setRole(user.role);
+  setEmail(user.email);
+  return user;
 }
