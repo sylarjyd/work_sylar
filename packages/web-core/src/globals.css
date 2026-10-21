@@ -2800,6 +2800,12 @@ a {
     margin: 0 0 0 auto;
   }
 
+  /* 顶部横栏下自动收起也保持单行，否则头像与退出按钮上下堆叠，把顶栏撑高一倍。 */
+  .wb-shell.sidebar-collapsed .wb-user {
+    flex-direction: row;
+    gap: 8px;
+  }
+
   .wb-main {
     height: auto;
     overflow: visible;
