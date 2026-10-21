@@ -68,6 +68,7 @@ export function AppShell({
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState('');
   const searchRef = useRef<HTMLInputElement>(null);
+  const searchButtonRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     setRole(getRole() ?? '');
@@ -108,17 +109,17 @@ export function AppShell({
   function toggleSearch() {
     // 窄屏自动收起时点击搜索，视为用户手动展开：显式落盘，优先于自动规则。
     if (collapsed) persistCollapsed(false);
-    setSearchOpen((prev) => {
-      const next = !prev;
-      if (!next) setQuery('');
-      return next;
-    });
+    const next = !searchOpen;
+    setSearchOpen(next);
+    if (!next) setQuery('');
   }
 
   function onSearchKeyDown(e: KeyboardEvent<HTMLInputElement>) {
     if (e.key === 'Escape') {
       setSearchOpen(false);
       setQuery('');
+      // 输入框卸载后焦点会掉到 body，显式还给触发它的搜索按钮。
+      searchButtonRef.current?.focus();
     }
   }
 
@@ -131,7 +132,7 @@ export function AppShell({
 
   return (
     <div className={`shell wb-shell${collapsed ? ' sidebar-collapsed' : ''}`}>
-      <aside className={`sidebar wb-sidebar${collapsed ? ' collapsed' : ''}`} aria-label="侧栏">
+      <aside id="wb-sidebar" className="sidebar wb-sidebar" aria-label="侧栏">
         <div className="wb-side-head">
           <div className="wb-brand">
             <div className="wb-brand-mark">
@@ -145,27 +146,34 @@ export function AppShell({
               className="wb-icon-btn wb-collapse-btn"
               onClick={toggleCollapsed}
               aria-label={collapsed ? '展开侧栏' : '收起侧栏'}
+              aria-controls="wb-sidebar"
+              aria-expanded={!collapsed}
               title={collapsed ? '展开侧栏' : '收起侧栏'}
             >
               <IconSidebar size={16} />
             </button>
-            <button
-              type="button"
-              className={`wb-icon-btn wb-search-btn${searchOpen ? ' active' : ''}`}
-              onClick={toggleSearch}
-              aria-label="搜索会话"
-              aria-expanded={searchOpen}
-              title="搜索会话"
-            >
-              <IconSearch size={16} />
-            </button>
+            {sessions !== undefined && (
+              <button
+                ref={searchButtonRef}
+                type="button"
+                className={`wb-icon-btn wb-search-btn${searchOpen ? ' active' : ''}`}
+                onClick={toggleSearch}
+                aria-label="搜索会话"
+                aria-controls="wb-session-search"
+                aria-expanded={searchOpen}
+                title="搜索会话"
+              >
+                <IconSearch size={16} />
+              </button>
+            )}
           </div>
         </div>
 
-        {!collapsed && searchOpen && (
+        {sessions !== undefined && !collapsed && searchOpen && (
           <div className="wb-search">
             <IconSearch size={14} />
             <input
+              id="wb-session-search"
               ref={searchRef}
               value={query}
               onChange={(e) => setQuery(e.target.value)}
@@ -238,6 +246,7 @@ export function AppShell({
                     key={s.id}
                     type="button"
                     className={`wb-session${s.id === sessionId ? ' active' : ''}`}
+                    aria-current={s.id === sessionId ? 'true' : undefined}
                     onClick={() => onSelectSession?.(s.id)}
                     disabled={sessionDisabled}
                     title={s.title}
