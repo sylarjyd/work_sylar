@@ -2197,11 +2197,13 @@ a {
   z-index: 40;
   visibility: hidden;
   pointer-events: none;
+  transition: visibility 0s linear 0.18s;
 }
 
 .wb-drawer-layer.open {
   visibility: visible;
   pointer-events: auto;
+  transition-delay: 0s;
 }
 
 .wb-drawer-backdrop {
@@ -2249,7 +2251,7 @@ a {
 .wb-drawer-sub {
   margin-top: 2px;
   font-size: 11.5px;
-  color: var(--wb-ink-3);
+  color: var(--wb-ink-2);
 }
 
 .wb-drawer-body {
@@ -2257,12 +2259,13 @@ a {
   min-height: 0;
   padding: 14px;
   overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .wb-drawer-empty {
   padding: 24px 16px;
   font-size: 12.5px;
-  color: var(--wb-ink-3);
+  color: var(--wb-ink-2);
   text-align: center;
   border: 1px dashed var(--wb-line-strong);
   border-radius: 12px;
@@ -2303,11 +2306,11 @@ a {
 }
 
 .wb-artifact-icon.xlsx {
-  background: #1f9d55;
+  background: #16713f;
 }
 
 .wb-artifact-icon.pptx {
-  background: #e06a2b;
+  background: #b24a12;
 }
 
 .wb-artifact-main {
@@ -2326,7 +2329,7 @@ a {
 .wb-artifact-meta {
   margin-top: 2px;
   font-size: 11px;
-  color: var(--wb-ink-3);
+  color: var(--wb-ink-2);
 }
 
 .wb-download {
@@ -2362,6 +2365,10 @@ a {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .wb-drawer-layer {
+    transition: none;
+  }
+
   .wb-drawer {
     transition: none;
   }

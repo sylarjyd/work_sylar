@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import type { ArtifactDto } from '@ai-office/shared';
 import { formatBytes } from '../lib/format';
 import { IconDownload, IconX } from './icons';
@@ -14,35 +14,54 @@ interface ArtifactDrawerProps {
 
 export function ArtifactDrawer({ open, artifacts, onClose, onDownload }: ArtifactDrawerProps) {
   const closeRef = useRef<HTMLButtonElement>(null);
+  const drawerRef = useRef<HTMLElement>(null);
   const restoreRef = useRef<HTMLElement | null>(null);
   const onCloseRef = useRef(onClose);
-  const [narrow, setNarrow] = useState(false);
 
   useEffect(() => {
     onCloseRef.current = onClose;
   }, [onClose]);
 
-  // aria-modal 只在窄屏（带遮罩）时生效，避免把桌面端非模态抽屉误报为模态。
-  useEffect(() => {
-    const mq = window.matchMedia('(max-width: 760px)');
-    const update = () => setNarrow(mq.matches);
-    update();
-    mq.addEventListener('change', update);
-    return () => mq.removeEventListener('change', update);
-  }, []);
-
   useEffect(() => {
     if (!open) return;
     restoreRef.current = document.activeElement as HTMLElement | null;
     closeRef.current?.focus();
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
 
     function onKeyDown(e: KeyboardEvent) {
-      if (e.key === 'Escape') onCloseRef.current();
+      if (e.key === 'Escape') {
+        onCloseRef.current();
+        return;
+      }
+      if (e.key !== 'Tab') return;
+      const root = drawerRef.current;
+      if (!root) return;
+      const focusables = root.querySelectorAll<HTMLElement>(
+        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+      );
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      if (!first || !last) {
+        e.preventDefault();
+        return;
+      }
+      if (!root.contains(document.activeElement)) {
+        e.preventDefault();
+        first.focus();
+      } else if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
     }
     document.addEventListener('keydown', onKeyDown);
     return () => {
       document.removeEventListener('keydown', onKeyDown);
-      restoreRef.current?.focus();
+      document.body.style.overflow = prevOverflow;
+      if (restoreRef.current?.isConnected) restoreRef.current.focus();
     };
   }, [open]);
 
@@ -50,10 +69,11 @@ export function ArtifactDrawer({ open, artifacts, onClose, onDownload }: Artifac
     <div className={`wb-drawer-layer${open ? ' open' : ''}`} aria-hidden={!open} inert={!open}>
       <div className="wb-drawer-backdrop" onClick={onClose} />
       <aside
+        ref={drawerRef}
         className="wb-drawer"
         role="dialog"
         aria-label="成果"
-        aria-modal={narrow ? true : undefined}
+        aria-modal={open ? true : undefined}
       >
         <header className="wb-drawer-head">
           <div>
