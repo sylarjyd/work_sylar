@@ -407,6 +407,12 @@ export interface AdminModelProviderDto {
   models: string[];
 }
 
+/** 环境变量兜底 provider（仅管理端展示，不含 baseUrl/密钥）。 */
+export interface AdminLegacyProviderDto {
+  name: string;
+  models: string[];
+}
+
 export interface AdminModelPriceDto extends ModelPriceDto {
   model: string;
   updatedAt: string;
