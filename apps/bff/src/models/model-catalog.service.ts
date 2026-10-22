@@ -1,0 +1,174 @@
+import { Injectable, Logger } from '@nestjs/common';
+import type { ClientModelDto, ClientModelsDto, RunModelRoute } from '@ai-office/shared';
+import { PrismaService } from '../db/prisma.service';
+import { BillingService } from '../billing/billing.service';
+import { decryptSecret } from '../secrets/secret-box';
+import { DEFAULT_MODEL_SETTING_KEY, MODEL_ENC_KEY } from './model.constants';
+import { parseEnvModelProviders } from './env-providers';
+import {
+  ModelPlanExpiredError,
+  ModelProviderUnavailableError,
+  ModelUnavailableError,
+  NoModelsAvailableError,
+} from './model.errors';
+
+type ModelSource =
+  | { kind: 'db'; providerId: string; baseUrl: string; apiKeyEnc: string }
+  | { kind: 'env'; baseUrl: string; apiKey: string }
+  | { kind: 'mock' };
+
+export interface AvailableModel {
+  model: string;
+  displayName: string;
+  providerName: string;
+  sortOrder: number;
+  source: ModelSource;
+}
+
+export interface AvailableModels {
+  models: AvailableModel[];
+  defaultModel: string | null;
+}
+
+export interface RunModelResolution {
+  selectedModel: string;
+  modelRoutes: RunModelRoute[];
+}
+
+/**
+ * 模型目录：把「全局启用模型」与「当前套餐 allowedModels」取交集。
+ * 运营端已配置任何厂商时完全以数据库为准；否则回退环境变量，兼容存量部署。
+ */
+@Injectable()
+export class ModelCatalogService {
+  private readonly logger = new Logger(ModelCatalogService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly billing: BillingService,
+  ) {}
+
+  async available(tenantId: string): Promise<AvailableModels> {
+    const { plan, sub } = await this.billing.ensureSubscription(tenantId);
+    if (sub.status !== 'active' || sub.periodEnd.getTime() <= Date.now()) {
+      throw new ModelPlanExpiredError();
+    }
+    const providerCount = await this.prisma.modelProvider.count();
+    const models =
+      providerCount > 0 ? await this.loadDb(plan.allowedModels) : this.loadEnv(plan.allowedModels);
+    const stored = await this.readDefaultModel();
+    const defaultModel =
+      stored && models.some((m) => m.model === stored) ? stored : (models[0]?.model ?? null);
+    return { models, defaultModel };
+  }
+
+  /** 客户端可见列表：绝不包含 baseUrl、密钥、providerId。 */
+  async listForClient(tenantId: string): Promise<ClientModelsDto> {
+    const { models, defaultModel } = await this.available(tenantId);
+    const out: ClientModelDto[] = models.map((m) => ({
+      model: m.model,
+      displayName: m.displayName,
+      providerName: m.providerName,
+    }));
+    return { models: out, defaultModel };
+  }
+
+  /**
+   * 运行前解析：校验会话模型仍然可用，解密所有可用厂商的 Key，
+   * 并把选中模型排到路由第一位，供 runtime 回退时按运营端排序尝试。
+   */
+  async resolveForRun(tenantId: string, sessionModel: string | null): Promise<RunModelResolution> {
+    const { models, defaultModel } = await this.available(tenantId);
+    if (models.length === 0) throw new NoModelsAvailableError();
+    const selected = sessionModel ?? defaultModel ?? models[0].model;
+    const selectedEntry = models.find((m) => m.model === selected);
+    if (!selectedEntry) throw new ModelUnavailableError();
+
+    const ordered = [selectedEntry, ...models.filter((m) => m.model !== selected)];
+    const routes: RunModelRoute[] = [];
+    const keyCache = new Map<string, string>();
+    for (const entry of ordered) {
+      if (entry.source.kind === 'mock') continue;
+      if (entry.source.kind === 'env') {
+        routes.push({
+          model: entry.model,
+          baseUrl: entry.source.baseUrl,
+          apiKey: entry.source.apiKey,
+        });
+        continue;
+      }
+      try {
+        let apiKey = keyCache.get(entry.source.providerId);
+        if (apiKey === undefined) {
+          apiKey = decryptSecret(entry.source.apiKeyEnc, MODEL_ENC_KEY);
+          keyCache.set(entry.source.providerId, apiKey);
+        }
+        routes.push({ model: entry.model, baseUrl: entry.source.baseUrl, apiKey });
+      } catch {
+        // 单把密钥损坏只影响该厂商；选中的模型不可用时整体失败，避免静默换厂商。
+        if (entry.model === selected) {
+          this.logger.error(`模型 ${selected} 的厂商密钥无法解密`);
+          throw new ModelProviderUnavailableError();
+        }
+        this.logger.warn(`跳过厂商 ${entry.source.providerId} 的模型 ${entry.model}：密钥无法解密`);
+      }
+    }
+    return { selectedModel: selected, modelRoutes: routes };
+  }
+
+  private async loadDb(allowed: string[]): Promise<AvailableModel[]> {
+    const rows = await this.prisma.modelConfig.findMany({
+      where: { enabled: true, providerId: { not: null } },
+      include: { provider: true },
+      orderBy: [{ sortOrder: 'asc' }, { model: 'asc' }],
+    });
+    return rows.flatMap((row) => {
+      const provider = row.provider;
+      if (!provider || !allowed.includes(row.model)) return [];
+      return [
+        {
+          model: row.model,
+          displayName: row.displayName ?? row.model,
+          providerName: provider.name,
+          sortOrder: row.sortOrder,
+          source: {
+            kind: 'db' as const,
+            providerId: provider.id,
+            baseUrl: provider.baseUrl,
+            apiKeyEnc: provider.apiKeyEnc,
+          },
+        },
+      ];
+    });
+  }
+
+  private loadEnv(allowed: string[]): AvailableModel[] {
+    const configured = parseEnvModelProviders(process.env).filter(
+      (p) => p.apiKey !== '' && allowed.includes(p.model),
+    );
+    if (configured.length > 0) {
+      return configured.map((p) => ({
+        model: p.model,
+        displayName: p.model,
+        providerName: '环境变量',
+        sortOrder: 0,
+        source: { kind: 'env' as const, baseUrl: p.baseUrl, apiKey: p.apiKey },
+      }));
+    }
+    // 无任何可用密钥：runtime 会回退 MockGateway，仍展示套餐模型供本地/CI 验证链路。
+    return allowed.map((model) => ({
+      model,
+      displayName: model,
+      providerName: '环境变量',
+      sortOrder: 0,
+      source: { kind: 'mock' as const },
+    }));
+  }
+
+  private async readDefaultModel(): Promise<string | null> {
+    const row = await this.prisma.setting.findUnique({
+      where: { key: DEFAULT_MODEL_SETTING_KEY },
+    });
+    return typeof row?.value === 'string' && row.value !== '' ? row.value : null;
+  }
+}

@@ -16,6 +16,7 @@ import { ARTIFACT_STORAGE, createArtifactStorage } from './artifacts/storage';
 import { KbModule } from './kb/kb.module';
 import { ConnectorModule } from './connector/connector.module';
 import { BillingModule } from './billing/billing.module';
+import { ModelsModule } from './models/models.module';
 import { AdminModule } from './admin/admin.module';
 import { SettingsModule } from './settings/settings.module';
 
@@ -26,6 +27,7 @@ import { SettingsModule } from './settings/settings.module';
     PrismaModule,
     MetricsModule,
     BillingModule,
+    ModelsModule,
     KbModule,
     ConnectorModule,
     SettingsModule,
