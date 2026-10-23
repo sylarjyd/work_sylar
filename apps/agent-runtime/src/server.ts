@@ -176,6 +176,10 @@ export function createRuntimeServer(deps: RuntimeDeps = {}): Server {
           'cache-control': 'no-cache',
           connection: 'keep-alive',
         });
+        // 立即下发响应头：Node 默认要等第一次写 body 才发送头部，而首个模型事件
+        // 可能要等十几秒（多模态/长思考）。BFF 的 10s 建连超时只应约束建连，
+        // 不 flush 会让「等待首 token」被误判为上游不可达并中断整个运行。
+        res.flushHeaders();
 
         // 只放稳定 ID；prompt、消息与工具参数不进 span。
         const runAttributes: Record<string, string> = { 'run.id': runReq.runId };
@@ -191,10 +195,17 @@ export function createRuntimeServer(deps: RuntimeDeps = {}): Server {
         const spanContext = trace.setSpan(parent, runSpan);
         const runStartedAt = Date.now();
         let finalized = false;
+        // 推理期间可能长时间没有任何事件：定期发 SSE 注释帧保活，避免中间代理
+        // 或 BFF 的空闲超时把仍在正常工作（只是在等模型）的长连接当成卡死断开。
+        const heartbeat = setInterval(() => {
+          if (!res.writableEnded && !res.destroyed) res.write(': ping\n\n');
+        }, 15_000);
+        heartbeat.unref?.();
         // SSE 断开即视为运行结束：同步收尾 span 与活跃计数，避免长连接泄漏。
         const finalizeRun = (ok: boolean, err?: unknown): void => {
           if (finalized) return;
           finalized = true;
+          clearInterval(heartbeat);
           endSpan(runSpan, ok, err);
           metrics.runFinished();
           const fields = {

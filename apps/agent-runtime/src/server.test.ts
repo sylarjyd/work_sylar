@@ -99,6 +99,49 @@ describe('runtime server', () => {
     expect(messages.map((m) => m.event)).toEqual(['step', 'step', 'step', 'step', 'usage', 'done']);
   });
 
+  it('首个模型事件较慢时也先下发 SSE 响应头，避免被建连超时中断', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const slow: ModelGateway = {
+      async chat() {
+        await gate;
+        return { content: '完成', toolCalls: [], usage: { input: 1, output: 1 }, model: 'mock' };
+      },
+    };
+    const slowServer = createRuntimeServer({ gateway: slow, tools: [] });
+    await new Promise<void>((resolve) => slowServer.listen(0, resolve));
+    const addr = slowServer.address();
+    if (!addr || typeof addr === 'string') throw new Error('no port');
+    try {
+      const pending = fetch(`http://127.0.0.1:${addr.port}/runs`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          runId: 'slow',
+          sessionId: 's1',
+          goal: 'g',
+          messages: [{ role: 'user', content: 'g' }],
+        }),
+      });
+      // 此时模型还没有返回任何事件；响应头仍必须立即到达，
+      // 否则 BFF 的 10s 建连超时会把「等待首 token」当成上游不可达。
+      const res = await Promise.race([
+        pending,
+        new Promise<never>((_, reject) => {
+          const timer = setTimeout(() => reject(new Error('headers_not_flushed')), 2000);
+          timer.unref();
+        }),
+      ]);
+      expect(res.status).toBe(200);
+      expect(res.headers.get('content-type')).toContain('text/event-stream');
+      release();
+      expect(await res.text()).toContain('event: done');
+    } finally {
+      release();
+      await new Promise<void>((resolve) => slowServer.close(() => resolve()));
+    }
+  });
+
   it('非法 JSON 返回 400', async () => {
     const res = await fetch(`${baseUrl}/runs`, {
       method: 'POST',
