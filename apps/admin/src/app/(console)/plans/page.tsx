@@ -11,6 +11,7 @@ import type {
 import {
   adminErrorText,
   createAdminPlan,
+  deleteAdminPlan,
   getAdminModels,
   isForbidden,
   listAdminPlans,
@@ -40,6 +41,9 @@ export default function AdminPlansPage() {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [loading, setLoading] = useState(true);
+  // 删除是危险操作：选中后必须手动输入套餐标识才能提交。
+  const [deleting, setDeleting] = useState<AdminPlanDto | null>(null);
+  const [confirmId, setConfirmId] = useState('');
 
   const handleErr = useCallback(
     (err: unknown): boolean => {
@@ -175,6 +179,45 @@ export default function AdminPlansPage() {
     }
   }
 
+  function startDelete(plan: AdminPlanDto) {
+    setDeleting(plan);
+    setConfirmId('');
+    setError('');
+    setNotice('');
+  }
+
+  function cancelDelete() {
+    setDeleting(null);
+    setConfirmId('');
+  }
+
+  async function confirmDelete() {
+    if (!deleting || inFlight.current) return;
+    if (confirmId.trim() !== deleting.id) {
+      setError('请输入完整且一致的套餐标识后再删除');
+      return;
+    }
+    inFlight.current = true;
+    setBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      await deleteAdminPlan(deleting.id, { confirmId: confirmId.trim() });
+      // 表单若正编辑该套餐，需重置，避免后续保存时对已删除的主键发更新。
+      if (editing === deleting.id) resetForm();
+      setDeleting(null);
+      setConfirmId('');
+      setNotice('操作已成功，正在刷新数据…');
+      const ok = await loadRef.current();
+      setNotice(ok ? '操作已成功。' : '操作已成功，但数据刷新失败，请勿重复提交；稍后可刷新页面确认。');
+    } catch (err) {
+      handleErr(err);
+    } finally {
+      inFlight.current = false;
+      setBusy(false);
+    }
+  }
+
   async function deactivate(plan: AdminPlanDto) {
     if (inFlight.current) return;
     if (!window.confirm(`确认停用套餐 ${plan.name}？`)) return;
@@ -186,6 +229,7 @@ export default function AdminPlansPage() {
       await updateAdminPlan(plan.id, { active: false });
       // 表单若正编辑该套餐，需重置，避免残留的 active: true 在后续保存时把套餐重新启用
       if (editing === plan.id) resetForm();
+      if (deleting?.id === plan.id) cancelDelete();
       setNotice('操作已成功，正在刷新数据…');
       const ok = await loadRef.current();
       setNotice(ok ? '操作已成功。' : '操作已成功，但数据刷新失败，请勿重复提交；稍后可刷新页面确认。');
@@ -203,7 +247,9 @@ export default function AdminPlansPage() {
         <header className="page-head">
           <div>
             <h1 className="page-title">套餐目录</h1>
-            <p className="page-sub">停用代替删除；免费套餐不可停用。</p>
+            <p className="page-sub">
+              停用用于暂时下线；删除不可恢复，需手动输入套餐标识确认。免费套餐不可停用或删除。
+            </p>
           </div>
         </header>
 
@@ -221,6 +267,45 @@ export default function AdminPlansPage() {
           >
             {notice}
           </div>
+        )}
+
+        {deleting && (
+          <section className="admin-panel" style={{ borderColor: 'var(--danger)' }}>
+            <h2 className="billing-heading">
+              删除套餐 {deleting.name}（{deleting.id}）
+            </h2>
+            <p className="page-sub" style={{ marginBottom: 12 }}>
+              删除后不可恢复，且该套餐下不能存在租户订阅。请输入套餐标识{' '}
+              <strong>{deleting.id}</strong> 以确认。
+            </p>
+            <div className="admin-form">
+              <label className="admin-field">
+                套餐标识
+                <input
+                  className="admin-input"
+                  value={confirmId}
+                  placeholder={deleting.id}
+                  disabled={busy}
+                  autoFocus
+                  onChange={(e) => setConfirmId(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') void confirmDelete();
+                  }}
+                />
+              </label>
+              <button
+                type="button"
+                className="admin-btn danger"
+                disabled={busy || confirmId.trim() !== deleting.id}
+                onClick={() => void confirmDelete()}
+              >
+                确认删除
+              </button>
+              <button type="button" className="admin-btn" disabled={busy} onClick={cancelDelete}>
+                取消
+              </button>
+            </div>
+          </section>
         )}
 
         <section className="admin-panel">
@@ -353,6 +438,15 @@ export default function AdminPlansPage() {
                       onClick={() => void deactivate(p)}
                     >
                       停用
+                    </button>{' '}
+                    <button
+                      type="button"
+                      className="admin-btn danger"
+                      disabled={busy || p.id === 'free'}
+                      title={p.id === 'free' ? '免费套餐是注册默认套餐，不能删除' : undefined}
+                      onClick={() => startDelete(p)}
+                    >
+                      删除
                     </button>
                   </td>
                 </tr>

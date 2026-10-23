@@ -14,7 +14,7 @@ type PlanRow = {
   allowedModels: string[]; active: boolean; createdAt: Date;
 };
 
-function makeService(prices = ['m1']) {
+function makeService(prices = ['m1'], subscriptions: Record<string, number> = {}) {
   const plans = new Map<string, PlanRow>();
   plans.set('free', {
     id: 'free', name: '免费版', priceCents: 0, monthlyBaseCredits: 100,
@@ -43,6 +43,15 @@ function makeService(prices = ['m1']) {
         plans.set(where.id, next);
         return next;
       },
+      delete: async ({ where }: { where: { id: string } }) => {
+        const row = plans.get(where.id);
+        if (!row) throw Object.assign(new Error('not found'), { code: 'P2025' });
+        plans.delete(where.id);
+        return row;
+      },
+    },
+    subscription: {
+      count: async ({ where }: { where: { planId: string } }) => subscriptions[where.planId] ?? 0,
     },
     // 模拟 SELECT ... FOR UPDATE：Prisma.join 的 Sql 片段里带有待校验的模型名。
     $queryRaw: async (_strings: TemplateStringsArray, ...values: unknown[]) => {
@@ -141,5 +150,49 @@ describe('AdminPlansService', () => {
   it('不存在抛 404', async () => {
     const { svc } = makeService();
     await expect(svc.update('nope', { name: 'x' }, actor)).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('删除必须回传一致的标识', async () => {
+    const { svc } = makeService();
+    await expect(svc.remove('legacy', { confirmId: '' }, actor)).rejects.toMatchObject({
+      message: 'confirm_mismatch',
+    });
+    await expect(svc.remove('legacy', { confirmId: 'free' }, actor)).rejects.toMatchObject({
+      message: 'confirm_mismatch',
+    });
+  });
+
+  it('free 不可删除', async () => {
+    const { svc } = makeService();
+    await expect(svc.remove('free', { confirmId: 'free' }, actor)).rejects.toMatchObject({
+      message: 'free_not_deletable',
+    });
+  });
+
+  it('有订阅的套餐不可删除', async () => {
+    const { svc, audits } = makeService(['m1'], { legacy: 2 });
+    await expect(svc.remove('legacy', { confirmId: 'legacy' }, actor)).rejects.toBeInstanceOf(
+      ConflictException,
+    );
+    expect(audits).toHaveLength(0);
+  });
+
+  it('删除成功并写 plan.delete 审计快照', async () => {
+    const { svc, audits } = makeService();
+    await svc.remove('legacy', { confirmId: 'legacy' }, actor);
+    expect(audits[0]).toMatchObject({
+      action: 'plan.delete',
+      targetType: 'plan',
+      targetId: 'legacy',
+      summary: { before: { id: 'legacy', name: '旧版' } },
+    });
+    expect((await svc.listAll()).map((p) => p.id)).toEqual(['free']);
+  });
+
+  it('删除不存在的套餐抛 404', async () => {
+    const { svc } = makeService();
+    await expect(svc.remove('nope', { confirmId: 'nope' }, actor)).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
   });
 });

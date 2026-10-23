@@ -336,6 +336,11 @@ export interface AdminPlanInput {
 
 export type AdminPlanPatch = Partial<Omit<AdminPlanInput, 'id'>>;
 
+/** 删除套餐必须回传与路径一致的标识，避免误触。 */
+export interface AdminPlanDeleteInput {
+  confirmId: string;
+}
+
 export interface AdminSessionItemDto {
   id: string;
   title: string;

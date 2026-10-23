@@ -1875,6 +1875,15 @@ a {
   color: #fff;
 }
 
+.admin-btn.danger {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.admin-btn.danger:hover:not(:disabled) {
+  background: var(--danger-soft);
+}
+
 .admin-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;

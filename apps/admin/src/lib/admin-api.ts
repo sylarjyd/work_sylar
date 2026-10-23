@@ -15,6 +15,7 @@ import type {
   AdminModelTestResultDto,
   AdminOverviewDto,
   AdminOverviewRange,
+  AdminPlanDeleteInput,
   AdminPlanDto,
   AdminPlanInput,
   AdminPlanPatch,
@@ -76,6 +77,10 @@ export function adminErrorText(err: unknown): string {
     'admin_failed_400_cannot_modify_self': '不能修改自己的角色或状态',
     'admin_failed_400_last_admin': '系统必须保留至少一个启用的管理员',
     'admin_failed_400_free_not_deactivatable': '免费套餐不可停用',
+    'admin_failed_400_free_not_deletable': '免费套餐是注册默认套餐，不能删除',
+    'admin_failed_400_confirm_mismatch': '确认标识与套餐标识不一致，请重新输入',
+    'admin_failed_409_plan_in_use': '该套餐仍有租户订阅，请先迁移订阅再删除',
+    'admin_failed_404_plan_not_found': '套餐不存在或已被删除',
     'admin_failed_400_model_price_missing': '套餐中的模型必须先配置价格',
     'admin_failed_400_provider_has_models': '该厂商下仍有模型，请先删除模型',
     'admin_failed_400_default_model_in_use': '当前默认模型不能停用或删除，请先更换默认模型',
@@ -187,6 +192,13 @@ export function updateAdminPlan(id: string, patch: AdminPlanPatch): Promise<Admi
   return request(`/api/admin/plans/${encodeURIComponent(id)}`, {
     method: 'PATCH',
     body: JSON.stringify(patch),
+  });
+}
+
+export function deleteAdminPlan(id: string, body: AdminPlanDeleteInput): Promise<void> {
+  return request(`/api/admin/plans/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    body: JSON.stringify(body),
   });
 }
 

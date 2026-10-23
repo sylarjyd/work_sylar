@@ -5,7 +5,12 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma, type Plan } from '@prisma/client';
-import type { AdminPlanDto, AdminPlanInput, AdminPlanPatch } from '@ai-office/shared';
+import type {
+  AdminPlanDeleteInput,
+  AdminPlanDto,
+  AdminPlanInput,
+  AdminPlanPatch,
+} from '@ai-office/shared';
 import { PrismaService } from '../db/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import type { AdminActor } from '../audit/audit.types';
@@ -164,6 +169,39 @@ export class AdminPlansService {
       if ((err as { code?: string }).code === 'P2025') {
         throw new NotFoundException('plan_not_found');
       }
+      throw err;
+    }
+  }
+
+  async remove(id: string, body: AdminPlanDeleteInput, actor: AdminActor): Promise<void> {
+    // 删除不可恢复，要求调用方回传完全一致的标识；前端也需用户手动输入。
+    const confirmId = typeof body?.confirmId === 'string' ? body.confirmId.trim() : '';
+    if (confirmId !== id) throw new BadRequestException('confirm_mismatch');
+    // free 是注册默认套餐，删除会导致新租户无法开通。
+    if (id === 'free') throw new BadRequestException('free_not_deletable');
+
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        const before = await tx.plan.findUnique({ where: { id } });
+        if (!before) throw new NotFoundException('plan_not_found');
+        // 先计数给出明确的业务错误；并发下由订阅外键兜底（P2003）。
+        const subscribers = await tx.subscription.count({ where: { planId: id } });
+        if (subscribers > 0) throw new ConflictException('plan_in_use');
+
+        await tx.plan.delete({ where: { id } });
+        await this.audit.write(tx, actor, {
+          action: 'plan.delete',
+          targetType: 'plan',
+          targetId: id,
+          // 删除后无法再查，快照必须在同一事务内记录。
+          summary: { before: toDto(before) },
+        });
+      });
+    } catch (err) {
+      const code = (err as { code?: string }).code;
+      // 计数之后仍有订阅写入时，外键约束会拒绝删除。
+      if (code === 'P2003') throw new ConflictException('plan_in_use');
+      if (code === 'P2025') throw new NotFoundException('plan_not_found');
       throw err;
     }
   }
