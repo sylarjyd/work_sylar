@@ -1,3 +1,4 @@
+import type { RunModelRoute } from '@ai-office/shared';
 import type { ModelGateway } from './types';
 import type { ModelObserver } from './observed-gateway';
 import { ObservedGateway } from './observed-gateway';
@@ -77,4 +78,40 @@ export function createGateway(
     model,
   });
   return observer ? new ObservedGateway(inner, model, observer) : inner;
+}
+
+/**
+ * 按 BFF 本次下发的路由构建临时网关；返回 undefined 表示沿用启动网关（Mock/环境变量）。
+ * 路由来自内部请求体，属于受信输入，但仍做结构校验，避免配置错误导致静默调用错厂商。
+ */
+export function createGatewayFromRoutes(
+  routes: RunModelRoute[] | undefined,
+  observer?: ModelObserver,
+): ModelGateway | undefined {
+  if (!routes || routes.length === 0) return undefined;
+  const seen = new Set<string>();
+  const built = routes.map((route) => {
+    if (
+      !route ||
+      typeof route.model !== 'string' ||
+      route.model === '' ||
+      typeof route.baseUrl !== 'string' ||
+      route.baseUrl === '' ||
+      typeof route.apiKey !== 'string' ||
+      route.apiKey === ''
+    ) {
+      throw new Error('invalid_model_routes');
+    }
+    if (seen.has(route.model)) throw new Error('invalid_model_routes');
+    seen.add(route.model);
+    return {
+      model: route.model,
+      gateway: new OpenAICompatGateway({
+        baseUrl: route.baseUrl,
+        apiKey: route.apiKey,
+        model: route.model,
+      }),
+    };
+  });
+  return new RoutingGateway(built, observer);
 }

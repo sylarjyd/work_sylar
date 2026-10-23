@@ -18,7 +18,7 @@ import { runAgent, type ToolObservation } from './agent-loop';
 import { createRuntimeMetrics, type RuntimeMetrics } from './observability/metrics';
 import type { ModelObserver } from './model/observed-gateway';
 import { resolveRunConfig } from './run-config';
-import { createGateway } from './model/create-gateway';
+import { createGateway, createGatewayFromRoutes } from './model/create-gateway';
 import type { ModelGateway } from './model/types';
 import { createTools } from './tools/registry';
 import type { Tool } from './tools/types';
@@ -208,8 +208,11 @@ export function createRuntimeServer(deps: RuntimeDeps = {}): Server {
                     ? [...baseTools, ...(await extraTools(runReq.tenantId))]
                     : baseTools;
                   const config = resolveRunConfig(runReq.config, process.env);
+                  // 本次运行优先使用 BFF 下发的厂商路由；缺省沿用启动网关。
+                  const runGateway =
+                    createGatewayFromRoutes(runReq.modelRoutes, observer) ?? gateway;
                   for await (const ev of runAgent(runReq, {
-                    gateway,
+                    gateway: runGateway,
                     tools: runTools,
                     confirm,
                     maxRounds: config.maxRounds,

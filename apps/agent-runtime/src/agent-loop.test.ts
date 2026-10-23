@@ -574,3 +574,58 @@ function stubGate(approved: boolean, reason?: 'user_denied' | 'confirm_timeout')
     cancel: () => {},
   };
 }
+
+describe('runAgent 模型选择', () => {
+  it('selectedModel 排第一，think 事件带实际模型', async () => {
+    let seen: string[] | undefined;
+    const gateway: ModelGateway = {
+      async chat(req) {
+        seen = req.models;
+        return { content: '好的', toolCalls: [], usage: { input: 1, output: 1 }, model: req.models?.[0] ?? 'x' };
+      },
+    };
+    const events = await collect(
+      runAgent(req, {
+        gateway,
+        tools: [],
+        billing: {
+          maxCredits: 10,
+          allowedModels: ['a', 'b', 'c'],
+          selectedModel: 'b',
+          prices: {
+            a: { inputMilliCreditsPer1k: 1, outputMilliCreditsPer1k: 1 },
+            b: { inputMilliCreditsPer1k: 1, outputMilliCreditsPer1k: 1 },
+            c: { inputMilliCreditsPer1k: 1, outputMilliCreditsPer1k: 1 },
+          },
+        },
+      }),
+    );
+    expect(seen).toEqual(['b', 'a', 'c']);
+    expect(events[0].payload).toMatchObject({ text: '好的', model: 'b' });
+  });
+
+  it('没有 selectedModel 时保持 allowedModels 原顺序', async () => {
+    let seen: string[] | undefined;
+    const gateway: ModelGateway = {
+      async chat(req) {
+        seen = req.models;
+        return { content: 'ok', toolCalls: [], usage: { input: 1, output: 1 }, model: 'a' };
+      },
+    };
+    await collect(
+      runAgent(req, {
+        gateway,
+        tools: [],
+        billing: {
+          maxCredits: 10,
+          allowedModels: ['a', 'b'],
+          prices: {
+            a: { inputMilliCreditsPer1k: 1, outputMilliCreditsPer1k: 1 },
+            b: { inputMilliCreditsPer1k: 1, outputMilliCreditsPer1k: 1 },
+          },
+        },
+      }),
+    );
+    expect(seen).toEqual(['a', 'b']);
+  });
+});

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { Readable } from 'node:stream';
-import type { Server } from 'node:http';
+import { createServer, type Server } from 'node:http';
 import {
   currentContext,
   currentTrace,
@@ -683,5 +683,47 @@ describe('/runs çš„ per-run MCP å·¥å…·æ‹¼è£…', () => {
     expect(seen).toEqual(['t1']);
     expect(toolNames).toContain('mcp.x.y');
     expect(toolNames).toContain('web.search'); // æ—¢æœ‰ base å·¥å…·ä»åœ¨
+  });
+});
+
+describe('run ¼¶Ä£ÐÍÂ·ÓÉ', () => {
+  it('ÇëÇóÌå´ø modelRoutes Ê±¸²¸ÇÆô¶¯Íø¹Ø', async () => {
+    let seenModel = '';
+    const modelServer = createServer((req, res) => {
+      let raw = '';
+      req.on('data', (c) => (raw += c));
+      req.on('end', () => {
+        seenModel = (JSON.parse(raw || '{}') as { model?: string }).model ?? '';
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            choices: [{ message: { content: 'À´×ÔÏÂ·¢Â·ÓÉ' } }],
+            usage: { prompt_tokens: 1, completion_tokens: 1 },
+          }),
+        );
+      });
+    });
+    await new Promise<void>((r) => modelServer.listen(0, r));
+    const addr = modelServer.address();
+    if (!addr || typeof addr === 'string') throw new Error('no port');
+    try {
+      const res = await postRuns({
+        runId: 'r-route',
+        sessionId: 's1',
+        tenantId: 't1',
+        userId: 'u1',
+        goal: 'g',
+        messages: [{ role: 'user', content: 'g' }],
+        modelRoutes: [
+          { model: 'doubao-x', baseUrl: `http://127.0.0.1:${addr.port}/v1`, apiKey: 'sk' },
+        ],
+      });
+      const text = await res.text();
+      expect(res.status).toBe(200);
+      expect(text).toContain('À´×ÔÏÂ·¢Â·ÓÉ');
+      expect(seenModel).toBe('doubao-x');
+    } finally {
+      await new Promise<void>((r) => modelServer.close(() => r()));
+    }
   });
 });

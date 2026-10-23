@@ -83,10 +83,16 @@ export async function* runAgent(req: RunRequest, deps: RunDeps): AsyncGenerator<
         }
       }
 
+      // 用户选中的模型优先；其余候选按运营端排序，供 429/5xx 时自动回退。
+      const selected = deps.billing?.selectedModel;
+      const allowed = deps.billing?.allowedModels;
+      const models = selected
+        ? [selected, ...(allowed ?? []).filter((m) => m !== selected)]
+        : allowed;
       const resp = await deps.gateway.chat({
         messages,
         tools: schemas,
-        models: deps.billing?.allowedModels,
+        models,
       });
       const prev = usageByModel.get(resp.model) ?? { input: 0, output: 0 };
       usageByModel.set(resp.model, {
@@ -95,7 +101,7 @@ export async function* runAgent(req: RunRequest, deps: RunDeps): AsyncGenerator<
       });
 
       if (resp.content) {
-        yield step('think', { text: resp.content });
+        yield step('think', { text: resp.content, model: resp.model });
       }
       if (resp.toolCalls.length === 0) {
         // 无工具调用即结束；回填最终 assistant 文本以保持历史完整。
