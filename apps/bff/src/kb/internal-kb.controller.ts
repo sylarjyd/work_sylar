@@ -9,7 +9,7 @@ interface SearchBody {
   topK?: number;
   tenantId?: string;
   userId?: string;
-  docIds?: string[];
+  kbIds?: string[];
 }
 
 /**
@@ -37,12 +37,18 @@ export class InternalKbController {
       reply.status(403).send({ error: 'forbidden' });
       return;
     }
-    const { vector, topK, tenantId, userId, docIds } = body ?? {};
+    const { vector, topK, tenantId, userId, kbIds } = body ?? {};
+    // 旧版文档级绑定字段：滚动部署期间若 runtime 仍传 docIds，直接拒绝而不是忽略，
+    // 否则“空范围=全部知识库”会把检索面放大成本用户全部文档。
+    if ((body as { docIds?: unknown } | null)?.docIds !== undefined) {
+      reply.status(400).send({ error: 'invalid_params' });
+      return;
+    }
     if (!isValidVector(vector) || !isNonEmptyString(tenantId) || !isNonEmptyString(userId)) {
       reply.status(400).send({ error: 'invalid_params' });
       return;
     }
-    if (docIds !== undefined && !isValidDocIds(docIds)) {
+    if (kbIds !== undefined && !isValidKbIds(kbIds)) {
       reply.status(400).send({ error: 'invalid_params' });
       return;
     }
@@ -51,7 +57,7 @@ export class InternalKbController {
       userId,
       vector,
       clampTopK(topK),
-      docIds,
+      kbIds,
     );
     reply.status(200).send(hits);
   }
@@ -68,8 +74,8 @@ function isValidVector(v: unknown): v is number[] {
   );
 }
 
-/** 文档范围只接受非空字符串数组；租户/用户过滤仍由 SQL 强制执行，越权 ID 不会泄露数据。 */
-function isValidDocIds(v: unknown): v is string[] {
+/** 知识库范围只接受非空字符串数组；租户/用户过滤仍由 SQL 强制执行，越权 ID 不会泄露数据。 */
+function isValidKbIds(v: unknown): v is string[] {
   return (
     Array.isArray(v) &&
     v.length <= 100 &&

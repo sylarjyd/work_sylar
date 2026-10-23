@@ -12,5 +12,7 @@ import { SettingsModule } from '../settings/settings.module';
     KbService,
     { provide: KB_STORAGE, useFactory: () => createKbStorage() },
   ],
+  // 运营端知识库管理复用同一服务与存储客户端（删除文档后需清理对象）。
+  exports: [KbService, KB_STORAGE],
 })
 export class KbModule {}
