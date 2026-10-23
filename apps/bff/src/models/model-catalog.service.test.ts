@@ -19,6 +19,9 @@ beforeEach(() => {
   process.env.MODEL_ENC_KEY = KEY;
   delete process.env.MODEL_PROVIDERS;
   delete process.env.DEEPSEEK_API_KEY;
+  delete process.env.ENV_KEY;
+  delete process.env.MODEL_NAME;
+  delete process.env.MODEL_BASE_URL;
 });
 
 function makeService(opts: {
@@ -176,6 +179,17 @@ describe('ModelCatalogService', () => {
     ]);
     process.env.ENV_KEY = 'sk-env';
     const svc = makeService({ allowed: ['m1', 'm2'] });
+
+    expect(await svc.listForClient('t1')).toEqual({ models: [], defaultModel: null });
+    await expect(svc.resolveForRun('t1', null)).rejects.toBeInstanceOf(NoModelsAvailableError);
+  });
+
+  it('数据库已有厂商但无启用模型时不回退环境变量', async () => {
+    process.env.MODEL_PROVIDERS = JSON.stringify([
+      { model: 'm1', baseUrl: 'https://env/v1', apiKeyEnv: 'ENV_KEY' },
+    ]);
+    process.env.ENV_KEY = 'sk-env';
+    const svc = makeService({ providers: [dbProvider], models: [], allowed: ['m1'] });
 
     expect(await svc.listForClient('t1')).toEqual({ models: [], defaultModel: null });
     await expect(svc.resolveForRun('t1', null)).rejects.toBeInstanceOf(NoModelsAvailableError);

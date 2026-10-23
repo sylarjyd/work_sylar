@@ -87,6 +87,8 @@ export class ModelCatalogService {
     const ordered = [selectedEntry, ...models.filter((m) => m.model !== selected)];
     const routes: RunModelRoute[] = [];
     const keyCache = new Map<string, string>();
+    // 同一厂商的密钥只需失败一次：其余回退模型直接跳过，避免重复解密与日志噪声。
+    const failedProviders = new Set<string>();
     for (const entry of ordered) {
       if (entry.source.kind === 'mock') continue;
       if (entry.source.kind === 'env') {
@@ -97,20 +99,23 @@ export class ModelCatalogService {
         });
         continue;
       }
+      const { providerId } = entry.source;
+      if (failedProviders.has(providerId)) continue;
       try {
-        let apiKey = keyCache.get(entry.source.providerId);
+        let apiKey = keyCache.get(providerId);
         if (apiKey === undefined) {
           apiKey = decryptSecret(entry.source.apiKeyEnc, MODEL_ENC_KEY);
-          keyCache.set(entry.source.providerId, apiKey);
+          keyCache.set(providerId, apiKey);
         }
         routes.push({ model: entry.model, baseUrl: entry.source.baseUrl, apiKey });
       } catch {
         // 单把密钥损坏只影响该厂商；选中的模型不可用时整体失败，避免静默换厂商。
+        failedProviders.add(providerId);
         if (entry.model === selected) {
           this.logger.error(`模型 ${selected} 的厂商密钥无法解密`);
           throw new ModelProviderUnavailableError();
         }
-        this.logger.warn(`跳过厂商 ${entry.source.providerId} 的模型 ${entry.model}：密钥无法解密`);
+        this.logger.warn(`跳过厂商 ${providerId} 的模型 ${entry.model}：密钥无法解密`);
       }
     }
     return { selectedModel: selected, modelRoutes: routes };
