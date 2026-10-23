@@ -96,6 +96,7 @@ ensure_env() {
   set_kv MINIO_ROOT_PASSWORD "$(hex 16)" "$ENV_FILE"
   set_kv JWT_SECRET "$(hex 32)" "$ENV_FILE"
   set_kv CONNECTOR_ENC_KEY "$(hex 32)" "$ENV_FILE"
+  set_kv MODEL_ENC_KEY "$(hex 32)" "$ENV_FILE"
   set_kv AGENT_RUNTIME_TOKEN "$(hex 24)" "$ENV_FILE"
   set_kv INTERNAL_TOKEN "$(hex 24)" "$ENV_FILE"
   set_kv ALERT_WEBHOOK_SECRET "$(hex 24)" "$ENV_FILE"

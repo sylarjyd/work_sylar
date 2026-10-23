@@ -106,6 +106,7 @@ flowchart LR
 | `KB_CHUNK_OVERLAP` | `150` | 按切分效果调优 |
 | `KB_MAX_FILE_BYTES` | `10485760` | 按业务与存储配额调整 |
 | `CONNECTOR_ENC_KEY` | 空 | **必须设置**（32 字节 hex）；MCP Server 的 env 加解密密钥，缺失时 BFF 启动失败 |
+| `MODEL_ENC_KEY` | 空 | **必须设置**（32 字节 hex）；运营平台模型厂商 API Key 的加解密密钥，缺失时 BFF 启动失败；与 `CONNECTOR_ENC_KEY` 分开轮换 |
 | `MCP_HEARTBEAT_MS` | `30000` | MCP 子进程心跳间隔 |
 | `MCP_BACKOFF_BASE_MS` / `MCP_BACKOFF_MAX_MS` | `1000` / `30000` | MCP 子进程崩溃退避重拉 |
 | `MCP_INIT_TIMEOUT_MS` | `10000` | MCP `initialize` / 校验握手超时 |
@@ -365,7 +366,7 @@ Windows 用 `deploy.cmd`，参数对应 `-WithAdmin` / `-AdminOnly` / `-NoBuild`
 
 首次运行由脚本从 `.env.docker.example` 生成 `.env.docker`（`umask 077` / `chmod 600`，已被 git 忽略）：
 
-- 自动生成 `POSTGRES_PASSWORD`、`MINIO_ROOT_PASSWORD`、`JWT_SECRET`、`CONNECTOR_ENC_KEY`、`AGENT_RUNTIME_TOKEN`、`INTERNAL_TOKEN`、`ALERT_WEBHOOK_SECRET`。
+- 自动生成 `POSTGRES_PASSWORD`、`MINIO_ROOT_PASSWORD`、`JWT_SECRET`、`CONNECTOR_ENC_KEY`、`MODEL_ENC_KEY`、`AGENT_RUNTIME_TOKEN`、`INTERNAL_TOKEN`、`ALERT_WEBHOOK_SECRET`。
 - 从根 `.env` 复用 `DEEPSEEK_API_KEY`、`MODEL_*`、`TAVILY_API_KEY`、`EMBEDDING_*`（存在时才覆盖）。
 - 密钥缺失时 compose 通过 `${VAR:?}` **启动即失败**，不会以空密钥运行。
 - 脚本检查 `BFF_PORT` / `WEB_PORT` 是否被占用（项目已运行时跳过，便于重复执行）。
@@ -450,6 +451,8 @@ curl -s http://localhost:4000/api/billing/summary -H "authorization: Bearer $TOK
 | `REDIS_URL` | 留空时使用进程内固定窗口限流（仅单实例）。已配置 Redis 但连接/命令失败时是 **fail-open（放行请求）** 并限频告警（10 秒最多一次），不会退化为内存限流。生产必须配 Redis 并为该告警建立监控；多实例不配 Redis 会各自独立计数，限流实际失效 |
 | `MODEL_PROVIDERS` | runtime 多模型路由，JSON 数组声明模型、baseUrl、apiKeyEnv；未配置回退 `MODEL_BASE_URL` + `MODEL_NAME`。`DEEPSEEK_API_KEY` 为空时 runtime 走 mock 模型（仍产生 usage，可验证结算链路，但不可用于生产） |
 | `BILLING_SWEEP_MS` | 补偿扫描间隔（毫秒），默认 60000；`<=0` 或非数字会**完全禁用**补偿扫描（不会夹到下限）。禁用后 pending 用量不会自动结算、预占不会释放、过期批次不会清理；**生产禁止设为 0** |
+
+> 生产环境优先在运营平台「模型配置」里维护厂商与模型；`.env` 中的 `DEEPSEEK_API_KEY` / `MODEL_PROVIDERS` 仅作为未配置数据库厂商时的兜底。
 
 ### 13.4 运营操作（管理员 JWT）
 
