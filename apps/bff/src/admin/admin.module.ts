@@ -3,6 +3,7 @@ import { AuditModule } from '../audit/audit.module';
 import { SettingsModule } from '../settings/settings.module';
 import { BillingModule } from '../billing/billing.module';
 import { AlertsModule } from '../alerts/alerts.module';
+import { KbModule } from '../kb/kb.module';
 import { AdminUsersController } from './admin-users.controller';
 import { AdminUsersService } from './admin-users.service';
 import { AdminTenantsController } from './admin-tenants.controller';
@@ -21,10 +22,12 @@ import { AdminObservabilityController } from './admin-observability.controller';
 import { AdminObservabilityService } from './admin-observability.service';
 import { AdminAlertsController } from './admin-alerts.controller';
 import { AdminAlertsService } from './admin-alerts.service';
+import { AdminKbController } from './admin-kb.controller';
+import { AdminKbService } from './admin-kb.service';
 
-/** 管理端模块：用户/租户/套餐/会话/任务/模型/参数/审计/概览/告警十组路由统一装配。 */
+/** 管理端模块：用户/租户/套餐/会话/任务/模型/参数/审计/概览/告警/知识库十一组路由统一装配。 */
 @Module({
-  imports: [AuditModule, SettingsModule, BillingModule, AlertsModule],
+  imports: [AuditModule, SettingsModule, BillingModule, AlertsModule, KbModule],
   controllers: [
     AdminUsersController,
     AdminTenantsController,
@@ -36,6 +39,7 @@ import { AdminAlertsService } from './admin-alerts.service';
     AdminAuditController,
     AdminObservabilityController,
     AdminAlertsController,
+    AdminKbController,
   ],
   providers: [
     AdminUsersService,
@@ -46,6 +50,7 @@ import { AdminAlertsService } from './admin-alerts.service';
     AdminModelsService,
     AdminObservabilityService,
     AdminAlertsService,
+    AdminKbService,
   ],
 })
 export class AdminModule {}

@@ -15,6 +15,7 @@ import { AdminObservabilityController } from './admin-observability.controller';
 import { AdminObservabilityService } from './admin-observability.service';
 import { AdminAlertsController } from './admin-alerts.controller';
 import { AdminAlertsService } from './admin-alerts.service';
+import { AdminKbController } from './admin-kb.controller';
 import { AdminTasksService } from './admin-tasks.service';
 import { AuditService } from '../audit/audit.service';
 import { SettingsService } from '../settings/settings.service';
@@ -98,7 +99,7 @@ describe('ç®¡ç†ç«¯é‰´æƒ', () => {
 });
 
 describe('AppModule è£…é…', () => {
-  it('ç®¡ç†ç«¯ 10 ä¸ªæŽ§åˆ¶å™¨å‡å·²è£…é…', async () => {
+  it('ç®¡ç†ç«¯ 11 ä¸ªæŽ§åˆ¶å™¨å‡å·²è£…é…', async () => {
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
       .overrideProvider(PrismaService)
       .useValue(fakePrisma)
@@ -116,6 +117,7 @@ describe('AppModule è£…é…', () => {
         AdminObservabilityController,
       );
       expect(moduleRef.get(AdminAlertsController)).toBeInstanceOf(AdminAlertsController);
+      expect(moduleRef.get(AdminKbController)).toBeInstanceOf(AdminKbController);
     } finally {
       await moduleRef.close();
     }
@@ -308,7 +310,7 @@ describe('å‚æ•°é…ç½®æŽ¥å£', () => {
   });
 });
 
-describe('¸ÅÀÀ¡¢¸æ¾¯ÓëÊ±¼äÏß½Ó¿Ú¼øÈ¨', () => {
+describe('ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½æ¾¯ï¿½ï¿½Ê±ï¿½ï¿½ï¿½ß½Ó¿Ú¼ï¿½È¨', () => {
   let adminApp: NestFastifyApplication;
   const overviewStub = {
     overview: async () => ({ range: '24h' }),
@@ -363,7 +365,7 @@ describe('¸ÅÀÀ¡¢¸æ¾¯ÓëÊ±¼äÏß½Ó¿Ú¼øÈ¨', () => {
     { method: 'GET', url: '/api/admin/runs/r1/timeline' },
   ];
 
-  it('ÆÕÍ¨³ÉÔ±·ÃÎÊÐÂÔö½Ó¿ÚÈ«²¿·µ»Ø 403', async () => {
+  it('ï¿½ï¿½Í¨ï¿½ï¿½Ô±ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ó¿ï¿½È«ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ 403', async () => {
     const headers = { authorization: `Bearer ${signToken({ sub: 'u1', tenantId: 't1' })}` };
     for (const route of routes) {
       const res = await adminApp.inject({ ...route, headers });
@@ -371,7 +373,7 @@ describe('¸ÅÀÀ¡¢¸æ¾¯ÓëÊ±¼äÏß½Ó¿Ú¼øÈ¨', () => {
     }
   });
 
-  it('¹ÜÀíÔ±¿É·ÃÎÊ¸ÅÀÀ¡¢¸æ¾¯¹æÔòÓëÊ±¼äÏß', async () => {
+  it('ï¿½ï¿½ï¿½ï¿½Ô±ï¿½É·ï¿½ï¿½Ê¸ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½æ¾¯ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê±ï¿½ï¿½ï¿½ï¿½', async () => {
     const headers = { authorization: `Bearer ${signToken({ sub: 'admin', tenantId: 't1' })}` };
     const overviewRes = await adminApp.inject({
       method: 'GET',
