@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { Alert, Card, Col, Row, Segmented, Space, Statistic, Table, Tag, Typography } from 'antd';
+import type { TableColumnsType } from 'antd';
 import type {
   AdminMetricTimeseriesDto,
   AdminOverviewDto,
@@ -70,11 +72,14 @@ function dimensionName(id: string): string {
 
 function Kpi({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
-    <div className="kpi-card">
-      <div className="kpi-label">{label}</div>
-      <div className="kpi-value">{value}</div>
-      {hint && <div className="kpi-hint">{hint}</div>}
-    </div>
+    <Card size="small" style={{ height: '100%' }}>
+      <Statistic title={label} value={value} valueStyle={{ fontSize: 24 }} />
+      {hint ? (
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          {hint}
+        </Typography.Text>
+      ) : null}
+    </Card>
   );
 }
 
@@ -173,192 +178,209 @@ export default function AdminOverviewPage() {
     0,
   );
 
+  const modelCostColumns: TableColumnsType<AdminOverviewDto['modelCosts'][number]> = [
+    { title: '模型', dataIndex: 'model' },
+    {
+      title: '积分',
+      dataIndex: 'credits',
+      align: 'right',
+      render: (v: number) => formatCompact(v),
+    },
+    {
+      title: '占比',
+      key: 'share',
+      align: 'right',
+      render: (_: unknown, item) =>
+        modelCostTotal > 0 ? `${((item.credits / modelCostTotal) * 100).toFixed(1)}%` : '—',
+    },
+  ];
+
+  const healthColumns: TableColumnsType<AdminOverviewDto['serviceHealth'][number]> = [
+    {
+      title: '服务',
+      dataIndex: 'name',
+      render: (v: string) => HEALTH_NAMES[v] ?? v,
+    },
+    {
+      title: '状态',
+      dataIndex: 'up',
+      render: (up: boolean) =>
+        up ? <Tag color="success">正常</Tag> : <Tag color="error">异常</Tag>,
+    },
+    {
+      title: '检查时间',
+      dataIndex: 'checkedAt',
+      render: (v: string) =>
+        new Date(v).toLocaleTimeString('zh-CN', { hour12: false }),
+    },
+  ];
+
   return (
-    <div className="page-scroll">
-      <div className="page">
-        <header className="page-head">
-          <div>
-            <h1 className="page-title">运行概览</h1>
-            <p className="page-sub">运营指标、成本与告警态势；每 60 秒自动刷新。</p>
-          </div>
-          <div className="page-head-actions">
-            <div className="overview-range" role="group" aria-label="时间范围">
-              {RANGES.map((item) => (
-                <button
-                  key={item.value}
-                  type="button"
-                  className={`admin-btn${range === item.value ? ' primary' : ''}`}
-                  aria-pressed={range === item.value}
-                  onClick={() => setRange(item.value)}
-                >
-                  {item.label}
-                </button>
-              ))}
-            </div>
-          </div>
-        </header>
+    <Space direction="vertical" size={16} style={{ width: '100%' }}>
+      <div
+        style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: 12,
+          alignItems: 'flex-end',
+          justifyContent: 'space-between',
+        }}
+      >
+        <div>
+          <Typography.Title level={4} style={{ margin: 0 }}>
+            运行概览
+          </Typography.Title>
+          <Typography.Text type="secondary">
+            运营指标、成本与告警态势；每 60 秒自动刷新。
+          </Typography.Text>
+        </div>
+        <Segmented
+          value={range}
+          onChange={(value) => setRange(value as AdminOverviewRange)}
+          options={RANGES.map((item) => ({ value: item.value, label: item.label }))}
+        />
+      </div>
 
-        {error && (
-          <div className="banner banner-error" role="alert" style={{ marginBottom: 16 }}>
-            {error}
-          </div>
-        )}
+      {error ? <Alert type="error" showIcon message={error} /> : null}
 
-        {loading && !overview ? (
-          <div className="admin-empty">加载中…</div>
-        ) : !overview ? (
-          <div className="admin-empty">{error ? '加载失败' : '暂无数据'}</div>
-        ) : (
-          <>
-            <section className="kpi-grid" aria-label="核心指标" aria-busy={loading}>
+      {loading && !overview ? (
+        <Card loading />
+      ) : !overview ? (
+        <Card>
+          <Typography.Text type="secondary">{error ? '加载失败' : '暂无数据'}</Typography.Text>
+        </Card>
+      ) : (
+        <>
+          <Row gutter={[12, 12]} aria-busy={loading}>
+            <Col xs={12} sm={8} xl={6}>
               <Kpi
                 label="运行总数"
                 value={formatCompact(overview.current.runs)}
                 hint={deltaText(overview.current.runs, overview.previous.runs)}
               />
+            </Col>
+            <Col xs={12} sm={8} xl={6}>
               <Kpi
                 label="成功率"
                 value={percent(overview.current.successRate)}
                 hint={`${overview.current.failedRuns} 次失败`}
               />
+            </Col>
+            <Col xs={12} sm={8} xl={6}>
               <Kpi
                 label="输入 Token"
                 value={formatCompact(overview.current.inputTokens)}
                 hint={deltaText(overview.current.inputTokens, overview.previous.inputTokens)}
               />
+            </Col>
+            <Col xs={12} sm={8} xl={6}>
               <Kpi
                 label="输出 Token"
                 value={formatCompact(overview.current.outputTokens)}
                 hint={deltaText(overview.current.outputTokens, overview.previous.outputTokens)}
               />
+            </Col>
+            <Col xs={12} sm={8} xl={6}>
               <Kpi
                 label="积分消耗"
                 value={formatCompact(overview.current.credits)}
                 hint={deltaText(overview.current.credits, overview.previous.credits)}
               />
+            </Col>
+            <Col xs={12} sm={8} xl={6}>
               <Kpi
                 label="平均运行时长"
                 value={formatDuration(overview.current.avgDurationMs)}
                 hint={`P95 ${formatDuration(overview.current.p95DurationMs)}`}
               />
+            </Col>
+            <Col xs={12} sm={8} xl={6}>
               <Kpi
                 label="未恢复告警"
                 value={String(overview.current.unresolvedAlerts)}
                 hint="全部时间"
               />
-            </section>
+            </Col>
+          </Row>
 
-            <section className="overview-grid" aria-label="趋势图">
-              <LineChart
-                title="运行量与失败量"
-                labels={labels}
-                series={[
-                  { name: '运行', values: points.map((point) => point.runs) },
-                  { name: '失败', values: points.map((point) => point.failedRuns) },
-                ]}
+          <section className="overview-grid" aria-label="趋势图">
+            <LineChart
+              title="运行量与失败量"
+              labels={labels}
+              series={[
+                { name: '运行', values: points.map((point) => point.runs) },
+                { name: '失败', values: points.map((point) => point.failedRuns) },
+              ]}
+            />
+            <LineChart
+              title="Token 消耗"
+              labels={labels}
+              series={[
+                { name: '输入', values: points.map((point) => point.inputTokens) },
+                { name: '输出', values: points.map((point) => point.outputTokens) },
+              ]}
+            />
+            {creditSeries.length === 0 || creditLabels.length === 0 ? (
+              <figure className="chart">
+                <figcaption className="chart-title">积分消耗（按模型堆叠）</figcaption>
+                <div className="admin-empty">该区间暂无按模型统计的积分数据</div>
+              </figure>
+            ) : (
+              <StackedBarChart
+                title="积分消耗（按模型堆叠）"
+                labels={creditLabels}
+                series={creditSeries}
               />
-              <LineChart
-                title="Token 消耗"
-                labels={labels}
-                series={[
-                  { name: '输入', values: points.map((point) => point.inputTokens) },
-                  { name: '输出', values: points.map((point) => point.outputTokens) },
-                ]}
-              />
-              {creditSeries.length === 0 || creditLabels.length === 0 ? (
-                <figure className="chart">
-                  <figcaption className="chart-title">积分消耗（按模型堆叠）</figcaption>
-                  <div className="admin-empty">该区间暂无按模型统计的积分数据</div>
-                </figure>
-              ) : (
-                <StackedBarChart
-                  title="积分消耗（按模型堆叠）"
-                  labels={creditLabels}
-                  series={creditSeries}
+            )}
+            <LineChart
+              title="平均运行时长"
+              labels={labels}
+              series={[
+                {
+                  name: '平均时长',
+                  values: points.map((point) => point.avgDurationMs ?? 0),
+                },
+              ]}
+              formatValue={formatDuration}
+            />
+          </section>
+
+          <Row gutter={[12, 12]}>
+            <Col xs={24} xl={12}>
+              <Card title="模型积分分布" size="small">
+                <Table<AdminOverviewDto['modelCosts'][number]>
+                  rowKey="model"
+                  size="small"
+                  columns={modelCostColumns}
+                  dataSource={overview.modelCosts}
+                  pagination={false}
+                  locale={{ emptyText: '暂无数据' }}
                 />
-              )}
-              <LineChart
-                title="平均运行时长"
-                labels={labels}
-                series={[
-                  {
-                    name: '平均时长',
-                    values: points.map((point) => point.avgDurationMs ?? 0),
-                  },
-                ]}
-                formatValue={formatDuration}
-              />
-            </section>
+              </Card>
+            </Col>
+            <Col xs={24} xl={12}>
+              <Card title="服务健康" size="small">
+                <Table<AdminOverviewDto['serviceHealth'][number]>
+                  rowKey="name"
+                  size="small"
+                  columns={healthColumns}
+                  dataSource={overview.serviceHealth}
+                  pagination={false}
+                  locale={{ emptyText: '暂无数据' }}
+                />
+              </Card>
+            </Col>
+          </Row>
 
-            <section className="overview-grid" aria-label="成本与健康">
-              <section className="admin-panel">
-                <h2 className="billing-heading">模型积分分布</h2>
-                {overview.modelCosts.length === 0 ? (
-                  <div className="admin-empty">暂无数据</div>
-                ) : (
-                  <table className="admin-table">
-                    <thead>
-                      <tr>
-                        <th>模型</th>
-                        <th className="numeric">积分</th>
-                        <th className="numeric">占比</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {overview.modelCosts.map((item) => (
-                        <tr key={item.model}>
-                          <td>{item.model}</td>
-                          <td className="numeric">{formatCompact(item.credits)}</td>
-                          <td className="numeric">
-                            {modelCostTotal > 0
-                              ? `${((item.credits / modelCostTotal) * 100).toFixed(1)}%`
-                              : '—'}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-              </section>
-
-              <section className="admin-panel">
-                <h2 className="billing-heading">服务健康</h2>
-                {overview.serviceHealth.length === 0 ? (
-                  <div className="admin-empty">暂无数据</div>
-                ) : (
-                  <ul className="health-list">
-                    {overview.serviceHealth.map((item) => (
-                      <li key={item.name} className="health-item">
-                        <span
-                          className={`health-dot${item.up ? ' up' : ''}`}
-                          aria-hidden="true"
-                        />
-                        <span className="health-name">
-                          {HEALTH_NAMES[item.name] ?? item.name}
-                        </span>
-                        <span className="health-state">{item.up ? '正常' : '异常'}</span>
-                        <span className="admin-muted">
-                          {new Date(item.checkedAt).toLocaleTimeString('zh-CN', {
-                            hour12: false,
-                          })}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </section>
-            </section>
-
-            <p className="admin-muted" aria-live="polite">
-              {refreshing
-                ? '正在刷新…'
-                : `数据生成于 ${new Date(overview.generatedAt).toLocaleString('zh-CN', {
-                    hour12: false,
-                  })}`}
-            </p>
-          </>
-        )}
-      </div>
-    </div>
+          <Typography.Text type="secondary" aria-live="polite">
+            {refreshing
+              ? '正在刷新…'
+              : `数据生成于 ${new Date(overview.generatedAt).toLocaleString('zh-CN', {
+                  hour12: false,
+                })}`}
+          </Typography.Text>
+        </>
+      )}
+    </Space>
   );
 }

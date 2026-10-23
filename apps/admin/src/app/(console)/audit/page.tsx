@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { Alert, Card, Input, Space, Table, Typography } from 'antd';
+import type { TableColumnsType } from 'antd';
 import type { AdminAuditItemDto } from '@ai-office/shared';
 import { adminErrorText, isForbidden, listAdminAudit } from '../../../lib/admin-api';
 import { clearToken, isUnauthorized } from '@ai-office/web-core';
@@ -72,104 +74,111 @@ export default function AdminAuditPage() {
     void load();
   }, [load]);
 
-  return (
-    <div className="page-scroll">
-      <div className="page">
-        <header className="page-head">
-          <div>
-            <h1 className="page-title">审计日志</h1>
-            <p className="page-sub">写操作与敏感查看记录；不含消息正文与密钥。</p>
-          </div>
-        </header>
-
-        {error && (
-          <div className="banner banner-error" role="alert" style={{ marginBottom: 16 }}>
-            {error}
-          </div>
-        )}
-
-        <div className="admin-toolbar">
-          <input
-            className="admin-input"
-            placeholder="动作（如 user.update）"
-            aria-label="动作"
-            value={action}
-            onChange={(e) => { setPage(1); setAction(e.target.value); }}
-          />
-          <input
-            className="admin-input"
-            placeholder="对象类型"
-            aria-label="对象类型"
-            value={targetType}
-            onChange={(e) => { setPage(1); setTargetType(e.target.value); }}
-          />
-          <input
-            className="admin-input"
-            placeholder="对象 ID"
-            aria-label="对象 ID"
-            value={targetId}
-            onChange={(e) => { setPage(1); setTargetId(e.target.value); }}
-          />
-          <input
-            className="admin-input"
-            placeholder="操作人 ID"
-            aria-label="操作人 ID"
-            value={actorId}
-            onChange={(e) => { setPage(1); setActorId(e.target.value); }}
-          />
-          <span className="admin-muted">共 {total} 条</span>
-        </div>
-
-        {loading ? (
-          <div className="admin-empty">加载中…</div>
-        ) : items.length === 0 ? (
-          <div className="admin-empty">暂无审计记录</div>
+  const columns: TableColumnsType<AdminAuditItemDto> = [
+    { title: '时间', dataIndex: 'createdAt', width: 170, render: formatTime },
+    { title: '操作人', dataIndex: 'actorEmail', width: 200, ellipsis: true },
+    {
+      title: '动作',
+      dataIndex: 'action',
+      width: 190,
+      render: (v: string) => <Typography.Text code>{v}</Typography.Text>,
+    },
+    {
+      title: '对象',
+      key: 'target',
+      width: 240,
+      render: (_: unknown, row) => (row.targetId ? `${row.targetType}: ${row.targetId}` : row.targetType),
+    },
+    {
+      title: '摘要',
+      dataIndex: 'summary',
+      render: (v: Record<string, unknown> | null) =>
+        v ? (
+          <Typography.Text code style={{ whiteSpace: 'pre-wrap', fontSize: 12 }}>
+            {JSON.stringify(v)}
+          </Typography.Text>
         ) : (
-          <table className="admin-table">
-            <thead>
-              <tr>
-                <th>时间</th>
-                <th>操作人</th>
-                <th>动作</th>
-                <th>对象</th>
-                <th>摘要</th>
-                <th>IP</th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.map((row) => (
-                <tr key={row.id}>
-                  <td>{formatTime(row.createdAt)}</td>
-                  <td>{row.actorEmail}</td>
-                  <td>{row.action}</td>
-                  <td>{row.targetId ? `${row.targetType}: ${row.targetId}` : row.targetType}</td>
-                  <td>
-                    <code style={{ whiteSpace: 'pre-wrap' }}>
-                      {row.summary ? JSON.stringify(row.summary) : '—'}
-                    </code>
-                  </td>
-                  <td>{row.ip || '—'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
+          '—'
+        ),
+    },
+    { title: 'IP', dataIndex: 'ip', width: 130, render: (v: string | null) => v || '—' },
+  ];
 
-        <div className="admin-pager">
-          <button type="button" className="admin-btn" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
-            上一页
-          </button>
-          <span>第 {page} 页</span>
-          <button
-            type="button"
-            className="admin-btn"
-            disabled={page * PAGE_SIZE >= total}
-            onClick={() => setPage((p) => p + 1)}
-          >
-            下一页
-          </button>
-        </div>
+  return (
+    <Space direction="vertical" size={16} style={{ width: '100%' }}>
+      <div>
+        <Typography.Title level={4} style={{ margin: 0 }}>
+          审计日志
+        </Typography.Title>
+        <Typography.Text type="secondary">写操作与敏感查看记录；不含消息正文与密钥。</Typography.Text>
       </div>
-    </div>
+
+      {error ? <Alert type="error" showIcon message={error} /> : null}
+
+      <Card
+        title={
+          <Space wrap>
+            <Input
+              placeholder="动作（如 user.update）"
+              aria-label="动作"
+              value={action}
+              onChange={(e) => {
+                setPage(1);
+                setAction(e.target.value);
+              }}
+              style={{ width: 200 }}
+            />
+            <Input
+              placeholder="对象类型"
+              aria-label="对象类型"
+              value={targetType}
+              onChange={(e) => {
+                setPage(1);
+                setTargetType(e.target.value);
+              }}
+              style={{ width: 150 }}
+            />
+            <Input
+              placeholder="对象 ID"
+              aria-label="对象 ID"
+              value={targetId}
+              onChange={(e) => {
+                setPage(1);
+                setTargetId(e.target.value);
+              }}
+              style={{ width: 200 }}
+            />
+            <Input
+              placeholder="操作人 ID"
+              aria-label="操作人 ID"
+              value={actorId}
+              onChange={(e) => {
+                setPage(1);
+                setActorId(e.target.value);
+              }}
+              style={{ width: 180 }}
+            />
+          </Space>
+        }
+        extra={<Typography.Text type="secondary">共 {total} 条</Typography.Text>}
+      >
+        <Table<AdminAuditItemDto>
+          rowKey="id"
+          size="middle"
+          loading={loading}
+          columns={columns}
+          dataSource={items}
+          scroll={{ x: 1100 }}
+          locale={{ emptyText: '暂无审计记录' }}
+          pagination={{
+            current: page,
+            pageSize: PAGE_SIZE,
+            total,
+            showSizeChanger: false,
+            onChange: setPage,
+          }}
+        />
+      </Card>
+    </Space>
   );
 }

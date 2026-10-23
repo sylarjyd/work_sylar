@@ -2,6 +2,21 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import {
+  Alert,
+  App,
+  Button,
+  Card,
+  Descriptions,
+  Drawer,
+  Input,
+  Select,
+  Space,
+  Table,
+  Tag,
+  Typography,
+} from 'antd';
+import type { TableColumnsType } from 'antd';
 import type { AdminMessageDto, AdminSessionDetailDto, AdminSessionItemDto } from '@ai-office/shared';
 import {
   adminErrorText,
@@ -13,8 +28,20 @@ import {
 } from '../../../lib/admin-api';
 import { clearToken, isUnauthorized } from '@ai-office/web-core';
 
+const PAGE_SIZE = 20;
+const MESSAGE_PAGE_SIZE = 50;
+
+function formatTime(value: string): string {
+  return new Date(value).toLocaleString('zh-CN', { hour12: false });
+}
+
+function statusTag(status: AdminSessionItemDto['status']) {
+  return status === 'archived' ? <Tag>已归档</Tag> : <Tag color="success">活跃</Tag>;
+}
+
 export default function AdminSessionsPage() {
   const router = useRouter();
+  const { modal } = App.useApp();
   const [items, setItems] = useState<AdminSessionItemDto[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -23,6 +50,7 @@ export default function AdminSessionsPage() {
   const [tenantId, setTenantId] = useState('');
   const [userId, setUserId] = useState('');
   const [detail, setDetail] = useState<AdminSessionDetailDto | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
   const [messages, setMessages] = useState<AdminMessageDto[]>([]);
   const [messageTotal, setMessageTotal] = useState(0);
   const [messagePage, setMessagePage] = useState(1);
@@ -56,7 +84,14 @@ export default function AdminSessionsPage() {
     setLoading(true);
     setError('');
     try {
-      const data = await listAdminSessions({ page, pageSize: 20, q, status, tenantId, userId });
+      const data = await listAdminSessions({
+        page,
+        pageSize: PAGE_SIZE,
+        q,
+        status,
+        tenantId,
+        userId,
+      });
       // 过期响应不写状态
       if (id !== loadSeq.current) return true;
       setItems(data.items);
@@ -88,7 +123,7 @@ export default function AdminSessionsPage() {
       const seq = ++messageSeq.current;
       setMessagesLoading(true);
       try {
-        const data = await listAdminMessages(id, { page: targetPage, pageSize: 50 });
+        const data = await listAdminMessages(id, { page: targetPage, pageSize: MESSAGE_PAGE_SIZE });
         // 过期响应不写状态（切换会话或翻页已产生新请求）
         if (seq !== messageSeq.current) return true;
         setMessages(data.items);
@@ -116,6 +151,7 @@ export default function AdminSessionsPage() {
     setMessagesFor(null);
     setMessagesLoading(false);
     setError('');
+    setDetailLoading(true);
     try {
       const data = await getAdminSession(id);
       if (seq !== detailSeq.current) return;
@@ -124,6 +160,8 @@ export default function AdminSessionsPage() {
     } catch (err) {
       if (seq !== detailSeq.current) return;
       handleErr(err);
+    } finally {
+      if (seq === detailSeq.current) setDetailLoading(false);
     }
   }
 
@@ -132,6 +170,7 @@ export default function AdminSessionsPage() {
     detailSeq.current++;
     messageSeq.current++;
     setDetail(null);
+    setDetailLoading(false);
     setMessages([]);
     setMessageTotal(0);
     setMessagePage(1);
@@ -142,9 +181,20 @@ export default function AdminSessionsPage() {
   const inFlight = useRef(false);
   const [busy, setBusy] = useState(false);
 
-  async function archive(item: AdminSessionItemDto) {
+  function archive(item: AdminSessionItemDto) {
     if (inFlight.current) return;
-    if (!window.confirm(`确认归档会话「${item.title}」？归档后普通用户不可见且不可恢复。`)) return;
+    modal.confirm({
+      title: '确认归档会话',
+      content: `确认归档会话「${item.title}」？归档后普通用户不可见且不可恢复。`,
+      okText: '归档',
+      okType: 'danger',
+      cancelText: '取消',
+      onOk: () => runArchive(item),
+    });
+  }
+
+  async function runArchive(item: AdminSessionItemDto) {
+    if (inFlight.current) return;
     inFlight.current = true;
     setBusy(true);
     setError('');
@@ -165,164 +215,187 @@ export default function AdminSessionsPage() {
     }
   }
 
-  return (
-    <div className="page-scroll">
-      <div className="page">
-        <header className="page-head">
-          <div>
-            <h1 className="page-title">会话管理</h1>
-            <p className="page-sub">跨租户查看会话与消息；归档为不可恢复操作。</p>
-          </div>
-        </header>
-
-        {error && (
-          <div className="banner banner-error" role="alert" style={{ marginBottom: 16 }}>
-            {error}
-          </div>
-        )}
-
-        {notice && (
-          <div
-            className="banner"
-            role="status"
-            style={{ marginBottom: 16, background: 'var(--surface-2)', border: '1px solid var(--line)' }}
+  const columns: TableColumnsType<AdminSessionItemDto> = [
+    { title: '标题', dataIndex: 'title', ellipsis: true },
+    { title: '用户', dataIndex: 'userEmail', width: 200, ellipsis: true },
+    { title: '租户', dataIndex: 'tenantId', width: 240, ellipsis: true },
+    {
+      title: '状态',
+      dataIndex: 'status',
+      width: 100,
+      render: (v: AdminSessionItemDto['status']) => statusTag(v),
+    },
+    { title: '消息', dataIndex: 'messageCount', align: 'right', width: 90 },
+    { title: '任务', dataIndex: 'taskCount', align: 'right', width: 90 },
+    {
+      title: '创建时间',
+      dataIndex: 'createdAt',
+      width: 180,
+      render: (v: string) => formatTime(v),
+    },
+    {
+      title: '操作',
+      key: 'actions',
+      width: 140,
+      render: (_: unknown, s) => (
+        <Space size={4}>
+          <Button size="small" disabled={busy} onClick={() => void openDetail(s.id)}>
+            查看
+          </Button>
+          <Button
+            size="small"
+            disabled={busy || s.status === 'archived'}
+            onClick={() => archive(s)}
           >
-            {notice}
-          </div>
-        )}
+            归档
+          </Button>
+        </Space>
+      ),
+    },
+  ];
 
-        <div className="admin-toolbar">
-          <input className="admin-input" placeholder="标题" value={q} onChange={(e) => { setPage(1); setQ(e.target.value); }} />
-          <input className="admin-input" placeholder="租户 ID" value={tenantId} onChange={(e) => { setPage(1); setTenantId(e.target.value); }} />
-          <input className="admin-input" placeholder="用户 ID" value={userId} onChange={(e) => { setPage(1); setUserId(e.target.value); }} />
-          <select className="admin-input" value={status} onChange={(e) => { setPage(1); setStatus(e.target.value); }}>
-            <option value="">全部状态</option>
-            <option value="active">活跃</option>
-            <option value="archived">已归档</option>
-          </select>
-          <span className="admin-muted">共 {total} 条</span>
-        </div>
+  const messageColumns: TableColumnsType<AdminMessageDto> = [
+    { title: 'seq', dataIndex: 'seq', width: 70, align: 'right' },
+    { title: '角色', dataIndex: 'role', width: 100 },
+    {
+      title: '内容',
+      dataIndex: 'content',
+      render: (v: string) => (
+        <Typography.Text style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{v}</Typography.Text>
+      ),
+    },
+    {
+      title: '时间',
+      dataIndex: 'createdAt',
+      width: 180,
+      render: (v: string) => formatTime(v),
+    },
+  ];
 
-        {detail && (
-          <section className="admin-panel">
-            <h2 className="billing-heading">{detail.title}</h2>
-            <p className="admin-muted">
-              {detail.userEmail} · 状态 {detail.status} · 消息 {detail.messageCount} · 任务 {detail.taskCount} · 产物 {detail.artifactCount}
-            </p>
-            {messagesFor === detail.id ? (
-              messages.length === 0 ? (
-                <div className="admin-empty">暂无消息</div>
-              ) : (
-                <table className="admin-table">
-                  <thead>
-                    <tr>
-                      <th>seq</th>
-                      <th>角色</th>
-                      <th>内容</th>
-                      <th>时间</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {messages.map((m) => (
-                      <tr key={m.id}>
-                        <td className="numeric">{m.seq}</td>
-                        <td>{m.role}</td>
-                        <td style={{ whiteSpace: 'pre-wrap' }}>{m.content}</td>
-                        <td>{new Date(m.createdAt).toLocaleString('zh-CN', { hour12: false })}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )
-            ) : (
-              <div className="admin-empty">{messagesLoading ? '消息加载中…' : '消息加载失败，请重试'}</div>
-            )}
-            <div className="admin-pager">
-              {messagesFor === detail.id && (
-                <>
-                  <button
-                    type="button"
-                    className="admin-btn"
-                    disabled={messagePage <= 1}
-                    onClick={() => void loadMessages(detail.id, messagePage - 1)}
-                  >
-                    上一页
-                  </button>
-                  <span>第 {messagePage} 页 / 共 {messageTotal} 条</span>
-                  <button
-                    type="button"
-                    className="admin-btn"
-                    disabled={messagePage * 50 >= messageTotal}
-                    onClick={() => void loadMessages(detail.id, messagePage + 1)}
-                  >
-                    下一页
-                  </button>
-                </>
-              )}
-              <button type="button" className="admin-btn" disabled={busy} onClick={closeDetail}>
-                关闭
-              </button>
-            </div>
-          </section>
-        )}
-
-        {loading ? (
-          <div className="admin-empty">加载中…</div>
-        ) : items.length === 0 ? (
-          <div className="admin-empty">没有匹配的会话</div>
-        ) : (
-          <table className="admin-table">
-            <thead>
-              <tr>
-                <th>标题</th>
-                <th>用户</th>
-                <th>租户</th>
-                <th>状态</th>
-                <th>消息</th>
-                <th>任务</th>
-                <th>创建时间</th>
-                <th>操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.map((s) => (
-                <tr key={s.id}>
-                  <td>{s.title}</td>
-                  <td>{s.userEmail}</td>
-                  <td>{s.tenantId}</td>
-                  <td>{s.status === 'archived' ? '已归档' : '活跃'}</td>
-                  <td className="numeric">{s.messageCount}</td>
-                  <td className="numeric">{s.taskCount}</td>
-                  <td>{new Date(s.createdAt).toLocaleString('zh-CN', { hour12: false })}</td>
-                  <td>
-                    <button type="button" className="admin-btn" disabled={busy} onClick={() => void openDetail(s.id)}>
-                      查看
-                    </button>{' '}
-                    <button
-                      type="button"
-                      className="admin-btn"
-                      disabled={busy || s.status === 'archived'}
-                      onClick={() => void archive(s)}
-                    >
-                      归档
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-
-        <div className="admin-pager">
-          <button type="button" className="admin-btn" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
-            上一页
-          </button>
-          <span>第 {page} 页</span>
-          <button type="button" className="admin-btn" disabled={page * 20 >= total} onClick={() => setPage((p) => p + 1)}>
-            下一页
-          </button>
-        </div>
+  return (
+    <Space direction="vertical" size={16} style={{ width: '100%' }}>
+      <div>
+        <Typography.Title level={4} style={{ margin: 0 }}>
+          会话管理
+        </Typography.Title>
+        <Typography.Text type="secondary">跨租户查看会话与消息；归档为不可恢复操作。</Typography.Text>
       </div>
-    </div>
+
+      {error ? <Alert type="error" showIcon message={error} /> : null}
+      {notice ? <Alert type="info" showIcon message={notice} /> : null}
+
+      <Card
+        title={
+          <Space wrap>
+            <Input
+              allowClear
+              placeholder="标题"
+              value={q}
+              onChange={(e) => {
+                setPage(1);
+                setQ(e.target.value);
+              }}
+              style={{ width: 180 }}
+            />
+            <Input
+              allowClear
+              placeholder="租户 ID"
+              value={tenantId}
+              onChange={(e) => {
+                setPage(1);
+                setTenantId(e.target.value);
+              }}
+              style={{ width: 220 }}
+            />
+            <Input
+              allowClear
+              placeholder="用户 ID"
+              value={userId}
+              onChange={(e) => {
+                setPage(1);
+                setUserId(e.target.value);
+              }}
+              style={{ width: 220 }}
+            />
+            <Select
+              value={status}
+              onChange={(v) => {
+                setPage(1);
+                setStatus(v);
+              }}
+              style={{ width: 130 }}
+              options={[
+                { value: '', label: '全部状态' },
+                { value: 'active', label: '活跃' },
+                { value: 'archived', label: '已归档' },
+              ]}
+            />
+          </Space>
+        }
+        extra={<Typography.Text type="secondary">共 {total} 条</Typography.Text>}
+      >
+        <Table<AdminSessionItemDto>
+          rowKey="id"
+          size="middle"
+          loading={loading}
+          columns={columns}
+          dataSource={items}
+          scroll={{ x: 1100 }}
+          locale={{ emptyText: '没有匹配的会话' }}
+          pagination={{
+            current: page,
+            pageSize: PAGE_SIZE,
+            total,
+            showSizeChanger: false,
+            onChange: setPage,
+          }}
+        />
+      </Card>
+
+      <Drawer
+        title={detail ? `会话详情 · ${detail.title}` : '会话详情'}
+        width={900}
+        open={detail !== null || detailLoading}
+        onClose={closeDetail}
+        destroyOnHidden
+        loading={detailLoading}
+      >
+        {detail ? (
+          <Space direction="vertical" size={16} style={{ width: '100%' }}>
+            <Descriptions column={2} size="small" bordered>
+              <Descriptions.Item label="用户">{detail.userEmail}</Descriptions.Item>
+              <Descriptions.Item label="状态">{statusTag(detail.status)}</Descriptions.Item>
+              <Descriptions.Item label="消息数">{detail.messageCount}</Descriptions.Item>
+              <Descriptions.Item label="任务数">{detail.taskCount}</Descriptions.Item>
+              <Descriptions.Item label="产物数">{detail.artifactCount}</Descriptions.Item>
+            </Descriptions>
+
+            {messagesFor === detail.id ? (
+              <Table<AdminMessageDto>
+                rowKey="id"
+                size="small"
+                loading={messagesLoading}
+                columns={messageColumns}
+                dataSource={messages}
+                scroll={{ x: 760 }}
+                locale={{ emptyText: '暂无消息' }}
+                pagination={{
+                  current: messagePage,
+                  pageSize: MESSAGE_PAGE_SIZE,
+                  total: messageTotal,
+                  showSizeChanger: false,
+                  showTotal: (t) => `共 ${t} 条`,
+                  onChange: (p) => void loadMessages(detail.id, p),
+                }}
+              />
+            ) : (
+              <Typography.Text type="secondary">
+                {messagesLoading ? '消息加载中…' : '消息加载失败，请重试'}
+              </Typography.Text>
+            )}
+          </Space>
+        ) : null}
+      </Drawer>
+    </Space>
   );
 }

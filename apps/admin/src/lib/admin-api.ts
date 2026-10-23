@@ -5,6 +5,11 @@ import type {
   AdminAlertTestResultDto,
   AdminAuditItemDto,
   AdminCreditsRequest,
+  AdminKbBaseDetailDto,
+  AdminKbBaseItemDto,
+  AdminKbDeleteInput,
+  AdminKbDocDeleteInput,
+  AdminKbStatsDto,
   AdminMessageDto,
   AdminMetricDimensionType,
   AdminMetricGranularity,
@@ -34,6 +39,8 @@ import type {
   AdminUserItemDto,
   AdminUserPatch,
   BillingSummaryDto,
+  KbDeleteResultDto,
+  ModelCapability,
   ModelModality,
   PageDto,
 } from '@ai-office/shared';
@@ -113,6 +120,11 @@ export function adminErrorText(err: unknown): string {
     'admin_failed_404_model_not_found': '模型不存在',
     'admin_failed_503_model_provider_unavailable': '厂商密钥无法解密，请联系运维检查 MODEL_ENC_KEY',
     'admin_failed_404_setting_not_found': '参数不存在',
+    'admin_failed_400_invalid_kb_ids': '助手绑定的知识库不合法',
+    'admin_failed_400_invalid_kb_name': '知识库名称不能为空且不超过 60 字',
+    'admin_failed_404_kb_base_not_found': '知识库不存在或已被删除',
+    'admin_failed_404_kb_doc_not_found': '文档不存在或不属于该知识库',
+    'admin_failed_409_kb_base_exists': '同一用户下已存在同名知识库',
     'admin_failed_400_invalid_kbChunkOverlap': '分块重叠必须小于分块大小',
     'admin_failed_400_invalid_kbChunkSize': '分块大小必须大于分块重叠',
     'admin_failed_400_invalid_value': '参数值超出允许范围',
@@ -287,6 +299,7 @@ export function createAdminModel(input: {
   displayName?: string;
   providerId: string;
   enabled?: boolean;
+  capabilities?: ModelCapability[];
   modalities?: ModelModality[];
   sortOrder?: number;
   prices: { inputMilliCreditsPer1k: number; outputMilliCreditsPer1k: number };
@@ -299,6 +312,7 @@ export function updateAdminModel(input: {
   displayName?: string | null;
   providerId?: string;
   enabled?: boolean;
+  capabilities?: ModelCapability[];
   modalities?: ModelModality[];
   sortOrder?: number;
   prices?: { inputMilliCreditsPer1k: number; outputMilliCreditsPer1k: number };
@@ -316,6 +330,48 @@ export function testAdminModel(model: string): Promise<AdminModelTestResultDto> 
 
 export function setDefaultModel(model: string): Promise<AdminModelsDto> {
   return request('/api/admin/default-model', { method: 'PUT', body: JSON.stringify({ model }) });
+}
+
+// ------------------------------------------------------------------ 知识库
+export function getAdminKbStats(): Promise<AdminKbStatsDto> {
+  return request('/api/admin/kb/stats');
+}
+
+export function listAdminKbBases(params: {
+  q?: string;
+  tenantId?: string;
+  page?: number;
+  pageSize?: number;
+}): Promise<PageDto<AdminKbBaseItemDto>> {
+  return request(`/api/admin/kb/bases${query(params)}`);
+}
+
+export function getAdminKbBase(
+  id: string,
+  params: { docPage?: number; docPageSize?: number } = {},
+): Promise<AdminKbBaseDetailDto> {
+  return request(`/api/admin/kb/bases/${encodeURIComponent(id)}${query(params)}`);
+}
+
+export function deleteAdminKbBase(
+  id: string,
+  body: AdminKbDeleteInput,
+): Promise<KbDeleteResultDto> {
+  return request(`/api/admin/kb/bases/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    body: JSON.stringify(body),
+  });
+}
+
+export function deleteAdminKbDoc(
+  baseId: string,
+  docId: string,
+  body: AdminKbDocDeleteInput,
+): Promise<KbDeleteResultDto> {
+  return request(
+    `/api/admin/kb/bases/${encodeURIComponent(baseId)}/docs/${encodeURIComponent(docId)}`,
+    { method: 'DELETE', body: JSON.stringify(body) },
+  );
 }
 
 // ------------------------------------------------------------------ 参数 / 审计

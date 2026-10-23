@@ -3,6 +3,22 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
+  Alert,
+  App,
+  Button,
+  Card,
+  Input,
+  InputNumber,
+  Modal,
+  Select,
+  Space,
+  Switch,
+  Table,
+  Tag,
+  Typography,
+} from 'antd';
+import type { TableColumnsType } from 'antd';
+import {
   MODEL_MODALITY_LABELS,
   type AdminModelDto,
   type AdminPlanDto,
@@ -32,8 +48,13 @@ const EMPTY: AdminPlanInput = {
   active: true,
 };
 
+function numberOrZero(v: number | null): number {
+  return typeof v === 'number' && Number.isFinite(v) ? v : 0;
+}
+
 export default function AdminPlansPage() {
   const router = useRouter();
+  const { modal, message } = App.useApp();
   const [plans, setPlans] = useState<AdminPlanDto[]>([]);
   const [form, setForm] = useState<AdminPlanInput>(EMPTY);
   const [catalog, setCatalog] = useState<AdminModelDto[]>([]);
@@ -130,10 +151,8 @@ export default function AdminPlansPage() {
     setForm(EMPTY);
   }
 
-  async function save() {
-    if (inFlight.current) return;
-    setError('');
-    setNotice('');
+  function save() {
+    if (inFlight.current || busy) return;
     const payload: AdminPlanInput = {
       ...form,
       allowedModels: form.allowedModels,
@@ -147,7 +166,19 @@ export default function AdminPlansPage() {
       return;
     }
     const verb = editing ? '保存修改' : '创建套餐';
-    if (!window.confirm(`确认${verb} ${payload.name}？`)) return;
+    modal.confirm({
+      title: `确认${verb}`,
+      content: `确认${verb}「${payload.name}」？`,
+      okText: verb,
+      cancelText: '取消',
+      onOk: () => runSave(payload),
+    });
+  }
+
+  async function runSave(payload: AdminPlanInput) {
+    if (inFlight.current) return;
+    setError('');
+    setNotice('');
     inFlight.current = true;
     setBusy(true);
     try {
@@ -219,9 +250,20 @@ export default function AdminPlansPage() {
     }
   }
 
-  async function deactivate(plan: AdminPlanDto) {
+  function deactivate(plan: AdminPlanDto) {
     if (inFlight.current) return;
-    if (!window.confirm(`确认停用套餐 ${plan.name}？`)) return;
+    modal.confirm({
+      title: '确认停用套餐',
+      content: `确认停用套餐「${plan.name}」？停用后新用户不可再订阅。`,
+      okText: '停用',
+      okType: 'danger',
+      cancelText: '取消',
+      onOk: () => runDeactivate(plan),
+    });
+  }
+
+  async function runDeactivate(plan: AdminPlanDto) {
+    if (inFlight.current) return;
     inFlight.current = true;
     setBusy(true);
     setError('');
@@ -242,224 +284,271 @@ export default function AdminPlansPage() {
     }
   }
 
-  return (
-    <div className="page-scroll">
-      <div className="page">
-        <header className="page-head">
-          <div>
-            <h1 className="page-title">套餐目录</h1>
-            <p className="page-sub">
-              停用用于暂时下线；删除不可恢复，需手动输入套餐标识确认。免费套餐不可停用或删除。
-            </p>
-          </div>
-        </header>
+  // 目录里没有的历史模型也要展示，避免编辑旧套餐时引用被悄悄丢弃。
+  const modelOptions = [
+    ...catalog,
+    ...form.allowedModels
+      .filter((m) => !catalog.some((c) => c.model === m))
+      .map((model) => ({
+        model,
+        displayName: model,
+        enabled: false,
+        providerName: null,
+        modalities: [] as AdminModelDto['modalities'],
+      })),
+  ].map((m) => ({
+    value: m.model,
+    label: `${m.displayName || m.model}${
+      m.modalities.length > 0
+        ? `（${m.modalities.map((x) => MODEL_MODALITY_LABELS[x]).join('、')}）`
+        : ''
+    }${!m.enabled ? '（已停用）' : ''}`,
+  }));
 
-        {error && (
-          <div className="banner banner-error" role="alert" style={{ marginBottom: 16 }}>
-            {error}
-          </div>
-        )}
-
-        {notice && (
-          <div
-            className="banner"
-            role="status"
-            style={{ marginBottom: 16, background: 'var(--surface-2)', border: '1px solid var(--line)' }}
+  const columns: TableColumnsType<AdminPlanDto> = [
+    { title: '标识', dataIndex: 'id', width: 120 },
+    {
+      title: '名称',
+      dataIndex: 'name',
+      render: (v: string) => <Typography.Text strong>{v}</Typography.Text>,
+    },
+    { title: '价格（分）', dataIndex: 'priceCents', align: 'right', width: 120 },
+    {
+      title: '额度',
+      key: 'credits',
+      align: 'right',
+      width: 110,
+      render: (_: unknown, p) => p.monthlyBaseCredits + p.monthlyBonusCredits,
+    },
+    { title: '单次上限', dataIndex: 'maxCreditsPerRun', align: 'right', width: 110 },
+    { title: 'RPM', dataIndex: 'rpm', align: 'right', width: 90 },
+    {
+      title: '模型',
+      dataIndex: 'allowedModels',
+      ellipsis: true,
+      render: (v: string[]) => v.join('、'),
+    },
+    {
+      title: '状态',
+      dataIndex: 'active',
+      width: 90,
+      render: (v: boolean) =>
+        v ? <Tag color="success">启用</Tag> : <Tag>停用</Tag>,
+    },
+    {
+      title: '操作',
+      key: 'actions',
+      width: 190,
+      render: (_: unknown, p) => (
+        <Space size={4}>
+          <Button size="small" disabled={busy} onClick={() => startEdit(p)}>
+            编辑
+          </Button>
+          <Button
+            size="small"
+            disabled={busy || p.id === 'free' || !p.active}
+            onClick={() => deactivate(p)}
           >
-            {notice}
-          </div>
-        )}
+            停用
+          </Button>
+          <Button
+            size="small"
+            danger
+            disabled={busy || p.id === 'free'}
+            title={p.id === 'free' ? '免费套餐是注册默认套餐，不能删除' : undefined}
+            onClick={() => startDelete(p)}
+          >
+            删除
+          </Button>
+        </Space>
+      ),
+    },
+  ];
 
-        {deleting && (
-          <section className="admin-panel" style={{ borderColor: 'var(--danger)' }}>
-            <h2 className="billing-heading">
-              删除套餐 {deleting.name}（{deleting.id}）
-            </h2>
-            <p className="page-sub" style={{ marginBottom: 12 }}>
-              删除后不可恢复，且该套餐下不能存在租户订阅。请输入套餐标识{' '}
-              <strong>{deleting.id}</strong> 以确认。
-            </p>
-            <div className="admin-form">
-              <label className="admin-field">
-                套餐标识
-                <input
-                  className="admin-input"
-                  value={confirmId}
-                  placeholder={deleting.id}
-                  disabled={busy}
-                  autoFocus
-                  onChange={(e) => setConfirmId(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') void confirmDelete();
-                  }}
-                />
-              </label>
-              <button
-                type="button"
-                className="admin-btn danger"
-                disabled={busy || confirmId.trim() !== deleting.id}
-                onClick={() => void confirmDelete()}
-              >
-                确认删除
-              </button>
-              <button type="button" className="admin-btn" disabled={busy} onClick={cancelDelete}>
-                取消
-              </button>
-            </div>
-          </section>
-        )}
+  return (
+    <Space direction="vertical" size={16} style={{ width: '100%' }}>
+      <div>
+        <Typography.Title level={4} style={{ margin: 0 }}>
+          套餐目录
+        </Typography.Title>
+        <Typography.Text type="secondary">
+          停用用于暂时下线；删除不可恢复，需手动输入套餐标识确认。免费套餐不可停用或删除。
+        </Typography.Text>
+      </div>
 
-        <section className="admin-panel">
-          <h2 className="billing-heading">{editing ? `编辑 ${editing}` : '新建套餐'}</h2>
-          <div className="admin-form">
-            <label className="admin-field">
-              标识（slug）
-              <input
-                className="admin-input"
+      {error ? <Alert type="error" showIcon message={error} /> : null}
+      {notice ? <Alert type="info" showIcon message={notice} /> : null}
+
+      <Card title={editing ? `编辑套餐 ${editing}` : '新建套餐'}>
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+              gap: 12,
+            }}
+          >
+            <label>
+              <Typography.Text type="secondary">标识（slug）</Typography.Text>
+              <Input
+                style={{ marginTop: 4 }}
                 value={form.id}
                 disabled={!!editing || busy}
                 onChange={(e) => setForm({ ...form, id: e.target.value })}
               />
             </label>
-            <label className="admin-field">
-              名称
-              <input className="admin-input" value={form.name} disabled={busy} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+            <label>
+              <Typography.Text type="secondary">名称</Typography.Text>
+              <Input
+                style={{ marginTop: 4 }}
+                value={form.name}
+                disabled={busy}
+                onChange={(e) => setForm({ ...form, name: e.target.value })}
+              />
             </label>
-            <label className="admin-field">
-              价格（分/月）
-              <input className="admin-input" type="number" min={0} step={1} value={form.priceCents} disabled={busy} onChange={(e) => setForm({ ...form, priceCents: Number(e.target.value) })} />
+            <label>
+              <Typography.Text type="secondary">价格（分/月）</Typography.Text>
+              <InputNumber
+                style={{ marginTop: 4, width: '100%' }}
+                min={0}
+                precision={0}
+                value={form.priceCents}
+                disabled={busy}
+                onChange={(v) => setForm({ ...form, priceCents: numberOrZero(v) })}
+              />
             </label>
-            <label className="admin-field">
-              月度基础积分
-              <input className="admin-input" type="number" min={0} step={1} value={form.monthlyBaseCredits} disabled={busy} onChange={(e) => setForm({ ...form, monthlyBaseCredits: Number(e.target.value) })} />
+            <label>
+              <Typography.Text type="secondary">月度基础积分</Typography.Text>
+              <InputNumber
+                style={{ marginTop: 4, width: '100%' }}
+                min={0}
+                precision={0}
+                value={form.monthlyBaseCredits}
+                disabled={busy}
+                onChange={(v) => setForm({ ...form, monthlyBaseCredits: numberOrZero(v) })}
+              />
             </label>
-            <label className="admin-field">
-              月度赠送积分
-              <input className="admin-input" type="number" min={0} step={1} value={form.monthlyBonusCredits} disabled={busy} onChange={(e) => setForm({ ...form, monthlyBonusCredits: Number(e.target.value) })} />
+            <label>
+              <Typography.Text type="secondary">月度赠送积分</Typography.Text>
+              <InputNumber
+                style={{ marginTop: 4, width: '100%' }}
+                min={0}
+                precision={0}
+                value={form.monthlyBonusCredits}
+                disabled={busy}
+                onChange={(v) => setForm({ ...form, monthlyBonusCredits: numberOrZero(v) })}
+              />
             </label>
-            <label className="admin-field">
-              单次上限
-              <input className="admin-input" type="number" min={0} step={1} value={form.maxCreditsPerRun} disabled={busy} onChange={(e) => setForm({ ...form, maxCreditsPerRun: Number(e.target.value) })} />
+            <label>
+              <Typography.Text type="secondary">单次上限</Typography.Text>
+              <InputNumber
+                style={{ marginTop: 4, width: '100%' }}
+                min={0}
+                precision={0}
+                value={form.maxCreditsPerRun}
+                disabled={busy}
+                onChange={(v) => setForm({ ...form, maxCreditsPerRun: numberOrZero(v) })}
+              />
             </label>
-            <label className="admin-field">
-              RPM
-              <input className="admin-input" type="number" min={0} step={1} value={form.rpm} disabled={busy} onChange={(e) => setForm({ ...form, rpm: Number(e.target.value) })} />
+            <label>
+              <Typography.Text type="secondary">RPM</Typography.Text>
+              <InputNumber
+                style={{ marginTop: 4, width: '100%' }}
+                min={0}
+                precision={0}
+                value={form.rpm}
+                disabled={busy}
+                onChange={(v) => setForm({ ...form, rpm: numberOrZero(v) })}
+              />
             </label>
-            <div className="admin-field" style={{ minWidth: 280 }}>
-              允许模型
-              {catalogError && <span className="banner-error">{catalogError}</span>}
-              <div className="admin-checks">
-                {[
-                  ...catalog,
-                  ...form.allowedModels
-                    .filter((m) => !catalog.some((c) => c.model === m))
-                    .map((model) => ({
-                      model,
-                      displayName: model,
-                      enabled: false,
-                      providerName: null,
-                      modalities: [] as AdminModelDto['modalities'],
-                    })),
-                ].map((m) => {
-                  const checked = form.allowedModels.includes(m.model);
-                  return (
-                    <label className="admin-check" key={m.model}>
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        disabled={busy}
-                        onChange={(e) =>
-                          setForm({
-                            ...form,
-                            allowedModels: e.target.checked
-                              ? [...form.allowedModels, m.model]
-                              : form.allowedModels.filter((x) => x !== m.model),
-                          })
-                        }
-                      />
-                      <span>
-                        {m.displayName || m.model}
-                        {m.modalities.length > 0
-                          ? `（${m.modalities.map((x) => MODEL_MODALITY_LABELS[x]).join('、')}）`
-                          : ''}
-                        {!m.enabled ? '（已停用）' : ''}
-                      </span>
-                    </label>
-                  );
-                })}
-              </div>
-            </div>
-            <label className="admin-field">
-              启用
-              <input type="checkbox" checked={form.active} disabled={busy} onChange={(e) => setForm({ ...form, active: e.target.checked })} />
-            </label>
-            <button type="button" className="admin-btn primary" disabled={busy} onClick={() => void save()}>
-              {editing ? '保存' : '创建'}
-            </button>
-            {editing && (
-              <button type="button" className="admin-btn" disabled={busy} onClick={resetForm}>
-                取消
-              </button>
-            )}
           </div>
-        </section>
 
-        {loading ? (
-          <div className="admin-empty">加载中…</div>
-        ) : (
-          <table className="admin-table">
-            <thead>
-              <tr>
-                <th>标识</th>
-                <th>名称</th>
-                <th>价格</th>
-                <th>额度</th>
-                <th>单次上限</th>
-                <th>RPM</th>
-                <th>模型</th>
-                <th>状态</th>
-                <th>操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              {plans.map((p) => (
-                <tr key={p.id}>
-                  <td>{p.id}</td>
-                  <td>{p.name}</td>
-                  <td className="numeric">{p.priceCents}</td>
-                  <td className="numeric">{p.monthlyBaseCredits + p.monthlyBonusCredits}</td>
-                  <td className="numeric">{p.maxCreditsPerRun}</td>
-                  <td className="numeric">{p.rpm}</td>
-                  <td>{p.allowedModels.join('、')}</td>
-                  <td>{p.active ? '启用' : '停用'}</td>
-                  <td>
-                    <button type="button" className="admin-btn" disabled={busy} onClick={() => startEdit(p)}>
-                      编辑
-                    </button>{' '}
-                    <button
-                      type="button"
-                      className="admin-btn"
-                      disabled={busy || p.id === 'free' || !p.active}
-                      onClick={() => void deactivate(p)}
-                    >
-                      停用
-                    </button>{' '}
-                    <button
-                      type="button"
-                      className="admin-btn danger"
-                      disabled={busy || p.id === 'free'}
-                      title={p.id === 'free' ? '免费套餐是注册默认套餐，不能删除' : undefined}
-                      onClick={() => startDelete(p)}
-                    >
-                      删除
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
-    </div>
+          <div>
+            <Typography.Text type="secondary">允许模型</Typography.Text>
+            {catalogError ? (
+              <div style={{ marginTop: 4 }}>
+                <Typography.Text type="danger">{catalogError}</Typography.Text>
+              </div>
+            ) : null}
+            <Select
+              mode="multiple"
+              style={{ width: '100%', marginTop: 4 }}
+              placeholder="选择套餐可用的模型"
+              value={form.allowedModels}
+              options={modelOptions}
+              disabled={busy}
+              onChange={(values: string[]) => setForm({ ...form, allowedModels: values })}
+            />
+          </div>
+
+          <Space>
+            <Space size={8}>
+              <Typography.Text type="secondary">启用</Typography.Text>
+              <Switch
+                checked={form.active}
+                disabled={busy}
+                onChange={(checked) => setForm({ ...form, active: checked })}
+              />
+            </Space>
+            <Button type="primary" disabled={busy} onClick={save}>
+              {editing ? '保存' : '创建'}
+            </Button>
+            {editing ? (
+              <Button disabled={busy} onClick={resetForm}>
+                取消
+              </Button>
+            ) : null}
+          </Space>
+        </Space>
+      </Card>
+
+      <Card title="套餐列表" extra={<Typography.Text type="secondary">共 {plans.length} 个</Typography.Text>}>
+        <Table<AdminPlanDto>
+          rowKey="id"
+          size="middle"
+          loading={loading}
+          columns={columns}
+          dataSource={plans}
+          scroll={{ x: 1200 }}
+          pagination={false}
+          locale={{ emptyText: '暂无套餐' }}
+        />
+      </Card>
+
+      <Modal
+        title={deleting ? `删除套餐 ${deleting.name}（${deleting.id}）` : '删除套餐'}
+        open={deleting !== null}
+        okText="确认删除"
+        okButtonProps={{
+          danger: true,
+          disabled: busy || confirmId.trim() !== (deleting?.id ?? ''),
+        }}
+        cancelText="取消"
+        onOk={() => void confirmDelete()}
+        onCancel={cancelDelete}
+        destroyOnHidden
+      >
+        <Space direction="vertical" size={8} style={{ width: '100%' }}>
+          <Typography.Text>
+            删除后不可恢复，且该套餐下不能存在租户订阅。请输入套餐标识{' '}
+            <Typography.Text strong>{deleting?.id}</Typography.Text> 以确认。
+          </Typography.Text>
+          <Input
+            value={confirmId}
+            placeholder={deleting?.id}
+            disabled={busy}
+            autoFocus
+            onChange={(e) => setConfirmId(e.target.value)}
+            onPressEnter={() => {
+              if (confirmId.trim() === deleting?.id) {
+                void confirmDelete();
+              } else {
+                void message.error('请输入完整且一致的套餐标识后再删除');
+              }
+            }}
+          />
+        </Space>
+      </Modal>
+    </Space>
   );
 }

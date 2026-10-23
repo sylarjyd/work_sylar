@@ -2,12 +2,17 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { Alert, Button, Form, Input, Typography } from 'antd';
 import { authErrorMessage, clearToken, getRole, login } from '@ai-office/web-core';
+
+interface LoginValues {
+  email: string;
+  password: string;
+}
 
 export default function AdminLoginPage() {
   const router = useRouter();
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
+  const [form] = Form.useForm<LoginValues>();
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -16,13 +21,12 @@ export default function AdminLoginPage() {
     if (getRole() === 'admin') router.replace('/overview');
   }, [router]);
 
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
+  async function submit(values: LoginValues) {
     if (busy) return;
     setError('');
     setBusy(true);
     try {
-      const data = await login(email, password);
+      const data = await login(values.email, values.password);
       if (data.user.role !== 'admin') {
         // 非管理员不能进入运营端：清掉刚写入的 token，避免下次被误判为已登录。
         clearToken();
@@ -75,55 +79,62 @@ export default function AdminLoginPage() {
 
       <div className="login-main">
         <div className="login-card">
-          <h1 className="login-title">运营平台登录</h1>
-          <p className="login-sub">仅限平台运营人员访问，请使用管理员账号登录</p>
+          <Typography.Title level={3} style={{ marginTop: 0, marginBottom: 4 }}>
+            运营平台登录
+          </Typography.Title>
+          <Typography.Paragraph type="secondary" style={{ marginBottom: 20 }}>
+            仅限平台运营人员访问，请使用管理员账号登录
+          </Typography.Paragraph>
 
-          <form className="login-form" onSubmit={submit}>
-            <div className="field">
-              <label className="field-label" htmlFor="email">
-                邮箱
-              </label>
-              <input
-                id="email"
-                className="input"
+          <Form<LoginValues>
+            form={form}
+            layout="vertical"
+            requiredMark={false}
+            onFinish={(values) => void submit(values)}
+            disabled={busy}
+          >
+            <Form.Item
+              label="邮箱"
+              name="email"
+              rules={[{ required: true, message: '请输入管理员邮箱' }]}
+            >
+              <Input
                 type="email"
-                required
                 autoComplete="email"
                 placeholder="请输入管理员邮箱"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
+                size="large"
               />
-            </div>
-            <div className="field">
-              <label className="field-label" htmlFor="password">
-                密码
-              </label>
-              <input
-                id="password"
-                className="input"
-                type="password"
-                required
+            </Form.Item>
+            <Form.Item
+              label="密码"
+              name="password"
+              rules={[{ required: true, message: '请输入密码' }]}
+            >
+              <Input.Password
                 autoComplete="current-password"
                 placeholder="请输入密码"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
+                size="large"
               />
-            </div>
-            {error && (
-              <div className="banner banner-error login-error" role="alert">
-                {error}
-              </div>
-            )}
-            <button type="submit" className="btn btn-mint" disabled={busy}>
-              {busy ? '请稍候…' : '登录'}
-            </button>
-          </form>
+            </Form.Item>
 
-          <p className="login-legal">
+            {error ? (
+              <Form.Item>
+                <Alert type="error" showIcon message={error} />
+              </Form.Item>
+            ) : null}
+
+            <Form.Item style={{ marginBottom: 8 }}>
+              <Button type="primary" htmlType="submit" block size="large" loading={busy}>
+                {busy ? '请稍候…' : '登录'}
+              </Button>
+            </Form.Item>
+          </Form>
+
+          <Typography.Paragraph type="secondary" className="login-legal">
             运营平台通常部署于内网，请勿在公网环境直接暴露。
             <br />
             普通用户请在客户工作台注册并登录。
-          </p>
+          </Typography.Paragraph>
         </div>
       </div>
 

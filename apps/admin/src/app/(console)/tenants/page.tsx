@@ -2,6 +2,20 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import {
+  Alert,
+  App,
+  Button,
+  Card,
+  Descriptions,
+  Drawer,
+  Input,
+  Select,
+  Space,
+  Table,
+  Typography,
+} from 'antd';
+import type { TableColumnsType } from 'antd';
 import type {
   AdminPlanDto,
   AdminTenantDetailDto,
@@ -18,8 +32,15 @@ import {
 } from '../../../lib/admin-api';
 import { clearToken, isUnauthorized } from '@ai-office/web-core';
 
+const PAGE_SIZE = 20;
+
+function formatTime(value: string): string {
+  return new Date(value).toLocaleString('zh-CN', { hour12: false });
+}
+
 export default function AdminTenantsPage() {
   const router = useRouter();
+  const { modal, message } = App.useApp();
   const [items, setItems] = useState<AdminTenantItemDto[]>([]);
   const [plans, setPlans] = useState<AdminPlanDto[]>([]);
   const [total, setTotal] = useState(0);
@@ -27,12 +48,14 @@ export default function AdminTenantsPage() {
   const [q, setQ] = useState('');
   const [planId, setPlanId] = useState('');
   const [detail, setDetail] = useState<AdminTenantDetailDto | null>(null);
+  const [detailId, setDetailId] = useState<string | null>(null);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
   const [amount, setAmount] = useState('');
   const [note, setNote] = useState('');
+  const [planPick, setPlanPick] = useState<string | undefined>(undefined);
   const [busy, setBusy] = useState(false);
   const loadSeq = useRef(0);
   const detailSeq = useRef(0);
@@ -63,7 +86,7 @@ export default function AdminTenantsPage() {
       if (!opts?.preserveError) setError('');
       try {
         const [data, planRows] = await Promise.all([
-          listAdminTenants({ page, pageSize: 20, q, planId }),
+          listAdminTenants({ page, pageSize: PAGE_SIZE, q, planId }),
           listAdminPlans(),
         ]);
         // 过期请求：已有更新的请求在途，视为无需提示失败
@@ -112,6 +135,22 @@ export default function AdminTenantsPage() {
     }
   }
 
+  function openDrawer(item: AdminTenantItemDto) {
+    setDetail(null);
+    setDetailId(item.id);
+    void openDetail(item.id);
+  }
+
+  function closeDetail() {
+    detailSeq.current += 1;
+    setDetailId(null);
+    setDetail(null);
+    setAmount('');
+    setNote('');
+    setPlanPick(undefined);
+    setDetailLoading(false);
+  }
+
   async function refreshAfterWrite(tenantId: string) {
     // 写操作已成功，先给出明确的成功提示，避免刷新失败被误判为操作失败
     setNotice('操作已成功，正在刷新数据…');
@@ -126,202 +165,234 @@ export default function AdminTenantsPage() {
     );
   }
 
-  function closeDetail() {
-    detailSeq.current += 1;
-    setDetail(null);
-    setAmount('');
-    setNote('');
-    setDetailLoading(false);
-  }
-
-  async function subscribe(tenantId: string, tenantName: string, plan: string) {
+  function subscribe(tenantId: string, tenantName: string, plan: string) {
     if (inFlight.current) return;
+    setPlanPick(undefined);
     if (!plan) return;
     const planName = plans.find((p) => p.id === plan)?.name ?? plan;
-    if (!window.confirm(`确认给 ${tenantName} 开通套餐 ${planName}？`)) return;
-    inFlight.current = true;
-    setBusy(true);
-    setError('');
-    setNotice('');
-    try {
-      await adminSubscribeTenant(tenantId, { planId: plan });
-      await refreshAfterWrite(tenantId);
-    } catch (err) {
-      handleErr(err);
-    } finally {
-      inFlight.current = false;
-      setBusy(false);
-    }
+    modal.confirm({
+      title: '确认开通套餐',
+      content: `确认给「${tenantName}」开通套餐「${planName}」？`,
+      okText: '确认开通',
+      cancelText: '取消',
+      onOk: async () => {
+        if (inFlight.current) return;
+        inFlight.current = true;
+        setBusy(true);
+        setError('');
+        setNotice('');
+        try {
+          await adminSubscribeTenant(tenantId, { planId: plan });
+          await refreshAfterWrite(tenantId);
+        } catch (err) {
+          handleErr(err);
+        } finally {
+          inFlight.current = false;
+          setBusy(false);
+        }
+      },
+    });
   }
 
   async function adjust(tenantId: string, tenantName: string) {
     if (inFlight.current) return;
     const value = Number(amount);
     if (!Number.isSafeInteger(value) || value === 0) {
-      setError('请输入非零整数积分');
+      void message.error('请输入非零整数积分');
       return;
     }
-    if (!window.confirm(`确认调整 ${tenantName} 的积分 ${value}？\n备注：${note.trim() || '—'}`)) return;
-    inFlight.current = true;
-    setBusy(true);
-    setError('');
-    setNotice('');
-    try {
-      await adminAdjustCredits(tenantId, { amount: value, note });
-      setAmount('');
-      setNote('');
-      await refreshAfterWrite(tenantId);
-    } catch (err) {
-      handleErr(err);
-    } finally {
-      inFlight.current = false;
-      setBusy(false);
-    }
+    modal.confirm({
+      title: '确认调整积分',
+      content: (
+        <div>
+          <div>租户：{tenantName}</div>
+          <div>调整：{value}</div>
+          <div>备注：{note.trim() || '—'}</div>
+        </div>
+      ),
+      okText: '确认调整',
+      cancelText: '取消',
+      onOk: async () => {
+        if (inFlight.current) return;
+        inFlight.current = true;
+        setBusy(true);
+        setError('');
+        setNotice('');
+        try {
+          await adminAdjustCredits(tenantId, { amount: value, note });
+          setAmount('');
+          setNote('');
+          await refreshAfterWrite(tenantId);
+        } catch (err) {
+          handleErr(err);
+        } finally {
+          inFlight.current = false;
+          setBusy(false);
+        }
+      },
+    });
   }
 
+  const columns: TableColumnsType<AdminTenantItemDto> = [
+    {
+      title: '租户',
+      dataIndex: 'name',
+      render: (v: string) => <Typography.Text strong>{v}</Typography.Text>,
+    },
+    { title: '套餐', dataIndex: 'planName' },
+    { title: '状态', dataIndex: 'subscriptionStatus', width: 120 },
+    { title: '可用积分', dataIndex: 'balance', align: 'right', width: 110 },
+    { title: '预占', dataIndex: 'reserved', align: 'right', width: 100 },
+    { title: '用户数', dataIndex: 'userCount', align: 'right', width: 100 },
+    {
+      title: '创建时间',
+      dataIndex: 'createdAt',
+      width: 180,
+      render: (v: string) => formatTime(v),
+    },
+    {
+      title: '操作',
+      key: 'actions',
+      width: 90,
+      render: (_: unknown, t) => (
+        <Button size="small" onClick={() => openDrawer(t)}>
+          详情
+        </Button>
+      ),
+    },
+  ];
+
   return (
-    <div className="page-scroll">
-      <div className="page">
-        <header className="page-head">
-          <div>
-            <h1 className="page-title">会员管理</h1>
-            <p className="page-sub">跨租户查看订阅与积分，并代运营开通套餐、调整额度。</p>
-          </div>
-        </header>
-
-        {error && (
-          <div className="banner banner-error" role="alert" style={{ marginBottom: 16 }}>
-            {error}
-          </div>
-        )}
-
-        {notice && (
-          <div
-            className="banner"
-            role="status"
-            style={{ marginBottom: 16, background: 'var(--surface-2)', border: '1px solid var(--line)' }}
-          >
-            {notice}
-          </div>
-        )}
-
-        <div className="admin-toolbar">
-          <input
-            className="admin-input"
-            placeholder="搜索租户名"
-            value={q}
-            onChange={(e) => { setPage(1); setQ(e.target.value); }}
-          />
-          <select className="admin-input" value={planId} onChange={(e) => { setPage(1); setPlanId(e.target.value); }}>
-            <option value="">全部套餐</option>
-            {plans.map((p) => (
-              <option key={p.id} value={p.id}>{p.name}</option>
-            ))}
-          </select>
-          <span className="admin-muted">共 {total} 条</span>
-        </div>
-
-        {detailLoading && <div className="admin-empty">详情加载中…</div>}
-
-        {detail && (
-          <section className="admin-panel">
-            <h2 className="billing-heading">{detail.name}</h2>
-            <p className="admin-muted">
-              套餐 {detail.planName} · 状态 {detail.subscriptionStatus} · 可用 {detail.balance} · 预占 {detail.reserved}
-              {' '}· 用户 {detail.userCount} · 会话 {detail.sessionCount}
-            </p>
-            <div className="admin-form">
-              <label className="admin-field">
-                开通套餐
-                <select
-                  className="admin-input"
-                  defaultValue=""
-                  disabled={busy}
-                  onChange={(e) => {
-                    if (busy) return;
-                    const value = e.currentTarget.value;
-                    e.currentTarget.value = '';
-                    void subscribe(detail.id, detail.name, value);
-                  }}
-                >
-                  <option value="">选择套餐…</option>
-                  {plans.filter((p) => p.id !== 'free').map((p) => (
-                    <option key={p.id} value={p.id}>{p.name}</option>
-                  ))}
-                </select>
-              </label>
-              <label className="admin-field">
-                调整积分（正负整数）
-                <input className="admin-input" value={amount} onChange={(e) => setAmount(e.target.value)} />
-              </label>
-              <label className="admin-field">
-                备注
-                <input className="admin-input" value={note} onChange={(e) => setNote(e.target.value)} />
-              </label>
-              <button
-                type="button"
-                className="admin-btn primary"
-                disabled={busy}
-                onClick={() => void adjust(detail.id, detail.name)}
-              >
-                提交调整
-              </button>
-              <button type="button" className="admin-btn" disabled={busy} onClick={closeDetail}>
-                关闭
-              </button>
-            </div>
-          </section>
-        )}
-
-        {loading ? (
-          <div className="admin-empty">加载中…</div>
-        ) : items.length === 0 ? (
-          <div className="admin-empty">没有匹配的租户</div>
-        ) : (
-          <table className="admin-table">
-            <thead>
-              <tr>
-                <th>租户</th>
-                <th>套餐</th>
-                <th>状态</th>
-                <th>可用积分</th>
-                <th>预占</th>
-                <th>用户数</th>
-                <th>创建时间</th>
-                <th>操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.map((t) => (
-                <tr key={t.id}>
-                  <td>{t.name}</td>
-                  <td>{t.planName}</td>
-                  <td>{t.subscriptionStatus}</td>
-                  <td className="numeric">{t.balance}</td>
-                  <td className="numeric">{t.reserved}</td>
-                  <td className="numeric">{t.userCount}</td>
-                  <td>{new Date(t.createdAt).toLocaleString('zh-CN', { hour12: false })}</td>
-                  <td>
-                    <button type="button" className="admin-btn" onClick={() => void openDetail(t.id)}>
-                      详情
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-
-        <div className="admin-pager">
-          <button type="button" className="admin-btn" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
-            上一页
-          </button>
-          <span>第 {page} 页</span>
-          <button type="button" className="admin-btn" disabled={page * 20 >= total} onClick={() => setPage((p) => p + 1)}>
-            下一页
-          </button>
-        </div>
+    <Space direction="vertical" size={16} style={{ width: '100%' }}>
+      <div>
+        <Typography.Title level={4} style={{ margin: 0 }}>
+          会员管理
+        </Typography.Title>
+        <Typography.Text type="secondary">
+          跨租户查看订阅与积分，并代运营开通套餐、调整额度。
+        </Typography.Text>
       </div>
-    </div>
+
+      {error ? <Alert type="error" showIcon message={error} /> : null}
+      {notice ? <Alert type="info" showIcon message={notice} /> : null}
+
+      <Card
+        title={
+          <Space wrap>
+            <Input
+              allowClear
+              placeholder="搜索租户名"
+              value={q}
+              onChange={(e) => {
+                setPage(1);
+                setQ(e.target.value);
+              }}
+              style={{ width: 220 }}
+            />
+            <Select
+              value={planId}
+              onChange={(v) => {
+                setPage(1);
+                setPlanId(v);
+              }}
+              style={{ width: 160 }}
+              options={[
+                { value: '', label: '全部套餐' },
+                ...plans.map((p) => ({ value: p.id, label: p.name })),
+              ]}
+            />
+          </Space>
+        }
+        extra={<Typography.Text type="secondary">共 {total} 条</Typography.Text>}
+      >
+        <Table<AdminTenantItemDto>
+          rowKey="id"
+          size="middle"
+          loading={loading}
+          columns={columns}
+          dataSource={items}
+          scroll={{ x: 960 }}
+          locale={{ emptyText: '没有匹配的租户' }}
+          pagination={{
+            current: page,
+            pageSize: PAGE_SIZE,
+            total,
+            showSizeChanger: false,
+            onChange: setPage,
+          }}
+        />
+      </Card>
+
+      <Drawer
+        title={detail ? `会员详情 · ${detail.name}` : '会员详情'}
+        width={640}
+        open={detailId !== null}
+        onClose={closeDetail}
+        destroyOnHidden
+        loading={detailLoading}
+      >
+        {detail ? (
+          <Space direction="vertical" size={16} style={{ width: '100%' }}>
+            <Descriptions column={2} size="small" bordered>
+              <Descriptions.Item label="套餐">{detail.planName}</Descriptions.Item>
+              <Descriptions.Item label="订阅状态">{detail.subscriptionStatus}</Descriptions.Item>
+              <Descriptions.Item label="可用积分">{detail.balance}</Descriptions.Item>
+              <Descriptions.Item label="预占">{detail.reserved}</Descriptions.Item>
+              <Descriptions.Item label="用户数">{detail.userCount}</Descriptions.Item>
+              <Descriptions.Item label="会话数">{detail.sessionCount}</Descriptions.Item>
+            </Descriptions>
+
+            <Card size="small" title="代运营操作">
+              <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                <div>
+                  <Typography.Text type="secondary">开通套餐</Typography.Text>
+                  <Select
+                    style={{ width: '100%', marginTop: 4 }}
+                    value={planPick}
+                    placeholder="选择套餐…"
+                    disabled={busy}
+                    onChange={(value) => {
+                      if (busy || !value) return;
+                      setPlanPick(value);
+                      subscribe(detail.id, detail.name, value);
+                    }}
+                    options={plans
+                      .filter((p) => p.id !== 'free')
+                      .map((p) => ({ value: p.id, label: p.name }))}
+                  />
+                </div>
+                <div>
+                  <Typography.Text type="secondary">调整积分（正负整数）</Typography.Text>
+                  <Input
+                    style={{ marginTop: 4 }}
+                    value={amount}
+                    disabled={busy}
+                    onChange={(e) => setAmount(e.target.value)}
+                    placeholder="例如 1000 或 -500"
+                  />
+                </div>
+                <div>
+                  <Typography.Text type="secondary">备注</Typography.Text>
+                  <Input
+                    style={{ marginTop: 4 }}
+                    value={note}
+                    disabled={busy}
+                    onChange={(e) => setNote(e.target.value)}
+                    placeholder="调整原因（可选）"
+                  />
+                </div>
+                <Button
+                  type="primary"
+                  disabled={busy}
+                  onClick={() => void adjust(detail.id, detail.name)}
+                >
+                  提交调整
+                </Button>
+              </Space>
+            </Card>
+          </Space>
+        ) : null}
+      </Drawer>
+    </Space>
   );
 }

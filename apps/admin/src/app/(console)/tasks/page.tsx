@@ -2,6 +2,21 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import {
+  Alert,
+  Button,
+  Card,
+  Descriptions,
+  Drawer,
+  Input,
+  Select,
+  Space,
+  Table,
+  Tag,
+  Timeline,
+  Typography,
+} from 'antd';
+import type { TableColumnsType } from 'antd';
 import type {
   AdminRunDetailDto,
   AdminRunTimelineDto,
@@ -24,6 +39,20 @@ import {
   timelineStatusTone,
 } from '../../../lib/run-timeline';
 
+const PAGE_SIZE = 20;
+const STEP_PAGE_SIZE = 100;
+
+const TIMELINE_COLOR: Record<'ok' | 'bad' | 'warn' | 'active', string> = {
+  ok: 'green',
+  bad: 'red',
+  warn: 'orange',
+  active: 'blue',
+};
+
+function formatTime(value: string): string {
+  return new Date(value).toLocaleString('zh-CN', { hour12: false });
+}
+
 export default function AdminTasksPage() {
   const router = useRouter();
   const [items, setItems] = useState<AdminTaskItemDto[]>([]);
@@ -38,6 +67,7 @@ export default function AdminTasksPage() {
   const [timeline, setTimeline] = useState<AdminRunTimelineDto | null>(null);
   const [traceCopied, setTraceCopied] = useState(false);
   const [taskLoading, setTaskLoading] = useState(false);
+  const [runLoading, setRunLoading] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
 
@@ -64,7 +94,14 @@ export default function AdminTasksPage() {
     setLoading(true);
     setError('');
     try {
-      const data = await listAdminTasks({ page, pageSize: 20, tenantId, sessionId, userId, status });
+      const data = await listAdminTasks({
+        page,
+        pageSize: PAGE_SIZE,
+        tenantId,
+        sessionId,
+        userId,
+        status,
+      });
       // 过期响应不写状态
       if (id !== loadSeq.current) return true;
       setItems(data.items);
@@ -94,6 +131,7 @@ export default function AdminTasksPage() {
     setRun(null);
     setTimeline(null);
     setTraceCopied(false);
+    setRunLoading(false);
     setTaskLoading(true);
     try {
       const data = await getAdminTask(id);
@@ -116,6 +154,7 @@ export default function AdminTasksPage() {
     setTimeline(null);
     setTraceCopied(false);
     setTaskLoading(false);
+    setRunLoading(false);
   }
 
   async function openRun(id: string) {
@@ -123,10 +162,11 @@ export default function AdminTasksPage() {
     setError('');
     setTimeline(null);
     setTraceCopied(false);
+    setRunLoading(true);
     try {
       // 时间线失败不应拖垮运行详情：两者独立结算，谁成功就先展示谁。
       const [runResult, timelineResult] = await Promise.allSettled([
-        getAdminRun(id, { stepPage: 1, stepPageSize: 100 }),
+        getAdminRun(id, { stepPage: 1, stepPageSize: STEP_PAGE_SIZE }),
         getAdminRunTimeline(id),
       ]);
       if (seq !== runSeq.current) return;
@@ -143,6 +183,8 @@ export default function AdminTasksPage() {
     } catch (err) {
       if (seq !== runSeq.current) return;
       handleErr(err);
+    } finally {
+      if (seq === runSeq.current) setRunLoading(false);
     }
   }
 
@@ -156,231 +198,309 @@ export default function AdminTasksPage() {
     }
   }
 
+  const columns: TableColumnsType<AdminTaskItemDto> = [
+    { title: '任务', dataIndex: 'id', width: 280, ellipsis: true },
+    { title: '会话', dataIndex: 'sessionId', width: 240, ellipsis: true },
+    { title: '目标', dataIndex: 'goal', ellipsis: true },
+    {
+      title: '状态',
+      dataIndex: 'status',
+      width: 110,
+      render: (v: string) => <Tag>{v}</Tag>,
+    },
+    { title: '最近运行', dataIndex: 'latestRunStatus', width: 120, render: (v: string | null) => v || '—' },
+    {
+      title: '创建时间',
+      dataIndex: 'createdAt',
+      width: 180,
+      render: (v: string) => formatTime(v),
+    },
+    {
+      title: '操作',
+      key: 'actions',
+      width: 90,
+      render: (_: unknown, t) => (
+        <Button size="small" onClick={() => void openTask(t.id)}>
+          详情
+        </Button>
+      ),
+    },
+  ];
+
+  const runColumns: TableColumnsType<AdminTaskDetailDto['runs'][number]> = [
+    { title: '运行', dataIndex: 'id', width: 260, ellipsis: true },
+    { title: '状态', dataIndex: 'status', width: 100, render: (v: string) => <Tag>{v}</Tag> },
+    {
+      title: '开始',
+      dataIndex: 'startedAt',
+      width: 180,
+      render: (v: string) => formatTime(v),
+    },
+    {
+      title: '结束',
+      dataIndex: 'endedAt',
+      width: 180,
+      render: (v: string | null) => (v ? formatTime(v) : '—'),
+    },
+    { title: '积分', dataIndex: 'credits', align: 'right', width: 90, render: (v: number | null) => v ?? '—' },
+    {
+      title: '操作',
+      key: 'actions',
+      width: 110,
+      render: (_: unknown, r) => (
+        <Button size="small" onClick={() => void openRun(r.id)}>
+          查看 step
+        </Button>
+      ),
+    },
+  ];
+
+  const stepColumns: TableColumnsType<AdminRunDetailDto['steps']['items'][number]> = [
+    { title: 'seq', dataIndex: 'seq', width: 70, align: 'right' },
+    { title: '类型', dataIndex: 'type', width: 160 },
+    {
+      title: 'payload',
+      dataIndex: 'payload',
+      render: (v: unknown) => (
+        <Typography.Text code style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 12 }}>
+          {JSON.stringify(v)}
+        </Typography.Text>
+      ),
+    },
+    {
+      title: '时间',
+      dataIndex: 'ts',
+      width: 180,
+      render: (v: string) => formatTime(v),
+    },
+  ];
+
   return (
-    <div className="page-scroll">
-      <div className="page">
-        <header className="page-head">
-          <div>
-            <h1 className="page-title">任务与运行</h1>
-            <p className="page-sub">只读排障：任务、运行、step 与用量。</p>
-          </div>
-        </header>
-
-        {error && (
-          <div className="banner banner-error" role="alert" style={{ marginBottom: 16 }}>
-            {error}
-          </div>
-        )}
-
-        <div className="admin-toolbar">
-          <input className="admin-input" placeholder="租户 ID" value={tenantId} onChange={(e) => { setPage(1); setTenantId(e.target.value); }} />
-          <input className="admin-input" placeholder="会话 ID" value={sessionId} onChange={(e) => { setPage(1); setSessionId(e.target.value); }} />
-          <input className="admin-input" placeholder="用户 ID" value={userId} onChange={(e) => { setPage(1); setUserId(e.target.value); }} />
-          <select className="admin-input" value={status} onChange={(e) => { setPage(1); setStatus(e.target.value); }}>
-            <option value="">全部状态</option>
-            <option value="running">运行中</option>
-            <option value="queued">排队中</option>
-            <option value="done">完成</option>
-            <option value="failed">失败</option>
-          </select>
-          <span className="admin-muted">共 {total} 条</span>
-        </div>
-
-        {!detail && taskLoading && <div className="admin-empty">任务详情加载中…</div>}
-
-        {detail && (
-          <section className="admin-panel">
-            <h2 className="billing-heading">任务 {detail.id}</h2>
-            <p className="admin-muted" style={{ whiteSpace: 'pre-wrap' }}>{detail.goal}</p>
-            {detail.runs.length === 0 ? (
-              <div className="admin-empty">暂无运行</div>
-            ) : (
-              <table className="admin-table">
-                <thead>
-                  <tr>
-                    <th>运行</th>
-                    <th>状态</th>
-                    <th>开始</th>
-                    <th>结束</th>
-                    <th>积分</th>
-                    <th>操作</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {detail.runs.map((r) => (
-                    <tr key={r.id}>
-                      <td>{r.id}</td>
-                      <td>{r.status}</td>
-                      <td>{new Date(r.startedAt).toLocaleString('zh-CN', { hour12: false })}</td>
-                      <td>{r.endedAt ? new Date(r.endedAt).toLocaleString('zh-CN', { hour12: false }) : '—'}</td>
-                      <td className="numeric">{r.credits ?? '—'}</td>
-                      <td>
-                        <button type="button" className="admin-btn" onClick={() => void openRun(r.id)}>
-                          查看 step
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-            <button type="button" className="admin-btn" style={{ marginTop: 12 }} onClick={closeTask}>
-              关闭
-            </button>
-          </section>
-        )}
-
-        {run && (
-          <section className="admin-panel">
-            <h2 className="billing-heading">运行 {run.id}</h2>
-            <p className="admin-muted">
-              状态 {run.status} · tokens {run.usage?.inputTokens ?? 0}/{run.usage?.outputTokens ?? 0} · 积分 {run.usage?.credits ?? '—'}
-            </p>
-            {timeline && (
-              <div className="run-timeline">
-                <h3 className="billing-heading">时间线</h3>
-                <p className="admin-muted">
-                  {timeline.nodes.length} 个节点 · 用时 {formatDuration(timeline.durationMs)} ·
-                  tokens {timeline.usage ? timeline.usage.inputTokens : '—'}/
-                  {timeline.usage ? timeline.usage.outputTokens : '—'} · 积分{' '}
-                  {timeline.usage?.credits ?? '—'}
-                </p>
-                <p className="admin-muted timeline-trace">
-                  trace {timeline.traceId ?? '—'}
-                  {timeline.traceId && (
-                    <button
-                      type="button"
-                      className="admin-btn"
-                      onClick={() => {
-                        if (timeline.traceId) void copyTrace(timeline.traceId);
-                      }}
-                    >
-                      {traceCopied ? '已复制' : '复制 traceId'}
-                    </button>
-                  )}
-                </p>
-                <ol className="timeline-list">
-                  {timeline.nodes.map((node) => {
-                    const tone = timelineStatusTone(node.status);
-                    return (
-                      <li key={node.id} className="timeline-node">
-                        <span className={`timeline-dot ${tone}`} aria-hidden="true" />
-                        <div className="timeline-body">
-                          <div className="timeline-head">
-                            <span className="timeline-label">{node.label}</span>
-                            <span className={`timeline-badge ${tone}`}>
-                              {timelineStatusLabel(node.status)}
-                            </span>
-                            <span className="admin-muted">
-                              {new Date(node.startedAt).toLocaleTimeString('zh-CN', {
-                                hour12: false,
-                              })}
-                            </span>
-                            {node.durationMs !== null && (
-                              <span className="admin-muted">
-                                {formatDuration(node.durationMs)}
-                              </span>
-                            )}
-                          </div>
-                          <div className="admin-muted">{timelineKindLabel(node.kind)}</div>
-                        </div>
-                      </li>
-                    );
-                  })}
-                </ol>
-                {timeline.truncated && (
-                  <p className="admin-muted">节点过多，已省略部分节点。</p>
-                )}
-              </div>
-            )}
-            {run.steps.items.length === 0 ? (
-              <div className="admin-empty">暂无 step</div>
-            ) : (
-              <table className="admin-table">
-                <thead>
-                  <tr>
-                    <th>seq</th>
-                    <th>类型</th>
-                    <th>payload</th>
-                    <th>时间</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {run.steps.items.map((s) => (
-                    <tr key={s.id}>
-                      <td className="numeric">{s.seq}</td>
-                      <td>{s.type}</td>
-                      <td><code style={{ whiteSpace: 'pre-wrap' }}>{JSON.stringify(s.payload)}</code></td>
-                      <td>{new Date(s.ts).toLocaleString('zh-CN', { hour12: false })}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-            <p className="admin-muted" style={{ marginTop: 8 }}>共 {run.steps.total} 条 step</p>
-            <button
-              type="button"
-              className="admin-btn"
-              onClick={() => {
-                // 关闭面板时作废在途的运行请求，避免被迟到响应重新打开
-                runSeq.current += 1;
-                setRun(null);
-                setTimeline(null);
-                setTraceCopied(false);
-              }}
-            >
-              关闭运行详情
-            </button>
-          </section>
-        )}
-
-        {loading ? (
-          <div className="admin-empty">加载中…</div>
-        ) : items.length === 0 ? (
-          <div className="admin-empty">没有匹配的任务</div>
-        ) : (
-          <table className="admin-table">
-            <thead>
-              <tr>
-                <th>任务</th>
-                <th>会话</th>
-                <th>目标</th>
-                <th>状态</th>
-                <th>最近运行</th>
-                <th>创建时间</th>
-                <th>操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.map((t) => (
-                <tr key={t.id}>
-                  <td>{t.id}</td>
-                  <td>{t.sessionId}</td>
-                  <td>{t.goal}</td>
-                  <td>{t.status}</td>
-                  <td>{t.latestRunStatus ?? '—'}</td>
-                  <td>{new Date(t.createdAt).toLocaleString('zh-CN', { hour12: false })}</td>
-                  <td>
-                    <button type="button" className="admin-btn" onClick={() => void openTask(t.id)}>
-                      详情
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-
-        <div className="admin-pager">
-          <button type="button" className="admin-btn" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
-            上一页
-          </button>
-          <span>第 {page} 页</span>
-          <button type="button" className="admin-btn" disabled={page * 20 >= total} onClick={() => setPage((p) => p + 1)}>
-            下一页
-          </button>
-        </div>
+    <Space direction="vertical" size={16} style={{ width: '100%' }}>
+      <div>
+        <Typography.Title level={4} style={{ margin: 0 }}>
+          任务与运行
+        </Typography.Title>
+        <Typography.Text type="secondary">只读排障：任务、运行、step 与用量。</Typography.Text>
       </div>
-    </div>
+
+      {error ? <Alert type="error" showIcon message={error} /> : null}
+
+      <Card
+        title={
+          <Space wrap>
+            <Input
+              allowClear
+              placeholder="租户 ID"
+              value={tenantId}
+              onChange={(e) => {
+                setPage(1);
+                setTenantId(e.target.value);
+              }}
+              style={{ width: 220 }}
+            />
+            <Input
+              allowClear
+              placeholder="会话 ID"
+              value={sessionId}
+              onChange={(e) => {
+                setPage(1);
+                setSessionId(e.target.value);
+              }}
+              style={{ width: 240 }}
+            />
+            <Input
+              allowClear
+              placeholder="用户 ID"
+              value={userId}
+              onChange={(e) => {
+                setPage(1);
+                setUserId(e.target.value);
+              }}
+              style={{ width: 220 }}
+            />
+            <Select
+              value={status}
+              onChange={(v) => {
+                setPage(1);
+                setStatus(v);
+              }}
+              style={{ width: 130 }}
+              options={[
+                { value: '', label: '全部状态' },
+                { value: 'running', label: '运行中' },
+                { value: 'queued', label: '排队中' },
+                { value: 'done', label: '完成' },
+                { value: 'failed', label: '失败' },
+              ]}
+            />
+          </Space>
+        }
+        extra={<Typography.Text type="secondary">共 {total} 条</Typography.Text>}
+      >
+        <Table<AdminTaskItemDto>
+          rowKey="id"
+          size="middle"
+          loading={loading}
+          columns={columns}
+          dataSource={items}
+          scroll={{ x: 1200 }}
+          locale={{ emptyText: '没有匹配的任务' }}
+          pagination={{
+            current: page,
+            pageSize: PAGE_SIZE,
+            total,
+            showSizeChanger: false,
+            onChange: setPage,
+          }}
+        />
+      </Card>
+
+      <Drawer
+        title={detail ? `任务详情 · ${detail.id}` : '任务详情'}
+        width={1000}
+        open={detail !== null || taskLoading}
+        onClose={closeTask}
+        destroyOnHidden
+        loading={taskLoading}
+      >
+        {detail ? (
+          <Space direction="vertical" size={16} style={{ width: '100%' }}>
+            <Card size="small" title="任务目标">
+              <Typography.Text style={{ whiteSpace: 'pre-wrap' }}>{detail.goal}</Typography.Text>
+            </Card>
+
+            <Table<AdminTaskDetailDto['runs'][number]>
+              rowKey="id"
+              size="small"
+              columns={runColumns}
+              dataSource={detail.runs}
+              scroll={{ x: 900 }}
+              pagination={false}
+              locale={{ emptyText: '暂无运行' }}
+            />
+
+            {run ? (
+              <Card
+                size="small"
+                title={`运行 ${run.id}`}
+                extra={
+                  <Button
+                    size="small"
+                    onClick={() => {
+                      // 关闭面板时作废在途的运行请求，避免被迟到响应重新打开
+                      runSeq.current += 1;
+                      setRun(null);
+                      setTimeline(null);
+                      setTraceCopied(false);
+                      setRunLoading(false);
+                    }}
+                  >
+                    关闭运行详情
+                  </Button>
+                }
+                loading={runLoading}
+              >
+                <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                  <Descriptions column={3} size="small" bordered>
+                    <Descriptions.Item label="状态">{run.status}</Descriptions.Item>
+                    <Descriptions.Item label="输入 tokens">
+                      {run.usage?.inputTokens ?? 0}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="输出 tokens">
+                      {run.usage?.outputTokens ?? 0}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="积分">{run.usage?.credits ?? '—'}</Descriptions.Item>
+                  </Descriptions>
+
+                  {timeline ? (
+                    <Card size="small" title="时间线">
+                      <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                        <Typography.Text type="secondary">
+                          {timeline.nodes.length} 个节点 · 用时 {formatDuration(timeline.durationMs)} ·
+                          tokens {timeline.usage ? timeline.usage.inputTokens : '—'}/
+                          {timeline.usage ? timeline.usage.outputTokens : '—'} · 积分{' '}
+                          {timeline.usage?.credits ?? '—'}
+                        </Typography.Text>
+                        <Space size={8}>
+                          <Typography.Text type="secondary">
+                            trace {timeline.traceId ?? '—'}
+                          </Typography.Text>
+                          {timeline.traceId ? (
+                            <Button
+                              size="small"
+                              onClick={() => {
+                                if (timeline.traceId) void copyTrace(timeline.traceId);
+                              }}
+                            >
+                              {traceCopied ? '已复制' : '复制 traceId'}
+                            </Button>
+                          ) : null}
+                        </Space>
+                        <Timeline
+                          items={timeline.nodes.map((node) => ({
+                            key: node.id,
+                            color: TIMELINE_COLOR[timelineStatusTone(node.status)],
+                            children: (
+                              <div>
+                                <Space size={8} wrap>
+                                  <Typography.Text strong>{node.label}</Typography.Text>
+                                  <Tag>{timelineStatusLabel(node.status)}</Tag>
+                                  <Typography.Text type="secondary">
+                                    {new Date(node.startedAt).toLocaleTimeString('zh-CN', {
+                                      hour12: false,
+                                    })}
+                                  </Typography.Text>
+                                  {node.durationMs !== null ? (
+                                    <Typography.Text type="secondary">
+                                      {formatDuration(node.durationMs)}
+                                    </Typography.Text>
+                                  ) : null}
+                                </Space>
+                                <div>
+                                  <Typography.Text type="secondary">
+                                    {timelineKindLabel(node.kind)}
+                                  </Typography.Text>
+                                </div>
+                              </div>
+                            ),
+                          }))}
+                        />
+                        {timeline.truncated ? (
+                          <Typography.Text type="secondary">
+                            节点过多，已省略部分节点。
+                          </Typography.Text>
+                        ) : null}
+                      </Space>
+                    </Card>
+                  ) : null}
+
+                  {runLoading ? (
+                    <Typography.Text type="secondary">运行详情加载中…</Typography.Text>
+                  ) : (
+                    <>
+                      <Table<AdminRunDetailDto['steps']['items'][number]>
+                        rowKey="id"
+                        size="small"
+                        columns={stepColumns}
+                        dataSource={run.steps.items}
+                        scroll={{ x: 760 }}
+                        pagination={false}
+                        locale={{ emptyText: '暂无 step' }}
+                      />
+                      <Typography.Text type="secondary">
+                        共 {run.steps.total} 条 step
+                      </Typography.Text>
+                    </>
+                  )}
+                </Space>
+              </Card>
+            ) : runLoading ? (
+              <Typography.Text type="secondary">运行详情加载中…</Typography.Text>
+            ) : null}
+          </Space>
+        ) : null}
+      </Drawer>
+    </Space>
   );
 }

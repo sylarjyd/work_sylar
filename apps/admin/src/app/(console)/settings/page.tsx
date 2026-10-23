@@ -2,6 +2,20 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import {
+  Alert,
+  App,
+  Button,
+  Card,
+  Input,
+  InputNumber,
+  Select,
+  Space,
+  Table,
+  Tag,
+  Typography,
+} from 'antd';
+import type { TableColumnsType } from 'antd';
 import type { AdminSettingDto, AdminSettingValue, SettingSource } from '@ai-office/shared';
 import {
   adminErrorText,
@@ -16,6 +30,13 @@ const SOURCE_LABEL: Record<SettingSource, string> = {
   db: '数据库',
   env: '环境变量',
   default: '默认值',
+};
+
+const TYPE_LABEL: Record<AdminSettingDto['type'], string> = {
+  number: '整数',
+  string: '文本',
+  boolean: '开关',
+  secret: '密钥',
 };
 
 function formatTime(value: string | null): string {
@@ -101,6 +122,7 @@ function parseDraft(item: AdminSettingDto, raw: string): Parsed {
 
 export default function AdminSettingsPage() {
   const router = useRouter();
+  const { modal } = App.useApp();
   const [items, setItems] = useState<AdminSettingDto[]>([]);
   const [draft, setDraft] = useState<Record<string, string>>({});
   const [error, setError] = useState('');
@@ -183,7 +205,7 @@ export default function AdminSettingsPage() {
     setNotice(ok ? '操作已成功。' : '操作已成功，但数据刷新失败，请勿重复提交；稍后可刷新页面确认。');
   }
 
-  async function save(item: AdminSettingDto) {
+  function save(item: AdminSettingDto) {
     if (inFlight.current) return;
     setError('');
     setNotice('');
@@ -195,12 +217,21 @@ export default function AdminSettingsPage() {
 
     // secret 的新值绝不出现在确认文案里。
     const after = item.type === 'secret' ? '（新密钥，内容隐藏）' : String(parsed.value);
-    if (!window.confirm(`确认把 ${item.key} 从 ${displayValue(item)} 改为 ${after}？`)) return;
+    modal.confirm({
+      title: '确认修改参数',
+      content: `确认把 ${item.key} 从 ${displayValue(item)} 改为 ${after}？`,
+      okText: '保存',
+      cancelText: '取消',
+      onOk: () => runSave(item, parsed.value),
+    });
+  }
 
+  async function runSave(item: AdminSettingDto, value: AdminSettingValue) {
+    if (inFlight.current) return;
     inFlight.current = true;
     setBusyKey(item.key);
     try {
-      await updateAdminSetting(item.key, parsed.value);
+      await updateAdminSetting(item.key, value);
       // 保存成功后才清除 dirty；失败时保留未保存的输入。
       clearDirty(item.key);
       await refreshAfterWrite();
@@ -212,9 +243,19 @@ export default function AdminSettingsPage() {
     }
   }
 
-  async function reset(item: AdminSettingDto) {
+  function reset(item: AdminSettingDto) {
     if (inFlight.current) return;
-    if (!window.confirm(`确认清除 ${item.key} 的数据库覆盖，恢复环境变量/默认值？`)) return;
+    modal.confirm({
+      title: '确认恢复默认',
+      content: `确认清除 ${item.key} 的数据库覆盖，恢复环境变量/默认值？`,
+      okText: '恢复默认',
+      cancelText: '取消',
+      onOk: () => runReset(item),
+    });
+  }
+
+  async function runReset(item: AdminSettingDto) {
+    if (inFlight.current) return;
     inFlight.current = true;
     setBusyKey(item.key);
     setError('');
@@ -232,15 +273,20 @@ export default function AdminSettingsPage() {
     }
   }
 
-  async function clearSecret(item: AdminSettingDto) {
+  function clearSecret(item: AdminSettingDto) {
     if (inFlight.current) return;
-    if (
-      !window.confirm(
-        `确认清空 ${item.key}？清空会覆盖环境变量中的同名密钥，Webhook 将不再签名。`,
-      )
-    ) {
-      return;
-    }
+    modal.confirm({
+      title: '确认清空密钥',
+      content: `确认清空 ${item.key}？清空会覆盖环境变量中的同名密钥，Webhook 将不再签名。`,
+      okText: '清空',
+      okType: 'danger',
+      cancelText: '取消',
+      onOk: () => runClearSecret(item),
+    });
+  }
+
+  async function runClearSecret(item: AdminSettingDto) {
+    if (inFlight.current) return;
     inFlight.current = true;
     setBusyKey(item.key);
     setError('');
@@ -259,142 +305,151 @@ export default function AdminSettingsPage() {
 
   const busy = busyKey !== null;
 
-  return (
-    <div className="page-scroll">
-      <div className="page">
-        <header className="page-head">
-          <div>
-            <h1 className="page-title">参数配置</h1>
-            <p className="page-sub">
-              修改即时生效：运行参数随下一次 run 下发，KB 参数随下一次摄取下发；密钥只显示脱敏值。
-            </p>
+  const columns: TableColumnsType<AdminSettingDto> = [
+    {
+      title: '参数',
+      dataIndex: 'key',
+      width: 240,
+      render: (_: unknown, item) => (
+        <div>
+          <Typography.Text code>{item.key}</Typography.Text>
+          <div style={{ fontSize: 12, color: '#8a958f' }}>{TYPE_LABEL[item.type]}</div>
+        </div>
+      ),
+    },
+    {
+      title: '生效值 / 修改',
+      key: 'editor',
+      render: (_: unknown, item) => (
+        <div>
+          {item.type === 'boolean' ? (
+            <Select
+              style={{ width: 130 }}
+              value={draft[item.key] ?? 'true'}
+              disabled={busy}
+              onChange={(value) => {
+                markDirty(item.key);
+                setDraft({ ...draft, [item.key]: value });
+              }}
+              options={[
+                { value: 'true', label: '启用' },
+                { value: 'false', label: '停用' },
+              ]}
+            />
+          ) : item.type === 'number' ? (
+            <InputNumber
+              style={{ width: 180 }}
+              min={item.min}
+              max={item.max}
+              precision={0}
+              value={draft[item.key] === undefined || draft[item.key] === '' ? null : Number(draft[item.key])}
+              disabled={busy}
+              onChange={(value) => {
+                markDirty(item.key);
+                setDraft({ ...draft, [item.key]: value === null ? '' : String(value) });
+              }}
+            />
+          ) : item.type === 'secret' ? (
+            <Input.Password
+              style={{ width: 240 }}
+              autoComplete="new-password"
+              placeholder={
+                item.configured
+                  ? `已配置（${item.maskedValue}），留空不修改`
+                  : '未配置'
+              }
+              value={draft[item.key] ?? ''}
+              disabled={busy}
+              onChange={(e) => {
+                markDirty(item.key);
+                setDraft({ ...draft, [item.key]: e.target.value });
+              }}
+            />
+          ) : (
+            <Input
+              style={{ width: 320 }}
+              value={draft[item.key] ?? ''}
+              disabled={busy}
+              onChange={(e) => {
+                markDirty(item.key);
+                setDraft({ ...draft, [item.key]: e.target.value });
+              }}
+            />
+          )}
+          <div style={{ marginTop: 4, fontSize: 12, color: '#8a958f' }}>
+            当前：{displayValue(item)}
           </div>
-        </header>
-
-        {error && (
-          <div className="banner banner-error" role="alert" style={{ marginBottom: 16 }}>
-            {error}
-          </div>
-        )}
-
-        {notice && (
-          <div
-            className="banner"
-            role="status"
-            style={{ marginBottom: 16, background: 'var(--surface-2)', border: '1px solid var(--line)' }}
+        </div>
+      ),
+    },
+    {
+      title: '来源',
+      dataIndex: 'source',
+      width: 110,
+      render: (v: SettingSource) => (
+        <Tag color={v === 'db' ? 'blue' : undefined}>{SOURCE_LABEL[v] ?? v}</Tag>
+      ),
+    },
+    { title: '范围', key: 'range', width: 130, render: (_: unknown, item) => rangeText(item) },
+    { title: '更新人', dataIndex: 'updatedBy', width: 160, render: (v: string | null) => v || '—' },
+    {
+      title: '更新时间',
+      dataIndex: 'updatedAt',
+      width: 180,
+      render: (v: string | null) => formatTime(v),
+    },
+    {
+      title: '操作',
+      key: 'actions',
+      width: 220,
+      render: (_: unknown, item) => (
+        <Space size={4}>
+          <Button size="small" type="primary" disabled={busy} onClick={() => save(item)}>
+            保存
+          </Button>
+          {item.type === 'secret' && item.configured ? (
+            <Button size="small" disabled={busy} onClick={() => clearSecret(item)}>
+              清空密钥
+            </Button>
+          ) : null}
+          <Button
+            size="small"
+            disabled={busy || item.source !== 'db'}
+            onClick={() => reset(item)}
           >
-            {notice}
-          </div>
-        )}
+            恢复默认
+          </Button>
+        </Space>
+      ),
+    },
+  ];
 
-        {loading ? (
-          <div className="admin-empty">加载中…</div>
-        ) : items.length === 0 ? (
-          <div className="admin-empty">暂无参数</div>
-        ) : (
-          <table className="admin-table">
-            <thead>
-              <tr>
-                <th>参数</th>
-                <th>生效值 / 修改</th>
-                <th>来源</th>
-                <th>范围</th>
-                <th>更新人</th>
-                <th>更新时间</th>
-                <th>操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.map((item) => (
-                <tr key={item.key}>
-                  <td>
-                    {item.key}
-                    <div className="page-sub" style={{ marginTop: 4, fontSize: 12 }}>
-                      {item.type === 'secret' ? '密钥' : item.type}
-                    </div>
-                  </td>
-                  <td>
-                    {item.type === 'boolean' ? (
-                      <select
-                        className="admin-input"
-                        style={{ width: 120 }}
-                        value={draft[item.key] ?? 'true'}
-                        disabled={busy}
-                        onChange={(e) => {
-                          markDirty(item.key);
-                          setDraft({ ...draft, [item.key]: e.target.value });
-                        }}
-                      >
-                        <option value="true">启用</option>
-                        <option value="false">停用</option>
-                      </select>
-                    ) : (
-                      <input
-                        type={item.type === 'number' ? 'number' : item.type === 'secret' ? 'password' : 'text'}
-                        min={item.type === 'number' ? item.min : undefined}
-                        max={item.type === 'number' ? item.max : undefined}
-                        step={item.type === 'number' ? 1 : undefined}
-                        className="admin-input"
-                        style={{ width: item.type === 'string' ? 280 : 180 }}
-                        placeholder={
-                          item.type === 'secret'
-                            ? item.configured
-                              ? `已配置（${item.maskedValue}），留空不修改`
-                              : '未配置'
-                            : undefined
-                        }
-                        value={draft[item.key] ?? ''}
-                        disabled={busy}
-                        onChange={(e) => {
-                          markDirty(item.key);
-                          setDraft({ ...draft, [item.key]: e.target.value });
-                        }}
-                      />
-                    )}
-                    <div className="page-sub" style={{ marginTop: 4, fontSize: 12 }}>
-                      当前：{displayValue(item)}
-                    </div>
-                  </td>
-                  <td>{SOURCE_LABEL[item.source] ?? item.source}</td>
-                  <td>{rangeText(item)}</td>
-                  <td>{item.updatedBy || '—'}</td>
-                  <td>{formatTime(item.updatedAt)}</td>
-                  <td>
-                    <button
-                      type="button"
-                      className="admin-btn primary"
-                      disabled={busy}
-                      onClick={() => void save(item)}
-                    >
-                      保存
-                    </button>{' '}
-                    {item.type === 'secret' && item.configured && (
-                      <>
-                        <button
-                          type="button"
-                          className="admin-btn"
-                          disabled={busy}
-                          onClick={() => void clearSecret(item)}
-                        >
-                          清空密钥
-                        </button>{' '}
-                      </>
-                    )}
-                    <button
-                      type="button"
-                      className="admin-btn"
-                      disabled={busy || item.source !== 'db'}
-                      onClick={() => void reset(item)}
-                    >
-                      恢复默认
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
+  return (
+    <Space direction="vertical" size={16} style={{ width: '100%' }}>
+      <div>
+        <Typography.Title level={4} style={{ margin: 0 }}>
+          参数配置
+        </Typography.Title>
+        <Typography.Text type="secondary">
+          修改即时生效：运行参数随下一次 run 下发，KB 参数随下一次摄取下发；密钥只显示脱敏值。
+        </Typography.Text>
       </div>
-    </div>
+
+      {error ? <Alert type="error" showIcon message={error} /> : null}
+      {notice ? <Alert type="info" showIcon message={notice} /> : null}
+
+      <Card title="参数列表" extra={<Typography.Text type="secondary">共 {items.length} 项</Typography.Text>}>
+        <Table<AdminSettingDto>
+          rowKey="key"
+          size="middle"
+          loading={loading}
+          columns={columns}
+          dataSource={items}
+          scroll={{ x: 1100 }}
+          pagination={false}
+          locale={{ emptyText: '暂无参数' }}
+        />
+      </Card>
+    </Space>
   );
 }
