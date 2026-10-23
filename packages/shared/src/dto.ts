@@ -171,8 +171,8 @@ export interface RunRequest {
   enabledTools?: string[];
   /** 助手权限模式；缺省按标准模式（各工具自身的 safe/confirm/blocked）。 */
   permissionMode?: AssistantPermissionMode;
-  /** 助手绑定的知识库文档；缺省表示检索全部文档。 */
-  kbDocIds?: string[];
+  /** 助手绑定的知识库；缺省或空数组表示检索全部知识库。 */
+  kbIds?: string[];
 }
 
 export interface RegisterRequest {
@@ -277,9 +277,39 @@ export interface ConfirmDecision {
 /** 知识库文档摄取状态：pending 摄取中 / ready 可检索 / failed 失败。 */
 export type KbDocStatus = 'pending' | 'ready' | 'failed';
 
-/** `/kb` 页列表项。 */
+/** 知识库摘要：客户端列表与运营端列表共用。 */
+export interface KbBaseDto {
+  id: string;
+  name: string;
+  description: string;
+  docCount: number;
+  readyCount: number;
+  pendingCount: number;
+  failedCount: number;
+  chunkCount: number;
+  /** 文档原始大小合计（字节）。 */
+  totalBytes: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface KbBaseInput {
+  name: string;
+  description?: string;
+}
+
+export type KbBasePatch = Partial<KbBaseInput>;
+
+/** 删除结果：DB 已删除，cleanupFailed 表示对象存储清理失败的个数。 */
+export interface KbDeleteResultDto {
+  deletedDocs: number;
+  cleanupFailed: number;
+}
+
+/** `/kb` 页文档项。 */
 export interface KbDocDto {
   id: string;
+  knowledgeBaseId: string;
   filename: string;
   mime: string;
   size: number;
@@ -389,8 +419,8 @@ export interface AssistantDto {
   permissionMode: AssistantPermissionMode;
   model: string | null;
   skills: AssistantSkillKey[];
-  /** 绑定文档 ID；空数组表示检索全部可用文档。 */
-  kbDocIds: string[];
+  /** 绑定知识库 ID；空数组表示检索全部知识库。 */
+  kbIds: string[];
   createdAt: string;
   updatedAt: string;
 }
@@ -402,7 +432,7 @@ export interface AssistantInput {
   permissionMode?: AssistantPermissionMode;
   model?: string | null;
   skills?: string[];
-  kbDocIds?: string[];
+  kbIds?: string[];
 }
 
 export type AssistantPatch = Partial<AssistantInput>;
@@ -457,6 +487,35 @@ export const MODEL_MODALITY_LABELS: Record<ModelModality, string> = {
 export function normalizeModalities(raw: readonly string[]): ModelModality[] {
   const set = new Set(raw);
   return MODEL_MODALITIES.filter((m) => set.has(m));
+}
+
+/**
+ * 模型能力分类：决定模型在业务中的用途（对话 / 向量化 / 重排 / 语音合成 / 语音识别）。
+ * 与输入输出模态正交：一个对话模型可同时支持图片输入，一个 TTS 模型的输出是音频。
+ */
+export const MODEL_CAPABILITIES = ['chat', 'embedding', 'rerank', 'tts', 'asr'] as const;
+export type ModelCapability = (typeof MODEL_CAPABILITIES)[number];
+
+export const MODEL_CAPABILITY_LABELS: Record<ModelCapability, string> = {
+  chat: '对话',
+  embedding: 'Embedding',
+  rerank: 'Rerank',
+  tts: 'TTS',
+  asr: 'ASR',
+};
+
+/** 去重并按固定顺序输出；未知值丢弃。空结果由调用方决定是否回退为 chat。 */
+export function normalizeCapabilities(
+  raw: readonly string[] | null | undefined,
+): ModelCapability[] {
+  if (!Array.isArray(raw)) return [];
+  const set = new Set(raw);
+  return MODEL_CAPABILITIES.filter((c) => set.has(c));
+}
+
+/** 只有对话能力模型才能进入聊天模型选择器与默认模型。 */
+export function isChatCapable(raw: readonly string[] | null | undefined): boolean {
+  return Array.isArray(raw) && raw.includes('chat');
 }
 
 /** Web 端模型选择器的一项；不含 Base URL、密钥或内部 ID。 */
@@ -547,6 +606,41 @@ export interface PageDto<T> {
   total: number;
   page: number;
   pageSize: number;
+}
+
+/** 运营端知识库列表项：在客户端摘要上补所有者与租户信息。 */
+export interface AdminKbBaseItemDto extends KbBaseDto {
+  tenantId: string;
+  tenantName: string;
+  userId: string;
+  userEmail: string;
+}
+
+/** 运营端知识库详情：基础信息 + 文档分页。 */
+export interface AdminKbBaseDetailDto extends AdminKbBaseItemDto {
+  docs: PageDto<KbDocDto>;
+}
+
+/** 运营端知识库总览统计。 */
+export interface AdminKbStatsDto {
+  baseCount: number;
+  docCount: number;
+  readyCount: number;
+  pendingCount: number;
+  failedCount: number;
+  chunkCount: number;
+  totalBytes: number;
+  tenantCount: number;
+}
+
+/** 删除知识库需输入库名精确确认。 */
+export interface AdminKbDeleteInput {
+  confirmName: string;
+}
+
+/** 删除文档需回传文档 ID 确认。 */
+export interface AdminKbDocDeleteInput {
+  confirmId: string;
 }
 
 export type UserStatus = 'active' | 'disabled';
@@ -700,6 +794,8 @@ export interface AdminModelDto {
   providerId: string | null;
   providerName: string | null;
   enabled: boolean;
+  /** 能力分类；只有包含 chat 的模型会出现在客户端的对话模型选择器中。 */
+  capabilities: ModelCapability[];
   modalities: ModelModality[];
   sortOrder: number;
   inputMilliCreditsPer1k: number;

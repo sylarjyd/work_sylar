@@ -100,6 +100,11 @@ if (-not $SkipDbPush) {
     }
     & pnpm --filter '@ai-office/bff' db:push
     if ($LASTEXITCODE -ne 0) { throw '数据库结构同步失败' }
+
+    Write-Step '回填知识库数据'
+    # 幂等：仅处理未归类的存量文档与旧版助手文档绑定。
+    & pnpm --filter '@ai-office/bff' db:backfill:kb
+    if ($LASTEXITCODE -ne 0) { throw '知识库数据回填失败' }
 }
 
 Write-Step '构建共享包 @ai-office/shared'

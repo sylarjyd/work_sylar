@@ -196,24 +196,50 @@ ALTER TABLE "Artifact"
     ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- -----------------------------------------------------------------------------
--- KbDoc / KbChunk（M4a 知识库；向量维度固定 1024，须与 EMBEDDING_DIM 一致）
+-- KnowledgeBase / KbDoc / KbChunk（M4a 知识库；向量维度固定 1024，须与 EMBEDDING_DIM 一致）
 -- -----------------------------------------------------------------------------
+CREATE TABLE "KnowledgeBase" (
+    "id"          TEXT         NOT NULL DEFAULT gen_random_uuid(),
+    "tenantId"    TEXT         NOT NULL,
+    "userId"      TEXT         NOT NULL,
+    "name"        TEXT         NOT NULL,
+    "description" TEXT         NOT NULL DEFAULT '',
+    "createdAt"   TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt"   TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT "KnowledgeBase_pkey" PRIMARY KEY ("id")
+);
+
+CREATE UNIQUE INDEX "KnowledgeBase_tenantId_userId_name_key"
+    ON "KnowledgeBase" ("tenantId", "userId", "name");
+CREATE INDEX "KnowledgeBase_tenantId_userId_idx" ON "KnowledgeBase" ("tenantId", "userId");
+CREATE INDEX "KnowledgeBase_tenantId_idx" ON "KnowledgeBase" ("tenantId");
+
 CREATE TABLE "KbDoc" (
-    "id"         TEXT         NOT NULL DEFAULT gen_random_uuid(),
-    "tenantId"   TEXT         NOT NULL,
-    "userId"     TEXT         NOT NULL,
-    "filename"   TEXT         NOT NULL,
-    "mime"       TEXT         NOT NULL,
-    "size"       INTEGER      NOT NULL,
-    "storageKey" TEXT         NOT NULL,
-    "status"     TEXT         NOT NULL DEFAULT 'pending',  -- pending | ready | failed
-    "chunkCount" INTEGER      NOT NULL DEFAULT 0,
-    "error"      TEXT,
-    "createdAt"  TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "id"              TEXT         NOT NULL DEFAULT gen_random_uuid(),
+    "tenantId"        TEXT         NOT NULL,
+    "userId"          TEXT         NOT NULL,
+    -- 兼容存量数据时可为空；回填后由服务层强制写入，后续版本改为 NOT NULL。
+    "knowledgeBaseId" TEXT,
+    "filename"        TEXT         NOT NULL,
+    "mime"            TEXT         NOT NULL,
+    "size"            INTEGER      NOT NULL,
+    "storageKey"      TEXT         NOT NULL,
+    "status"          TEXT         NOT NULL DEFAULT 'pending',  -- pending | ready | failed
+    "chunkCount"      INTEGER      NOT NULL DEFAULT 0,
+    "error"           TEXT,
+    "createdAt"       TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT "KbDoc_pkey" PRIMARY KEY ("id")
 );
 
 CREATE INDEX "KbDoc_tenantId_userId_idx" ON "KbDoc" ("tenantId", "userId");
+CREATE INDEX "KbDoc_knowledgeBaseId_idx" ON "KbDoc" ("knowledgeBaseId");
+CREATE INDEX "KbDoc_tenantId_userId_knowledgeBaseId_idx"
+    ON "KbDoc" ("tenantId", "userId", "knowledgeBaseId");
+
+ALTER TABLE "KbDoc"
+    ADD CONSTRAINT "KbDoc_knowledgeBaseId_fkey"
+    FOREIGN KEY ("knowledgeBaseId") REFERENCES "KnowledgeBase" ("id")
+    ON DELETE CASCADE ON UPDATE CASCADE;
 
 CREATE TABLE "KbChunk" (
     "id"        TEXT         NOT NULL DEFAULT gen_random_uuid(),

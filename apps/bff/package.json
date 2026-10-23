@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit",
     "db:up": "docker compose up -d",
     "db:push": "prisma db push && node scripts/apply-comments.mjs",
+    "db:backfill:kb": "node scripts/backfill-kb.mjs",
     "db:comments": "node scripts/apply-comments.mjs",
     "db:generate": "prisma generate",
     "db:seed:billing": "node scripts/seed-billing.mjs",

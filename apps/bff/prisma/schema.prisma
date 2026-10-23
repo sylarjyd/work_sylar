@@ -68,6 +68,8 @@ model Assistant {
   permissionMode String   @default("standard") // standard | readonly | auto
   model          String?
   skills         String[] @default([])
+  kbIds          String[] @default([])
+  /// @deprecated 旧文档级绑定：由 backfill-kb.mjs 转换到 kbIds 并清空，下一版删除该列。
   kbDocIds       String[] @default([])
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
@@ -173,21 +175,42 @@ model Artifact {
   @@index([tenantId])
 }
 
+/// 知识库：每用户可建多个，同名唯一；文档与助手绑定都落到这一层。
+model KnowledgeBase {
+  id          String   @id @default(uuid())
+  tenantId    String
+  userId      String
+  name        String
+  description String   @default("")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  docs        KbDoc[]
+
+  @@unique([tenantId, userId, name])
+  @@index([tenantId, userId])
+  @@index([tenantId])
+}
+
 model KbDoc {
-  id         String    @id @default(uuid())
-  tenantId   String
-  userId     String
-  filename   String
-  mime       String
-  size       Int
-  storageKey String
-  status     String    @default("pending") // pending | ready | failed
-  chunkCount Int       @default(0)
-  error      String?
-  createdAt  DateTime  @default(now())
-  chunks     KbChunk[]
+  id              String         @id @default(uuid())
+  tenantId        String
+  userId          String
+  // 本版可空以兼容存量数据：回填脚本补齐后由服务层强制赋值，下一版再改 NOT NULL。
+  knowledgeBaseId String?
+  filename        String
+  mime            String
+  size            Int
+  storageKey      String
+  status          String         @default("pending") // pending | ready | failed
+  chunkCount      Int            @default(0)
+  error           String?
+  createdAt       DateTime       @default(now())
+  knowledgeBase   KnowledgeBase? @relation(fields: [knowledgeBaseId], references: [id], onDelete: Cascade)
+  chunks          KbChunk[]
 
   @@index([tenantId, userId])
+  @@index([knowledgeBaseId])
+  @@index([tenantId, userId, knowledgeBaseId])
 }
 
 model KbChunk {
@@ -337,6 +360,8 @@ model ModelConfig {
   enabled                 Boolean        @default(false)
   /** 模型支持的输入/输出模态：text | image | audio | video。 */
   modalities              String[]       @default(["text"])
+  /** 模型能力分类：chat | embedding | rerank | tts | asr；对话模型必须含 chat。 */
+  capabilities            String[]       @default(["chat"])
   sortOrder               Int            @default(0)
   inputMilliCreditsPer1k  Int
   outputMilliCreditsPer1k Int

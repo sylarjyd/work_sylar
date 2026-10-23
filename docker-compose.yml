@@ -71,6 +71,7 @@ services:
         ./node_modules/.bin/prisma db push --skip-generate
         node scripts/apply-comments.mjs
         node scripts/seed-billing.mjs
+        node scripts/backfill-kb.mjs
     depends_on:
       postgres:
         condition: service_healthy
