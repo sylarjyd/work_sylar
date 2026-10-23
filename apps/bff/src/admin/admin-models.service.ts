@@ -9,12 +9,15 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import {
+  MODEL_CAPABILITIES,
   MODEL_MODALITIES,
+  normalizeCapabilities,
   normalizeModalities,
   type AdminModelDto,
   type AdminModelProviderDto,
   type AdminModelsDto,
   type AdminModelTestResultDto,
+  type ModelCapability,
   type ModelModality,
 } from '@ai-office/shared';
 import { PrismaService } from '../db/prisma.service';
@@ -45,6 +48,7 @@ interface ModelRow {
   displayName: string | null;
   providerId: string | null;
   enabled: boolean;
+  capabilities: string[];
   modalities: string[];
   sortOrder: number;
   inputMilliCreditsPer1k: number;
@@ -111,6 +115,25 @@ function modelName(raw: unknown): string {
   return text(raw, 'invalid_model', 128);
 }
 
+/** 能力分类至少选一项；未知值或非字符串一律拒绝，避免脏数据进入目录。 */
+function capabilities(raw: unknown): ModelCapability[] {
+  if (!Array.isArray(raw) || raw.length === 0) {
+    throw new BadRequestException('invalid_capabilities');
+  }
+  for (const item of raw) {
+    if (typeof item !== 'string' || !MODEL_CAPABILITIES.includes(item as ModelCapability)) {
+      throw new BadRequestException('invalid_capabilities');
+    }
+  }
+  return normalizeCapabilities(raw as string[]);
+}
+
+/** 存量行没有 capabilities 时按对话模型处理，与旧版行为一致。 */
+function rowCapabilities(raw: string[] | null | undefined): ModelCapability[] {
+  const out = normalizeCapabilities(raw);
+  return out.length > 0 ? out : ['chat'];
+}
+
 /** 模态至少选一项；未知值或非字符串一律拒绝，避免脏数据进入目录。 */
 function modalities(raw: unknown): ModelModality[] {
   if (!Array.isArray(raw) || raw.length === 0) {
@@ -151,6 +174,7 @@ function toModelDto(row: ModelRow, defaultModel: string | null): AdminModelDto {
     providerId: row.providerId,
     providerName: row.provider?.name ?? null,
     enabled: row.enabled,
+    capabilities: rowCapabilities(row.capabilities),
     modalities: normalizeModalities(row.modalities),
     sortOrder: row.sortOrder,
     inputMilliCreditsPer1k: row.inputMilliCreditsPer1k,
@@ -306,7 +330,9 @@ export class AdminModelsService {
     const providerId = text(body?.providerId, 'provider_required', 64);
     const displayName = optionalText(body?.displayName, 128);
     const isEnabled = body?.enabled === undefined ? false : enabled(body.enabled);
-    // 未携带模态时按纯文本处理，兼容旧版管理端与脚本调用。
+    // 未携带分类/模态时按对话 + 纯文本处理，兼容旧版管理端与脚本调用。
+    const modelCapabilities: ModelCapability[] =
+      body?.capabilities === undefined ? ['chat'] : capabilities(body.capabilities);
     const modelModalities: ModelModality[] =
       body?.modalities === undefined ? ['text'] : modalities(body.modalities);
     const order = body?.sortOrder === undefined ? 0 : sortOrder(body.sortOrder);
@@ -319,6 +345,7 @@ export class AdminModelsService {
             providerId,
             displayName,
             enabled: isEnabled,
+            capabilities: modelCapabilities,
             modalities: modelModalities,
             sortOrder: order,
             ...price,
@@ -329,7 +356,13 @@ export class AdminModelsService {
           action: 'model.create',
           targetType: 'modelConfig',
           targetId: model,
-          summary: { providerId, enabled: isEnabled, modalities: modelModalities, ...price },
+          summary: {
+            providerId,
+            enabled: isEnabled,
+            capabilities: modelCapabilities,
+            modalities: modelModalities,
+            ...price,
+          },
         });
         return created;
       });
@@ -351,6 +384,7 @@ export class AdminModelsService {
       displayName?: string | null;
       providerId?: string;
       enabled?: boolean;
+      capabilities?: ModelCapability[];
       modalities?: ModelModality[];
       sortOrder?: number;
       inputMilliCreditsPer1k?: number;
@@ -361,6 +395,9 @@ export class AdminModelsService {
       data.providerId = text(body.providerId, 'provider_required', 64);
     }
     if (body?.enabled !== undefined) data.enabled = enabled(body.enabled);
+    if (body?.capabilities !== undefined) {
+      data.capabilities = capabilities(body.capabilities);
+    }
     if (body?.modalities !== undefined) data.modalities = modalities(body.modalities);
     if (body?.sortOrder !== undefined) data.sortOrder = sortOrder(body.sortOrder);
     if (body?.prices !== undefined) Object.assign(data, prices(body.prices));
@@ -389,6 +426,7 @@ export class AdminModelsService {
               displayName: before.displayName,
               providerId: before.providerId,
               enabled: before.enabled,
+              capabilities: rowCapabilities(before.capabilities),
               modalities: normalizeModalities(before.modalities),
               sortOrder: before.sortOrder,
               input: before.inputMilliCreditsPer1k,
@@ -398,6 +436,7 @@ export class AdminModelsService {
               displayName: updated.displayName,
               providerId: updated.providerId,
               enabled: updated.enabled,
+              capabilities: rowCapabilities(updated.capabilities),
               modalities: normalizeModalities(updated.modalities),
               sortOrder: updated.sortOrder,
               input: updated.inputMilliCreditsPer1k,
@@ -460,7 +499,10 @@ export class AdminModelsService {
   async setDefault(body: Record<string, unknown>, actor: AdminActor): Promise<AdminModelsDto> {
     const model = modelName(body?.model);
     const row = await this.prisma.modelConfig.findUnique({ where: { model } });
-    if (!row || !row.enabled) throw new BadRequestException('invalid_default_model');
+    // 默认模型用于对话；Embedding/Rerank/TTS/ASR 设为默认会让新会话直接不可用。
+    if (!row || !row.enabled || !rowCapabilities(row.capabilities).includes('chat')) {
+      throw new BadRequestException('invalid_default_model');
+    }
     await this.prisma.$transaction(async (tx) => {
       await tx.setting.upsert({
         where: { key: DEFAULT_MODEL_SETTING_KEY },
@@ -490,6 +532,11 @@ export class AdminModelsService {
       include: { provider: true },
     });
     if (!row || !row.provider) throw new NotFoundException('model_not_found');
+    // 连通性测试固定走 /chat/completions；非对话模型（Embedding/Rerank/TTS/ASR）
+    // 的探测方式各不相同，先明确拒绝而不是给出误导性的失败结果。
+    if (!rowCapabilities(row.capabilities).includes('chat')) {
+      throw new BadRequestException('model_test_unsupported');
+    }
 
     let key: string;
     try {

@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import {
+  normalizeCapabilities,
   normalizeModalities,
   type ClientModelDto,
   type ClientModelsDto,
@@ -167,6 +168,9 @@ export class ModelCatalogService {
     return rows.flatMap((row) => {
       const provider = row.provider;
       if (!provider || !allowed.includes(row.model)) return [];
+      // 只有对话模型进入聊天目录；存量行缺 capabilities 时按 chat 处理。
+      const caps = normalizeCapabilities(row.capabilities);
+      if (caps.length > 0 && !caps.includes('chat')) return [];
       return [
         {
           model: row.model,
