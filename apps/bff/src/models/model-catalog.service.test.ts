@@ -144,10 +144,41 @@ describe('ModelCatalogService', () => {
     const out = await envSvc.listForClient('t1');
     expect(out.models.map((m) => m.model)).toEqual(['m1', 'm2']);
     expect(out.models[0].providerName).toBe('环境变量');
+    expect(JSON.stringify(out)).not.toContain('sk-env');
+    expect(JSON.stringify(out)).not.toContain('https://env/v1');
 
     delete process.env.ENV_KEY;
     const mockSvc = makeService({ allowed: ['m1', 'm2'] });
     expect((await mockSvc.listForClient('t1')).models.map((m) => m.model)).toEqual(['m1', 'm2']);
+  });
+
+  it('MODEL_PROVIDERS 全部缺密钥时回退 DEEPSEEK_API_KEY，与 runtime 一致', async () => {
+    process.env.MODEL_PROVIDERS = JSON.stringify([
+      { model: 'm1', baseUrl: 'https://env/v1', apiKeyEnv: 'MISSING' },
+    ]);
+    process.env.DEEPSEEK_API_KEY = 'sk-d';
+    const svc = makeService({ allowed: ['m1', 'deepseek-chat'], defaultModel: 'deepseek-chat' });
+
+    const out = await svc.listForClient('t1');
+    expect(out.models).toEqual([
+      { model: 'deepseek-chat', displayName: 'deepseek-chat', providerName: '环境变量' },
+    ]);
+
+    const run = await svc.resolveForRun('t1', null);
+    expect(run.modelRoutes).toEqual([
+      { model: 'deepseek-chat', baseUrl: 'https://api.deepseek.com/v1', apiKey: 'sk-d' },
+    ]);
+  });
+
+  it('环境变量模型都不在套餐内时返回空列表，不伪装成 Mock', async () => {
+    process.env.MODEL_PROVIDERS = JSON.stringify([
+      { model: 'm9', baseUrl: 'https://env/v1', apiKeyEnv: 'ENV_KEY' },
+    ]);
+    process.env.ENV_KEY = 'sk-env';
+    const svc = makeService({ allowed: ['m1', 'm2'] });
+
+    expect(await svc.listForClient('t1')).toEqual({ models: [], defaultModel: null });
+    await expect(svc.resolveForRun('t1', null)).rejects.toBeInstanceOf(NoModelsAvailableError);
   });
 
   it('resolveForRun 把选中模型排第一并解密厂商密钥', async () => {

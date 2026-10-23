@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { listEnvProviderGroups, parseEnvModelProviders } from './env-providers';
+import {
+  listEnvProviderGroups,
+  parseEnvModelProviders,
+  resolveEnvModelProviders,
+} from './env-providers';
 
 describe('parseEnvModelProviders', () => {
   it('解析 MODEL_PROVIDERS 并按 apiKeyEnv 取名与密钥', () => {
@@ -55,6 +59,70 @@ describe('parseEnvModelProviders', () => {
       { name: 'MISSING', model: 'a', baseUrl: 'https://x', apiKey: '' },
     ]);
   });
+
+  it('空 MODEL_NAME / MODEL_BASE_URL 按未设置处理', () => {
+    expect(
+      parseEnvModelProviders({ DEEPSEEK_API_KEY: 'sk-d', MODEL_NAME: '', MODEL_BASE_URL: '' }),
+    ).toEqual([
+      { name: 'default', model: 'deepseek-chat', baseUrl: 'https://api.deepseek.com/v1', apiKey: 'sk-d' },
+    ]);
+  });
+
+  it('Base URL 归一化后为空或 apiKeyEnv 指向原型键时不会误用', () => {
+    expect(
+      parseEnvModelProviders({
+        MODEL_PROVIDERS: JSON.stringify([
+          { model: 'a', baseUrl: '///', apiKeyEnv: 'K' },
+          { model: 'b', baseUrl: 'https://x', apiKeyEnv: '__proto__' },
+        ]),
+        K: 'sk',
+      }),
+    ).toEqual([{ name: '__proto__', model: 'b', baseUrl: 'https://x', apiKey: '' }]);
+  });
+
+  it('DEEPSEEK 的 MODEL_BASE_URL 归一化后为空时不产出可用配置', () => {
+    expect(parseEnvModelProviders({ DEEPSEEK_API_KEY: 'sk-d', MODEL_BASE_URL: '///' })).toEqual([]);
+    expect(resolveEnvModelProviders({ DEEPSEEK_API_KEY: 'sk-d', MODEL_BASE_URL: '/' })).toEqual([]);
+  });
+});
+
+describe('resolveEnvModelProviders', () => {
+  it('优先使用有密钥的 MODEL_PROVIDERS 条目，忽略缺密钥项', () => {
+    expect(
+      resolveEnvModelProviders({
+        MODEL_PROVIDERS: JSON.stringify([
+          { model: 'a', baseUrl: 'https://x/v1', apiKeyEnv: 'KEY_A' },
+          { model: 'b', baseUrl: 'https://y/v1', apiKeyEnv: 'MISSING' },
+        ]),
+        KEY_A: 'sk-a',
+        DEEPSEEK_API_KEY: 'sk-d',
+      }),
+    ).toEqual([{ name: 'KEY_A', model: 'a', baseUrl: 'https://x/v1', apiKey: 'sk-a' }]);
+  });
+
+  it('MODEL_PROVIDERS 全部缺密钥时按 runtime 顺序回退 DEEPSEEK_API_KEY', () => {
+    expect(
+      resolveEnvModelProviders({
+        MODEL_PROVIDERS: JSON.stringify([
+          { model: 'a', baseUrl: 'https://x/v1', apiKeyEnv: 'MISSING' },
+        ]),
+        DEEPSEEK_API_KEY: 'sk-d',
+        MODEL_NAME: 'deepseek-reasoner',
+        MODEL_BASE_URL: 'https://d/v1/',
+      }),
+    ).toEqual([
+      { name: 'default', model: 'deepseek-reasoner', baseUrl: 'https://d/v1', apiKey: 'sk-d' },
+    ]);
+  });
+
+  it('完全没有可用密钥时返回空数组', () => {
+    expect(resolveEnvModelProviders({})).toEqual([]);
+    expect(
+      resolveEnvModelProviders({
+        MODEL_PROVIDERS: JSON.stringify([{ model: 'a', baseUrl: 'https://x', apiKeyEnv: 'MISSING' }]),
+      }),
+    ).toEqual([]);
+  });
 });
 
 describe('listEnvProviderGroups', () => {
@@ -64,9 +132,11 @@ describe('listEnvProviderGroups', () => {
         { model: 'a', baseUrl: 'http://secret-host', apiKeyEnv: 'KEY_A' },
         { model: 'b', baseUrl: 'http://secret-host', apiKeyEnv: 'KEY_A' },
       ]),
+      KEY_A: 'sk-secret',
     });
     expect(groups).toEqual([{ name: 'KEY_A', models: ['a', 'b'] }]);
     expect(JSON.stringify(groups)).not.toContain('secret-host');
+    expect(JSON.stringify(groups)).not.toContain('sk-secret');
   });
 
   it('什么都没配时展示运行时兜底的模型名', () => {

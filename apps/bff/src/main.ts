@@ -8,6 +8,7 @@ import { AppModule } from './app.module';
 import { CORS_OPTIONS } from './cors';
 import { assertConnectorKey } from './connector/crypto';
 import { assertSecretKey } from './secrets/secret-box';
+import { MODEL_ENC_KEY } from './models/model.constants';
 import { AppLogger } from './observability/app-logger';
 import { BFF_METRICS, type BffMetrics } from './observability/observability.metrics';
 import { registerRequestTelemetry } from './observability/request-telemetry';
@@ -21,7 +22,7 @@ initTelemetry({
 async function bootstrap(): Promise<void> {
   assertConnectorKey();
   // 模型厂商 Key 与连接器密钥互不复用：轮换其中一把不会影响另一类密文。
-  assertSecretKey('MODEL_ENC_KEY');
+  assertSecretKey(MODEL_ENC_KEY);
   const app = await NestFactory.create<NestFastifyApplication>(
     AppModule,
     new FastifyAdapter(),

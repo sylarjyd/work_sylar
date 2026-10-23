@@ -4,7 +4,7 @@ import { PrismaService } from '../db/prisma.service';
 import { BillingService } from '../billing/billing.service';
 import { decryptSecret } from '../secrets/secret-box';
 import { DEFAULT_MODEL_SETTING_KEY, MODEL_ENC_KEY } from './model.constants';
-import { parseEnvModelProviders } from './env-providers';
+import { resolveEnvModelProviders } from './env-providers';
 import {
   ModelPlanExpiredError,
   ModelProviderUnavailableError,
@@ -143,25 +143,31 @@ export class ModelCatalogService {
   }
 
   private loadEnv(allowed: string[]): AvailableModel[] {
-    const configured = parseEnvModelProviders(process.env).filter(
-      (p) => p.apiKey !== '' && allowed.includes(p.model),
-    );
-    if (configured.length > 0) {
-      return configured.map((p) => ({
-        model: p.model,
-        displayName: p.model,
+    // 与 runtime 相同的回退顺序：有密钥的 MODEL_PROVIDERS → DEEPSEEK_API_KEY。
+    const resolved = resolveEnvModelProviders(process.env);
+    if (resolved.length === 0) {
+      // 完全没有密钥：runtime 会回退 MockGateway，仍展示套餐模型供本地/CI 验证链路。
+      return allowed.map((model) => ({
+        model,
+        displayName: model,
         providerName: '环境变量',
         sortOrder: 0,
-        source: { kind: 'env' as const, baseUrl: p.baseUrl, apiKey: p.apiKey },
+        source: { kind: 'mock' as const },
       }));
     }
-    // 无任何可用密钥：runtime 会回退 MockGateway，仍展示套餐模型供本地/CI 验证链路。
-    return allowed.map((model) => ({
-      model,
-      displayName: model,
+    const configured = resolved.filter((p) => allowed.includes(p.model));
+    if (configured.length === 0) {
+      // 配了模型但都不在套餐内：不能伪装成 Mock，否则展示与运行（model_not_allowed
+      // 或越权调用静态网关模型）不一致。返回空集，由调用方给出明确的业务错误。
+      this.logger.warn('环境变量模型与当前套餐无交集，未提供可用模型');
+      return [];
+    }
+    return configured.map((p) => ({
+      model: p.model,
+      displayName: p.model,
       providerName: '环境变量',
       sortOrder: 0,
-      source: { kind: 'mock' as const },
+      source: { kind: 'env' as const, baseUrl: p.baseUrl, apiKey: p.apiKey },
     }));
   }
 
