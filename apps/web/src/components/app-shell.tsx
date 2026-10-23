@@ -27,7 +27,7 @@ import {
   IconWallet,
 } from './icons';
 
-type ActiveNav = 'workbench' | 'kb' | 'connectors' | 'billing';
+type ActiveNav = 'workbench' | 'assistants' | 'kb' | 'connectors' | 'billing';
 
 // 运营端是独立应用（通常部署在内网），这里只放外链；未配置时对管理员也不显示。
 // 构建期内联：生产镜像需要在构建时传入 NEXT_PUBLIC_ADMIN_URL。
@@ -46,6 +46,7 @@ interface AppShellProps {
 
 const NAV: { key: ActiveNav; href: string; label: string; icon: typeof IconChat }[] = [
   { key: 'workbench', href: '/', label: '工作台', icon: IconChat },
+  { key: 'assistants', href: '/assistants', label: '助手', icon: IconSpark },
   { key: 'kb', href: '/kb', label: '知识库', icon: IconBook },
   { key: 'connectors', href: '/connectors', label: '连接器', icon: IconPlug },
   { key: 'billing', href: '/billing', label: '套餐与用量', icon: IconWallet },

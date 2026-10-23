@@ -416,6 +416,74 @@ describe('runAgent', () => {
     expect(executed).toBe(false);
   });
 
+  it('readonly 权限模式：confirm 工具直接拦截，不弹确认也不执行', async () => {
+    let executed = false;
+    const tool: Tool = {
+      name: 'code.exec',
+      description: 'd',
+      parameters: {},
+      permission: 'confirm',
+      async execute() {
+        executed = true;
+        return { stdout: 'never' };
+      },
+    };
+    const gateway = oneShotGateway({ id: 'c1', name: 'code.exec', args: {} });
+    const events = await collect(
+      runAgent(
+        { ...req, permissionMode: 'readonly' },
+        { gateway, tools: [tool], confirm: stubGate(true) },
+      ),
+    );
+    expect(events.some((e) => e.type === 'confirm_request')).toBe(false);
+    expect(events.find((e) => e.type === 'tool_result')?.payload).toMatchObject({
+      ok: false,
+      blocked: true,
+    });
+    expect(executed).toBe(false);
+  });
+
+  it('auto 权限模式：confirm 工具自动放行，不弹确认', async () => {
+    let executed = false;
+    const tool: Tool = {
+      name: 'code.exec',
+      description: 'd',
+      parameters: {},
+      permission: 'confirm',
+      async execute() {
+        executed = true;
+        return { stdout: 'auto-ok' };
+      },
+    };
+    const gateway = oneShotGateway({ id: 'c1', name: 'code.exec', args: {} });
+    const events = await collect(
+      runAgent({ ...req, permissionMode: 'auto' }, { gateway, tools: [tool] }),
+    );
+    expect(events.some((e) => e.type === 'confirm_request')).toBe(false);
+    expect(events.find((e) => e.type === 'tool_result')?.payload).toMatchObject({ ok: true });
+    expect(executed).toBe(true);
+  });
+
+  it('系统提示词作为首条 system 消息注入，历史消息不重复', async () => {
+    let seen: { role: string; content: string }[] = [];
+    const gateway: ModelGateway = {
+      async chat(request) {
+        seen = request.messages.map((m) => ({ role: m.role, content: m.content }));
+        return { content: '好', toolCalls: [], usage: { input: 1, output: 1 }, model: 'mock' };
+      },
+    };
+    await collect(
+      runAgent(
+        { ...req, systemPrompt: '  你是合同审阅助手  ' },
+        { gateway, tools: [] },
+      ),
+    );
+    expect(seen).toEqual([
+      { role: 'system', content: '你是合同审阅助手' },
+      { role: 'user', content: '查竞品' },
+    ]);
+  });
+
   it('blocked 工具：不执行，回填 blocked', async () => {
     let executed = false;
     const tool: Tool = {

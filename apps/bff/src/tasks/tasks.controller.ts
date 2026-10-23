@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { Body, Controller, HttpException, Inject, Logger, Param, Post, Res, UseGuards } from '@nestjs/common';
 import type { FastifyReply } from 'fastify';
 import type { AgentEvent, ArtifactRef, RunBilling, UsageEvent } from '@ai-office/shared';
-import { createSseParser, type CreateTaskRequest } from '@ai-office/shared';
+import { createSseParser, toolsForSkills, type CreateTaskRequest } from '@ai-office/shared';
 import { currentTrace, endSpan, injectTraceparent, startSpan } from '@ai-office/telemetry';
 import { TasksService } from './tasks.service';
 import { ArtifactService } from '../artifacts/artifacts.service';
@@ -97,9 +97,19 @@ export class TasksController {
       return;
     }
 
-    // 归属校验放在预占之前：404 不应留下 hold；返回值带出会话选定的模型。
+    // 归属校验放在预占之前：404 不应留下 hold；返回值带出会话选定的模型与助手配置。
     // 与 prepare 内的归属校验重复一次查询，换取「404 早于预占」。
     const session = await this.tasks.assertOwned(sessionId, user.tenantId, user.sub);
+    const assistant = session.assistant;
+    // 助手绑定时 skills 才生效：空数组表示禁用全部内置技能；未绑定助手时不限制工具。
+    const runAssistant = assistant
+      ? {
+          systemPrompt: assistant.systemPrompt.trim() || undefined,
+          enabledTools: toolsForSkills(assistant.skills),
+          permissionMode: assistant.permissionMode,
+          kbDocIds: assistant.kbDocIds.length > 0 ? assistant.kbDocIds : undefined,
+        }
+      : null;
 
     // 配置读取放在预占之前：读失败不应留下 hold。
     const config = await this.settings.getRunConfig();
@@ -214,6 +224,16 @@ export class TasksController {
             config,
             ...(resolution.modelRoutes.length > 0
               ? { modelRoutes: resolution.modelRoutes }
+              : {}),
+            ...(runAssistant
+              ? {
+                  ...(runAssistant.systemPrompt
+                    ? { systemPrompt: runAssistant.systemPrompt }
+                    : {}),
+                  enabledTools: runAssistant.enabledTools,
+                  permissionMode: runAssistant.permissionMode,
+                  ...(runAssistant.kbDocIds ? { kbDocIds: runAssistant.kbDocIds } : {}),
+                }
               : {}),
           }),
           signal: connectController.signal,

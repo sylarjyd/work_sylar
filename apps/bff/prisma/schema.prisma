@@ -41,13 +41,38 @@ model Session {
   status    String   @default("active")
   // 创建任务时选定的模型；历史会话为空，首次成功预占后回填。
   model     String?
+  // 会话创建时选定的自定义助手；助手被删除后置空，会话退化为默认助手。
+  assistantId String?
   createdAt DateTime @default(now())
-  tenant    Tenant   @relation(fields: [tenantId], references: [id])
-  user      User     @relation(fields: [userId], references: [id])
+  tenant    Tenant    @relation(fields: [tenantId], references: [id])
+  user      User      @relation(fields: [userId], references: [id])
+  assistant Assistant? @relation(fields: [assistantId], references: [id], onDelete: SetNull)
   messages  Message[]
   tasks     Task[]
   artifacts Artifact[]
 
+  @@index([tenantId, userId])
+  @@index([assistantId])
+}
+
+/// 用户自定义助手：系统提示词、技能、权限模式、默认模型与知识库范围。
+/// 会话只保存 assistantId，运行期读取助手最新配置，编辑后对已有会话立即生效。
+model Assistant {
+  id             String   @id @default(uuid())
+  tenantId       String
+  userId         String
+  name           String
+  description    String   @default("")
+  systemPrompt   String   @default("")
+  permissionMode String   @default("standard") // standard | readonly | auto
+  model          String?
+  skills         String[] @default([])
+  kbDocIds       String[] @default([])
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  sessions       Session[]
+
+  @@unique([tenantId, userId, name])
   @@index([tenantId, userId])
 }
 

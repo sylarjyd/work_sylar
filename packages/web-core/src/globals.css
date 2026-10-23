@@ -2898,6 +2898,16 @@ a {
   text-overflow: ellipsis;
 }
 
+.wb-assistant-badge {
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--wb-ink-3);
+  font-size: 11.5px;
+  font-weight: 500;
+}
+
 .wb-topbar-actions {
   display: flex;
   gap: 6px;

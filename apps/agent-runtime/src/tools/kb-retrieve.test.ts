@@ -47,6 +47,26 @@ describe('kb.retrieve', () => {
     });
   });
 
+  it('助手限定文档时把 docIds 透传给 BFF 检索', async () => {
+    let body: Record<string, unknown> = {};
+    const fetchImpl = (async (_u: string, init: RequestInit) => {
+      body = JSON.parse(String(init.body));
+      return new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } });
+    }) as unknown as typeof fetch;
+    await toolWith(fetchImpl).execute({ query: 'x' }, { ...ctx, kbDocIds: ['d1', 'd2'] });
+    expect(body.docIds).toEqual(['d1', 'd2']);
+  });
+
+  it('未限定文档时不发送 docIds（检索全部）', async () => {
+    let body: Record<string, unknown> = {};
+    const fetchImpl = (async (_u: string, init: RequestInit) => {
+      body = JSON.parse(String(init.body));
+      return new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } });
+    }) as unknown as typeof fetch;
+    await toolWith(fetchImpl).execute({ query: 'x' }, ctx);
+    expect(body).not.toHaveProperty('docIds');
+  });
+
   it('topK clamp 到 [1,20]', async () => {
     let seen = 0;
     const fetchImpl = (async (_u: string, init: RequestInit) => {

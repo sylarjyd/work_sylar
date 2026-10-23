@@ -170,7 +170,7 @@ describe('login 追踪头', () => {
 describe('模型接口', () => {
   it('listModels 拉取当前套餐可用模型', async () => {
     const fetchMock = vi.fn(
-      async () =>
+      async (..._args: unknown[]) =>
         new Response(
           JSON.stringify({ models: [{ model: 'm1', displayName: '模型一', providerName: '豆包' }], defaultModel: 'm1' }),
           { status: 200, headers: { 'content-type': 'application/json' } },
@@ -184,20 +184,27 @@ describe('模型接口', () => {
     expect(String(fetchMock.mock.calls[0][0])).toContain('/api/models');
   });
 
-  it('createSession 带模型时写入请求体，不带时发送空对象', async () => {
+  it('createSession 带模型/助手时写入请求体，不带时发送空对象', async () => {
     const fetchMock = vi.fn(
       async () =>
         new Response(
-          JSON.stringify({ id: 's1', title: '新会话', createdAt: '2026-01-01T00:00:00Z', model: 'm1' }),
+          JSON.stringify({
+            id: 's1',
+            title: '新会话',
+            createdAt: '2026-01-01T00:00:00Z',
+            model: 'm1',
+            assistantId: null,
+            assistantName: null,
+          }),
           { status: 201, headers: { 'content-type': 'application/json' } },
         ),
     );
     vi.stubGlobal('fetch', fetchMock);
 
-    await createSession('m1');
+    await createSession('m1', 'a1');
     await createSession();
     const calls = fetchMock.mock.calls as unknown as Array<[string, RequestInit]>;
-    expect(JSON.parse(String(calls[0][1].body))).toEqual({ model: 'm1' });
+    expect(JSON.parse(String(calls[0][1].body))).toEqual({ model: 'm1', assistantId: 'a1' });
     expect(JSON.parse(String(calls[1][1].body))).toEqual({});
   });
 });

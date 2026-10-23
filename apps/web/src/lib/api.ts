@@ -2,6 +2,9 @@
 
 import type {
   ArtifactDto,
+  AssistantDto,
+  AssistantInput,
+  AssistantPatch,
   BillingSummaryDto,
   ClientModelsDto,
   ConnectorDto,
@@ -34,13 +37,53 @@ export async function listSessions(): Promise<SessionSummary[]> {
   return (await res.json()) as SessionSummary[];
 }
 
-export async function createSession(model?: string): Promise<SessionSummary> {
+export async function createSession(
+  model?: string,
+  assistantId?: string,
+): Promise<SessionSummary> {
+  const body: { model?: string; assistantId?: string } = {};
+  if (model) body.model = model;
+  if (assistantId) body.assistantId = assistantId;
   const res = await authFetch('/api/sessions', {
     method: 'POST',
-    body: JSON.stringify(model ? { model } : {}),
+    body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error(`create_session_failed_${res.status}`);
   return (await res.json()) as SessionSummary;
+}
+
+export async function listAssistants(): Promise<AssistantDto[]> {
+  const res = await authFetch('/api/assistants');
+  if (!res.ok) throw new Error(`assistants_failed_${res.status}`);
+  return (await res.json()) as AssistantDto[];
+}
+
+export async function createAssistant(input: AssistantInput): Promise<AssistantDto> {
+  const res = await authFetch('/api/assistants', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) throw new Error(`assistant_create_failed_${res.status}`);
+  return (await res.json()) as AssistantDto;
+}
+
+export async function updateAssistant(
+  id: string,
+  patch: AssistantPatch,
+): Promise<AssistantDto> {
+  const res = await authFetch(`/api/assistants/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) throw new Error(`assistant_update_failed_${res.status}`);
+  return (await res.json()) as AssistantDto;
+}
+
+export async function deleteAssistant(id: string): Promise<void> {
+  const res = await authFetch(`/api/assistants/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) throw new Error(`assistant_delete_failed_${res.status}`);
 }
 
 export async function listModels(): Promise<ClientModelsDto> {

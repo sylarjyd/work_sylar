@@ -44,6 +44,8 @@ export function createKbRetrieveTool(cfg: KbRetrieveConfig): Tool {
           topK,
           tenantId: ctx.tenantId,
           userId: ctx.userId,
+          // 助手绑定文档时只在该范围内检索；空/缺省表示全部。
+          ...(ctx.kbDocIds && ctx.kbDocIds.length > 0 ? { docIds: ctx.kbDocIds } : {}),
         });
         if (!Array.isArray(hits)) throw new Error('invalid_search_response');
       } catch {

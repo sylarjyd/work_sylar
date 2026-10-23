@@ -34,6 +34,14 @@ export interface RunRequest {
   config?: RunConfig;
   /** 本次运行可用的模型路由（按优先级）；缺省时 runtime 使用启动时的静态网关。 */
   modelRoutes?: RunModelRoute[];
+  /** 自定义助手的系统提示词；非空时由 runtime 作为首条 system 消息注入。 */
+  systemPrompt?: string;
+  /** 本次运行允许的内置工具名；缺省表示不限制，空数组表示禁用全部内置工具。 */
+  enabledTools?: string[];
+  /** 助手权限模式；缺省按标准模式（各工具自身的 safe/confirm/blocked）。 */
+  permissionMode?: AssistantPermissionMode;
+  /** 助手绑定的知识库文档；缺省表示检索全部文档。 */
+  kbDocIds?: string[];
 }
 
 export interface RegisterRequest {
@@ -60,8 +68,10 @@ export interface AuthResponse {
 
 export interface CreateSessionRequest {
   title?: string;
-  /** 新建任务时选定的模型；缺省用运营端默认模型。 */
+  /** 新建任务时选定的模型；缺省用助手默认模型，再缺省用运营端默认模型。 */
   model?: string;
+  /** 新建任务时选定的自定义助手；缺省使用默认助手。 */
+  assistantId?: string;
 }
 
 export interface SessionSummary {
@@ -70,6 +80,9 @@ export interface SessionSummary {
   createdAt: string;
   /** 会话固定使用的模型；历史会话在首次运行后回填。 */
   model: string | null;
+  /** 会话绑定的助手；助手被删除后为空。 */
+  assistantId: string | null;
+  assistantName: string | null;
 }
 
 export interface MessageDto {
@@ -149,6 +162,116 @@ export interface KbSearchHit {
   score: number;
   text: string;
 }
+
+// ---------------------------------------------------------------------------
+// 自定义助手与技能
+// ---------------------------------------------------------------------------
+
+/** 记忆助手权限模式：标准按工具自身等级；只读禁止需确认的工具；自动自动放行需确认的工具。 */
+export const ASSISTANT_PERMISSION_MODES = ['standard', 'readonly', 'auto'] as const;
+export type AssistantPermissionMode = (typeof ASSISTANT_PERMISSION_MODES)[number];
+
+export function isAssistantPermissionMode(v: unknown): v is AssistantPermissionMode {
+  return typeof v === 'string' && (ASSISTANT_PERMISSION_MODES as readonly string[]).includes(v);
+}
+
+export const ASSISTANT_PERMISSION_MODE_LABELS: Record<AssistantPermissionMode, string> = {
+  standard: '标准：写操作需确认',
+  readonly: '只读：禁止写操作',
+  auto: '自动：写操作自动放行',
+};
+
+export const ASSISTANT_PERMISSION_MODE_HINTS: Record<AssistantPermissionMode, string> = {
+  standard: '代码执行、MCP 等有副作用的工具执行前需你确认。',
+  readonly: '只允许联网检索、读取网页与知识库、生成文档等只读操作。',
+  auto: '有副作用的工具自动执行，不再逐次确认；请仅在信任任务时使用。',
+};
+
+/** 内置技能：一个技能对应一组运行时工具。 */
+export interface AssistantSkill {
+  key: string;
+  name: string;
+  description: string;
+  tools: readonly string[];
+}
+
+export const ASSISTANT_SKILLS: readonly AssistantSkill[] = [
+  {
+    key: 'web',
+    name: '联网检索',
+    description: '搜索互联网并读取网页正文',
+    tools: ['web.search', 'web.fetch'],
+  },
+  {
+    key: 'docs',
+    name: '文档生成',
+    description: '生成 Word、Excel、PPT 文件',
+    tools: ['doc.docx', 'doc.xlsx', 'doc.pptx'],
+  },
+  {
+    key: 'code',
+    name: '代码执行',
+    description: '在沙箱中运行脚本处理数据',
+    tools: ['code.exec'],
+  },
+  {
+    key: 'kb',
+    name: '知识库检索',
+    description: '检索已上传的私有资料并引用来源',
+    tools: ['kb.retrieve'],
+  },
+] as const;
+
+export type AssistantSkillKey = (typeof ASSISTANT_SKILLS)[number]['key'];
+
+export const ASSISTANT_SKILL_KEYS: readonly string[] = ASSISTANT_SKILLS.map((s) => s.key);
+
+/** 技能去重并按固定顺序输出，未知技能丢弃（仅用于读取存量数据）。 */
+export function normalizeSkills(raw: readonly string[]): AssistantSkillKey[] {
+  const set = new Set(raw);
+  return ASSISTANT_SKILLS.filter((s) => set.has(s.key)).map((s) => s.key as AssistantSkillKey);
+}
+
+/** 把技能展开为运行时工具名（去重保序）；空技能返回空数组，表示禁用全部内置工具。 */
+export function toolsForSkills(skills: readonly string[]): string[] {
+  const allowed = new Set(toolsForSkillSet(skills));
+  return [...allowed];
+}
+
+function toolsForSkillSet(skills: readonly string[]): string[] {
+  const out: string[] = [];
+  for (const skill of ASSISTANT_SKILLS) {
+    if (!skills.includes(skill.key)) continue;
+    out.push(...skill.tools);
+  }
+  return out;
+}
+
+export interface AssistantDto {
+  id: string;
+  name: string;
+  description: string;
+  systemPrompt: string;
+  permissionMode: AssistantPermissionMode;
+  model: string | null;
+  skills: AssistantSkillKey[];
+  /** 绑定文档 ID；空数组表示检索全部可用文档。 */
+  kbDocIds: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AssistantInput {
+  name: string;
+  description?: string;
+  systemPrompt?: string;
+  permissionMode?: AssistantPermissionMode;
+  model?: string | null;
+  skills?: string[];
+  kbDocIds?: string[];
+}
+
+export type AssistantPatch = Partial<AssistantInput>;
 
 // ---------------------------------------------------------------------------
 // M4b 连接器 / MCP

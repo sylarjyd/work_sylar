@@ -45,13 +45,18 @@ export async function* runAgent(req: RunRequest, deps: RunDeps): AsyncGenerator<
     description: t.description,
     parameters: t.parameters,
   }));
-  const messages: ModelMessage[] = [...req.messages];
+  // 自定义助手的系统提示词作为首条消息注入；历史消息只落 user/assistant，不会重复。
+  const systemPrompt = req.systemPrompt?.trim();
+  const messages: ModelMessage[] = systemPrompt
+    ? [{ role: 'system', content: systemPrompt }, ...req.messages]
+    : [...req.messages];
   const ctx: RunContext = {
     tenantId: req.tenantId,
     userId: req.userId,
     sessionId: req.sessionId,
     runId: req.runId,
     codeExecTimeoutMs: deps.codeExecTimeoutMs,
+    kbDocIds: req.kbDocIds,
   };
   let seq = 0;
   const usageByModel = new Map<string, { input: number; output: number }>();
@@ -126,12 +131,13 @@ export async function* runAgent(req: RunRequest, deps: RunDeps): AsyncGenerator<
         });
         try {
           if (!tool) throw new Error(`unknown_tool:${call.name}`);
-          if (tool.permission === 'blocked') {
+          const permission = effectivePermission(tool.permission, req.permissionMode);
+          if (permission === 'blocked') {
             ok = false;
             status = 'blocked';
             extra.blocked = true;
             result = { error: 'blocked' };
-          } else if (tool.permission === 'confirm') {
+          } else if (permission === 'confirm') {
             const confirmId = randomUUID();
             // 不变式：confirm_request 必须在 await 之前 yield，否则卡片无法下发、BFF 无从落库。
             yield step('confirm_request', { confirmId, tool: call.name, args: call.args });
@@ -195,6 +201,21 @@ export async function* runAgent(req: RunRequest, deps: RunDeps): AsyncGenerator<
     // 模型调用中途抛错/客户端提前断开时，已产生的用量也必须上报，避免漏计。
     if (usageByModel.size > 0) deps.onUsage?.(toUsageEvent(usageByModel));
   }
+}
+
+/**
+ * 助手权限模式只影响 confirm 级工具：
+ * - readonly：需确认的写操作一律拒绝（blocked 的工具始终拒绝）；
+ * - auto：需确认的写操作自动放行；
+ * safe/blocked 的原有语义不变。
+ */
+function effectivePermission(
+  base: Tool['permission'],
+  mode: RunRequest['permissionMode'],
+): Tool['permission'] {
+  if (base === 'blocked' || !mode || mode === 'standard') return base;
+  if (mode === 'readonly') return base === 'confirm' ? 'blocked' : base;
+  return base === 'confirm' ? 'safe' : base;
 }
 
 function preview(value: unknown): unknown {

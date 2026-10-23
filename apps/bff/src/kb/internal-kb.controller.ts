@@ -9,6 +9,7 @@ interface SearchBody {
   topK?: number;
   tenantId?: string;
   userId?: string;
+  docIds?: string[];
 }
 
 /**
@@ -36,12 +37,22 @@ export class InternalKbController {
       reply.status(403).send({ error: 'forbidden' });
       return;
     }
-    const { vector, topK, tenantId, userId } = body ?? {};
+    const { vector, topK, tenantId, userId, docIds } = body ?? {};
     if (!isValidVector(vector) || !isNonEmptyString(tenantId) || !isNonEmptyString(userId)) {
       reply.status(400).send({ error: 'invalid_params' });
       return;
     }
-    const hits: KbSearchHit[] = await this.kb.search(tenantId, userId, vector, clampTopK(topK));
+    if (docIds !== undefined && !isValidDocIds(docIds)) {
+      reply.status(400).send({ error: 'invalid_params' });
+      return;
+    }
+    const hits: KbSearchHit[] = await this.kb.search(
+      tenantId,
+      userId,
+      vector,
+      clampTopK(topK),
+      docIds,
+    );
     reply.status(200).send(hits);
   }
 }
@@ -54,6 +65,15 @@ function isNonEmptyString(v: unknown): v is string {
 function isValidVector(v: unknown): v is number[] {
   return (
     Array.isArray(v) && v.length > 0 && v.every((n) => typeof n === 'number' && Number.isFinite(n))
+  );
+}
+
+/** 文档范围只接受非空字符串数组；租户/用户过滤仍由 SQL 强制执行，越权 ID 不会泄露数据。 */
+function isValidDocIds(v: unknown): v is string[] {
+  return (
+    Array.isArray(v) &&
+    v.length <= 100 &&
+    v.every((id) => typeof id === 'string' && id.length > 0 && id.length <= 64)
   );
 }
 

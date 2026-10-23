@@ -204,9 +204,11 @@ export function createRuntimeServer(deps: RuntimeDeps = {}): Server {
             () => {
               void (async () => {
                 try {
+                  // 助手技能只约束内置工具；账号级连接器（MCP）由用户在连接器页单独启停。
+                  const enabledBase = filterTools(baseTools, runReq.enabledTools);
                   const runTools = extraTools
-                    ? [...baseTools, ...(await extraTools(runReq.tenantId))]
-                    : baseTools;
+                    ? [...enabledBase, ...(await extraTools(runReq.tenantId))]
+                    : enabledBase;
                   const config = resolveRunConfig(runReq.config, process.env);
                   // 本次运行优先使用 BFF 下发的厂商路由；缺省沿用启动网关。
                   const runGateway =
@@ -492,6 +494,16 @@ if (isEntry) {
   };
   process.on('SIGTERM', shutdown);
   process.on('SIGINT', shutdown);
+}
+
+/**
+ * 按助手技能过滤内置工具：undefined 表示不限制（未绑定助手），
+ * 空数组表示助手未勾选任何技能、禁用全部内置工具。未知工具名自然被丢弃。
+ */
+export function filterTools(tools: Tool[], enabled?: string[]): Tool[] {
+  if (enabled === undefined) return tools;
+  const allowed = new Set(enabled);
+  return tools.filter((t) => allowed.has(t.name));
 }
 
 /** 默认追加工具：拉启用连接器 → 构建 MCP 工具；BFF 不可达时降级为空。 */

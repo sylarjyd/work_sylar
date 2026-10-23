@@ -5,6 +5,8 @@ export interface KbSearchParams {
   topK: number;
   tenantId: string;
   userId: string;
+  /** 助手限定的文档 ID；缺省检索全部。 */
+  docIds?: string[];
 }
 
 const SEARCH_TIMEOUT_MS = 15_000;

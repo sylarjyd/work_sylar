@@ -1,16 +1,44 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  isAssistantPermissionMode,
+  normalizeSkills,
+  type AssistantPermissionMode,
+  type AssistantSkillKey,
+  type CreateSessionRequest,
+  type MessageDto,
+  type SessionSummary,
+} from '@ai-office/shared';
 import { PrismaService } from '../db/prisma.service';
 import { ModelCatalogService } from '../models/model-catalog.service';
 import { ModelUnavailableError, NoModelsAvailableError } from '../models/model.errors';
-import type {
-  CreateSessionRequest,
-  MessageDto,
-  SessionSummary,
-} from '@ai-office/shared';
+
+/** 运行期需要的助手配置；会话只存 id，配置每次运行时读取最新值。 */
+export interface SessionAssistantRef {
+  id: string;
+  name: string;
+  systemPrompt: string;
+  permissionMode: AssistantPermissionMode;
+  skills: AssistantSkillKey[];
+  kbDocIds: string[];
+}
 
 export interface SessionRef {
   id: string;
   model: string | null;
+  assistantId: string | null;
+  assistantName: string | null;
+  assistant: SessionAssistantRef | null;
+}
+
+interface AssistantRow {
+  id: string;
+  name: string;
+  systemPrompt: string;
+  permissionMode: string;
+  /** 仅建会话选模时读取；运行时配置不需要。 */
+  model?: string | null;
+  skills: string[];
+  kbDocIds: string[];
 }
 
 @Injectable()
@@ -25,13 +53,9 @@ export class SessionsService {
     const rows = await this.prisma.session.findMany({
       where: { tenantId, userId, status: { not: 'archived' } },
       orderBy: { createdAt: 'desc' },
+      include: { assistant: { select: { name: true } } },
     });
-    return rows.map((s) => ({
-      id: s.id,
-      title: s.title,
-      createdAt: s.createdAt.toISOString(),
-      model: s.model ?? null,
-    }));
+    return rows.map(toSummary);
   }
 
   async create(
@@ -39,35 +63,83 @@ export class SessionsService {
     userId: string,
     req: CreateSessionRequest,
   ): Promise<SessionSummary> {
+    // 助手归属先校验：越权 id 与不存在一律 404，不泄露他人助手是否存在。
+    const assistantId =
+      typeof req.assistantId === 'string' && req.assistantId.trim() !== ''
+        ? req.assistantId.trim()
+        : null;
+    let assistant: AssistantRow | null = null;
+    if (assistantId) {
+      assistant = await this.prisma.assistant.findFirst({
+        where: { id: assistantId, tenantId, userId },
+        select: {
+          id: true,
+          name: true,
+          systemPrompt: true,
+          permissionMode: true,
+          model: true,
+          skills: true,
+          kbDocIds: true,
+        },
+      });
+      if (!assistant) throw new NotFoundException('assistant_not_found');
+    }
+
     const { models, defaultModel } = await this.catalog.available(tenantId);
     if (models.length === 0) throw new NoModelsAvailableError();
     const requested = typeof req.model === 'string' ? req.model.trim() : '';
+    // 显式选模优先；其次助手默认模型；最后运营端默认模型。
+    const assistantModel = typeof req.model === 'string' ? '' : assistant?.model ?? '';
+    const preferred = requested || assistantModel || '';
     let model = defaultModel ?? models[0].model;
-    if (requested) {
-      if (!models.some((m) => m.model === requested)) throw new ModelUnavailableError();
-      model = requested;
+    if (preferred) {
+      if (!models.some((m) => m.model === preferred)) throw new ModelUnavailableError();
+      model = preferred;
     }
-    const s = await this.prisma.session.create({
-      data: { tenantId, userId, title: req.title ?? '新会话', model },
-    });
-    return {
-      id: s.id,
-      title: s.title,
-      createdAt: s.createdAt.toISOString(),
-      model: s.model ?? null,
-    };
+    let s;
+    try {
+      s = await this.prisma.session.create({
+        data: { tenantId, userId, title: req.title ?? '新会话', model, assistantId },
+        include: { assistant: { select: { name: true } } },
+      });
+    } catch (err) {
+      // 助手在校验后、写入前被删除：外键失败按 404 处理，避免 500。
+      if ((err as { code?: string }).code === 'P2003') {
+        throw new NotFoundException('assistant_not_found');
+      }
+      throw err;
+    }
+    return toSummary(s);
   }
 
   /**
    * 校验会话归属（tenant 强制行级隔离）：非本租户/用户或已归档一律 404，不泄露存在性。
-   * 返回 id 与创建时选定的模型，供任务控制器解析运行路由。
+   * 返回创建时选定的模型与助手配置，供任务控制器解析运行路由与运行参数。
    */
   async assertOwned(sessionId: string, tenantId: string, userId: string): Promise<SessionRef> {
     const s = await this.prisma.session.findFirst({
       where: { id: sessionId, tenantId, userId, status: { not: 'archived' } },
+      include: {
+        assistant: {
+          select: {
+            id: true,
+            name: true,
+            systemPrompt: true,
+            permissionMode: true,
+            skills: true,
+            kbDocIds: true,
+          },
+        },
+      },
     });
     if (!s) throw new NotFoundException('session_not_found');
-    return { id: s.id, model: s.model ?? null };
+    return {
+      id: s.id,
+      model: s.model ?? null,
+      assistantId: s.assistantId ?? null,
+      assistantName: s.assistant?.name ?? null,
+      assistant: s.assistant ? toAssistantRef(s.assistant) : null,
+    };
   }
 
   async messages(sessionId: string, tenantId: string, userId: string): Promise<MessageDto[]> {
@@ -83,4 +155,35 @@ export class SessionsService {
       seq: m.seq,
     }));
   }
+}
+
+function toAssistantRef(row: AssistantRow): SessionAssistantRef {
+  return {
+    id: row.id,
+    name: row.name,
+    systemPrompt: row.systemPrompt,
+    permissionMode: isAssistantPermissionMode(row.permissionMode)
+      ? row.permissionMode
+      : 'standard',
+    skills: normalizeSkills(row.skills),
+    kbDocIds: row.kbDocIds ?? [],
+  };
+}
+
+function toSummary(s: {
+  id: string;
+  title: string;
+  createdAt: Date;
+  model: string | null;
+  assistantId?: string | null;
+  assistant?: { name: string } | null;
+}): SessionSummary {
+  return {
+    id: s.id,
+    title: s.title,
+    createdAt: s.createdAt.toISOString(),
+    model: s.model ?? null,
+    assistantId: s.assistantId ?? null,
+    assistantName: s.assistant?.name ?? null,
+  };
 }

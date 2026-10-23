@@ -3,9 +3,30 @@ import type { SessionSummary } from '@ai-office/shared';
 import { filterSessions } from './session-filter';
 
 const SESSIONS: SessionSummary[] = [
-  { id: '1', title: '写一份周报', createdAt: '2026-10-21T04:00:00.000Z', model: null },
-  { id: '2', title: '调研竞品 WorkBuddy', createdAt: '2026-10-20T04:00:00.000Z', model: null },
-  { id: '3', title: '生成演示稿', createdAt: '2026-10-19T04:00:00.000Z', model: null },
+  {
+    id: '1',
+    title: '写一份周报',
+    createdAt: '2026-10-21T04:00:00.000Z',
+    model: null,
+    assistantId: null,
+    assistantName: null,
+  },
+  {
+    id: '2',
+    title: '调研竞品 WorkBuddy',
+    createdAt: '2026-10-20T04:00:00.000Z',
+    model: null,
+    assistantId: null,
+    assistantName: null,
+  },
+  {
+    id: '3',
+    title: '生成演示稿',
+    createdAt: '2026-10-19T04:00:00.000Z',
+    model: null,
+    assistantId: null,
+    assistantName: null,
+  },
 ];
 
 describe('filterSessions', () => {

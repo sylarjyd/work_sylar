@@ -6,6 +6,7 @@ import {
   MODEL_MODALITY_LABELS,
   type AgentEvent,
   type ArtifactDto,
+  type AssistantDto,
   type ClientModelDto,
   type SessionSummary,
 } from '@ai-office/shared';
@@ -30,6 +31,7 @@ import {
   getToken,
   isUnauthorized,
   listArtifacts,
+  listAssistants,
   listModels,
   listSessions,
   streamTask,
@@ -163,6 +165,9 @@ export default function Home() {
   // 运营端默认模型：历史会话（model 为空）首次运行前展示的就是它。
   const [defaultModel, setDefaultModel] = useState('');
   const [modelsLoaded, setModelsLoaded] = useState(false);
+  // 自定义助手：仅新建任务（草稿态）可选择，会话创建后助手固定。
+  const [assistants, setAssistants] = useState<AssistantDto[]>([]);
+  const [selectedAssistantId, setSelectedAssistantId] = useState('');
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
   const composerRef = useRef<HTMLTextAreaElement>(null);
@@ -176,7 +181,21 @@ export default function Home() {
     }
     void refresh();
     void refreshModels();
+    void refreshAssistants();
   }, [router]);
+
+  async function refreshAssistants() {
+    try {
+      setAssistants(await listAssistants());
+    } catch (err) {
+      if (isUnauthorized(err)) {
+        router.push('/login');
+        return;
+      }
+      // 助手加载失败不应阻断主流程：默认助手仍可用。
+      setError(errorText(err));
+    }
+  }
 
   async function refreshModels() {
     try {
@@ -269,11 +288,22 @@ export default function Home() {
 
   function handleNewSession() {
     if (running) return;
-    // 新任务先清成草稿：真正建会话推迟到首次发送，才能把用户选的模型写进会话。
+    // 新任务先清成草稿：真正建会话推迟到首次发送，才能把用户选的模型/助手写进会话。
     setSessionId('');
     resetConversation();
     void refreshModels();
+    void refreshAssistants();
     composerRef.current?.focus();
+  }
+
+  function handleAssistantChange(id: string) {
+    setSelectedAssistantId(id);
+    const assistant = assistants.find((a) => a.id === id);
+    // 助手指定的默认模型在可用目录内时跟随切换；不可用时保留用户当前选择，
+    // 服务端建会话时以显式模型为准，不会因助手配置失效而卡死。
+    if (assistant?.model && models.some((m) => m.model === assistant.model)) {
+      setSelectedModel(assistant.model);
+    }
   }
 
   async function run() {
@@ -292,7 +322,10 @@ export default function Home() {
       // 草稿态首次发送才建会话，并把选中的模型固化到会话上。
       // 不能用 setSessionId 后的 state：本次渲染闭包拿不到新值。
       if (!sid) {
-        const created = await createSession(selectedModel || undefined);
+        const created = await createSession(
+          selectedModel || undefined,
+          selectedAssistantId || undefined,
+        );
         setSessions((prev) => [created, ...prev]);
         if (created.model) setSelectedModel(created.model);
         setSessionId(created.id);
@@ -394,6 +427,23 @@ export default function Home() {
     <div className="wb-composer-wrap">
       <div className="wb-composer">
         <div className="wb-composer-model">
+          {!sessionId && assistants.length > 0 && (
+            <select
+              className="wb-model-select"
+              value={selectedAssistantId}
+              onChange={(e) => handleAssistantChange(e.target.value)}
+              disabled={running}
+              aria-label="选择助手"
+              title="选择本次任务使用的助手"
+            >
+              <option value="">默认助手</option>
+              {assistants.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name}
+                </option>
+              ))}
+            </select>
+          )}
           <select
             className="wb-model-select"
             value={modelValue}
@@ -468,7 +518,12 @@ export default function Home() {
       sessionDisabled={running}
     >
       <div className="wb-topbar">
-        <span className="wb-topbar-title">{current?.title ?? '新任务'}</span>
+        <span className="wb-topbar-title">
+          {current?.title ?? '新任务'}
+          {current?.assistantName && (
+            <span className="wb-assistant-badge">助手：{current.assistantName}</span>
+          )}
+        </span>
         <div className="wb-topbar-actions">
           <button
             type="button"

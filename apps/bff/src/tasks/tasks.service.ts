@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../db/prisma.service';
-import { SessionsService } from '../sessions/sessions.service';
+import { SessionsService, type SessionRef } from '../sessions/sessions.service';
 import type { AgentEvent, ChatMessage } from '@ai-office/shared';
 
 /** 并发抢占同一 seq 时的最大尝试次数（首次 + 最多 4 次重试）。 */
@@ -25,12 +25,12 @@ export class TasksService {
     private readonly sessions: SessionsService,
   ) {}
 
-  /** 只为归属校验：让控制器能在计费预占之前先做 404 判断，并拿到会话选定的模型。 */
+  /** 只为归属校验：让控制器能在计费预占之前先做 404 判断，并拿到会话模型与助手配置。 */
   async assertOwned(
     sessionId: string,
     tenantId: string,
     userId: string,
-  ): Promise<{ id: string; model: string | null }> {
+  ): Promise<SessionRef> {
     return this.sessions.assertOwned(sessionId, tenantId, userId);
   }
 

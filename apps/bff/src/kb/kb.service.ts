@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import type { KbDocDto, KbSearchHit, KbDocStatus } from '@ai-office/shared';
 import { PrismaService } from '../db/prisma.service';
 
@@ -65,20 +66,29 @@ export class KbService {
     await this.prisma.kbDoc.delete({ where: { id } });
   }
 
-  /** 向量检索：按 tenant+user 过滤，HNSW 余弦距离升序取 topK；相似度 = 1 - 距离。 */
+  /**
+   * 向量检索：按 tenant+user 过滤，HNSW 余弦距离升序取 topK；相似度 = 1 - 距离。
+   * docIds 为助手绑定的文档范围；仍叠加 tenant/user 条件，越权 ID 不会泄露数据。
+   */
   async search(
     tenantId: string,
     userId: string,
     vector: number[],
     topK: number,
+    docIds?: string[],
   ): Promise<KbSearchHit[]> {
     const lit = toVectorLiteral(vector);
+    const docFilter =
+      docIds && docIds.length > 0
+        ? Prisma.sql`AND d."id" = ANY(${docIds}::text[])`
+        : Prisma.empty;
     const rows = await this.prisma.$queryRaw<
       { docName: string; seq: number; dist: number; text: string }[]
     >`
       SELECT d."filename" AS "docName", c."seq", c."text", (c."vector" <=> ${lit}::vector) AS "dist"
       FROM "KbChunk" c JOIN "KbDoc" d ON d."id" = c."docId"
       WHERE c."tenantId" = ${tenantId} AND c."userId" = ${userId}
+      ${docFilter}
       ORDER BY c."vector" <=> ${lit}::vector
       LIMIT ${topK}
     `;

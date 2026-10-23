@@ -9,7 +9,7 @@ import {
 } from '@ai-office/telemetry';
 import { decodeSseFrames, createSseParser } from '@ai-office/shared';
 import type { AgentEvent, RuntimeSummaryDto } from '@ai-office/shared';
-import { createRuntimeServer, isLoopback } from './server';
+import { createRuntimeServer, filterTools, isLoopback } from './server';
 import { createRuntimeMetrics } from './observability/metrics';
 import type { ModelGateway } from './model/types';
 import type { Tool } from './tools/types';
@@ -725,6 +725,22 @@ describe('run 级模型路由', () => {
     } finally {
       await new Promise<void>((r) => modelServer.close(() => r()));
     }
+  });
+});
+
+describe('filterTools', () => {
+  const tools: Tool[] = [
+    { name: 'web.search', description: '', parameters: {}, permission: 'safe', execute: async () => ({}) },
+    { name: 'code.exec', description: '', parameters: {}, permission: 'confirm', execute: async () => ({}) },
+  ];
+
+  it('未绑定助手（undefined）时返回全部工具', () => {
+    expect(filterTools(tools, undefined).map((t) => t.name)).toEqual(['web.search', 'code.exec']);
+  });
+
+  it('按技能白名单过滤；空数组禁用全部内置工具', () => {
+    expect(filterTools(tools, ['web.search']).map((t) => t.name)).toEqual(['web.search']);
+    expect(filterTools(tools, [])).toEqual([]);
   });
 });
 
