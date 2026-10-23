@@ -6,9 +6,12 @@ import {
   listConnectors,
   createConnector,
   createSession,
+  deleteAttachment,
   getBillingSummary,
   getUsage,
   listModels,
+  streamTask,
+  uploadAttachment,
 } from './api';
 
 afterEach(() => {
@@ -97,6 +100,70 @@ describe('uploadKbDoc', () => {
     expect(headers.authorization).toBe('Bearer tok');
     expect(headers.traceparent).toMatch(/^00-[0-9a-f]{32}-[0-9a-f]{16}-01$/);
     expect(headers['x-request-id']).toMatch(/^[A-Za-z0-9-]{1,64}$/);
+  });
+});
+
+describe('附件与任务下发', () => {
+  it('uploadAttachment 用 FormData 且不覆盖 content-type', async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            id: 'a1',
+            kind: 'image',
+            filename: 'p.png',
+            mime: 'image/png',
+            size: 3,
+            createdAt: '2026-01-01T00:00:00Z',
+          }),
+          { status: 201, headers: { 'content-type': 'application/json' } },
+        ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    vi.stubGlobal('window', {
+      localStorage: { getItem: () => 'tok', setItem: () => {}, removeItem: () => {} },
+    });
+
+    const dto = await uploadAttachment(new File(['abc'], 'p.png', { type: 'image/png' }));
+    expect(dto.id).toBe('a1');
+
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(String(url)).toContain('/api/attachments');
+    expect(init.body).toBeInstanceOf(FormData);
+    const headers = (init.headers ?? {}) as Record<string, string>;
+    expect(headers['content-type']).toBeUndefined();
+    expect(headers.authorization).toBe('Bearer tok');
+    expect(headers.traceparent).toMatch(/^00-[0-9a-f]{32}-[0-9a-f]{16}-01$/);
+  });
+
+  it('deleteAttachment 忽略 404，其它错误仍抛出', async () => {
+    const fetchMock = vi.fn(async () => new Response('', { status: 404 }));
+    vi.stubGlobal('fetch', fetchMock);
+    vi.stubGlobal('window', {
+      localStorage: { getItem: () => 'tok', setItem: () => {}, removeItem: () => {} },
+    });
+    await expect(deleteAttachment('a1')).resolves.toBeUndefined();
+
+    fetchMock.mockImplementationOnce(async () => new Response('', { status: 500 }));
+    await expect(deleteAttachment('a1')).rejects.toThrow('attachment_delete_failed_500');
+  });
+
+  it('streamTask 有附件时带 attachmentIds，无附件时省略字段', async () => {
+    const fetchMock = vi.fn(async () => new Response('ok', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    vi.stubGlobal('window', {
+      localStorage: { getItem: () => 'tok', setItem: () => {}, removeItem: () => {} },
+    });
+
+    await streamTask('s1', '看附件', ['a1', 'a2']);
+    await streamTask('s1', '纯文字');
+
+    const calls = fetchMock.mock.calls as unknown as Array<[string, RequestInit]>;
+    expect(JSON.parse(String(calls[0][1].body))).toEqual({
+      goal: '看附件',
+      attachmentIds: ['a1', 'a2'],
+    });
+    expect(JSON.parse(String(calls[1][1].body))).toEqual({ goal: '纯文字' });
   });
 });
 

@@ -40,6 +40,8 @@ export interface AvailableModels {
 
 export interface RunModelResolution {
   selectedModel: string;
+  /** 选中模型的输入模态，用于发消息前校验附件是否被该模型支持。 */
+  selectedModalities: ModelModality[];
   modelRoutes: RunModelRoute[];
 }
 
@@ -107,6 +109,7 @@ export class ModelCatalogService {
           model: entry.model,
           baseUrl: entry.source.baseUrl,
           apiKey: entry.source.apiKey,
+          modalities: entry.modalities,
         });
         continue;
       }
@@ -124,7 +127,12 @@ export class ModelCatalogService {
           apiKey = decryptSecret(entry.source.apiKeyEnc, MODEL_ENC_KEY);
           keyCache.set(providerId, apiKey);
         }
-        routes.push({ model: entry.model, baseUrl: entry.source.baseUrl, apiKey });
+        routes.push({
+          model: entry.model,
+          baseUrl: entry.source.baseUrl,
+          apiKey,
+          modalities: entry.modalities,
+        });
       } catch {
         // 单把密钥损坏只影响该厂商；选中的模型不可用时整体失败，避免静默换厂商。
         failedProviders.add(providerId);
@@ -135,7 +143,11 @@ export class ModelCatalogService {
         this.logger.warn(`跳过厂商 ${providerId} 的模型 ${entry.model}：密钥无法解密`);
       }
     }
-    return { selectedModel: selected, modelRoutes: routes };
+    return {
+      selectedModel: selected,
+      selectedModalities: selectedEntry.modalities,
+      modelRoutes: routes,
+    };
   }
 
   /** 地址被安全策略拒绝时跳过该模型；选中的模型不可用则整体失败，避免静默换厂商。 */

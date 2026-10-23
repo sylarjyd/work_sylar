@@ -69,7 +69,7 @@ export class OpenAICompatGateway implements ModelGateway {
 
 /** OpenAI 兼容协议要求：assistant 消息回带 tool_calls，tool 消息回带 tool_call_id。 */
 function toWireMessage(m: ModelMessage): Record<string, unknown> {
-  const out: Record<string, unknown> = { role: m.role, content: m.content };
+  const out: Record<string, unknown> = { role: m.role, content: toWireContent(m) };
   if (m.toolCalls?.length) {
     out.tool_calls = m.toolCalls.map((tc) => ({
       id: tc.id || randomUUID(),
@@ -80,6 +80,27 @@ function toWireMessage(m: ModelMessage): Record<string, unknown> {
   }
   if (m.toolCallId) out.tool_call_id = m.toolCallId;
   return out;
+}
+
+/**
+ * 有媒体片段时 content 必须是 parts 数组；纯文本仍用字符串，兼容只支持字符串的老 provider。
+ * 图片/音频按 Chat Completions 多模态格式；视频沿用同一风格（video_url），
+ * 具体厂商若不支持会在其侧返回 400，由路由按模态预过滤避免走到这里。
+ */
+function toWireContent(m: ModelMessage): unknown {
+  if (!m.parts?.length) return m.content;
+  return m.parts.map((p) => {
+    switch (p.type) {
+      case 'image_url':
+        return { type: 'image_url', image_url: { url: p.imageUrl } };
+      case 'input_audio':
+        return { type: 'input_audio', input_audio: { data: p.data, format: p.format } };
+      case 'video_url':
+        return { type: 'video_url', video_url: { url: p.videoUrl } };
+      default:
+        return { type: 'text', text: p.text };
+    }
+  });
 }
 
 function safeParse(s: string): Record<string, unknown> {

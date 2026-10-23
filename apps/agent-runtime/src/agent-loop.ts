@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { AgentEvent, RunBilling, RunRequest, UsageEvent } from '@ai-office/shared';
 import { endSpan, startSpan } from '@ai-office/telemetry';
 import type { ModelGateway, ModelMessage } from './model/types';
+import { prepareAttachmentMessages, requiredModalitiesOf } from './model/attachments';
 import type { ConfirmGate } from './confirm/broker';
 import type { RunContext, Tool } from './tools/types';
 import { scaledValue, toUsageEvent } from './billing';
@@ -45,11 +46,15 @@ export async function* runAgent(req: RunRequest, deps: RunDeps): AsyncGenerator<
     description: t.description,
     parameters: t.parameters,
   }));
+  // 附件在调用模型前统一转换：文本抽正文、媒体转 content parts。
+  // 转换在生成器内完成，解析失败会沿 run 的错误通道上报，而不是静默丢掉用户内容。
+  const prepared = await prepareAttachmentMessages(req.messages);
   // 自定义助手的系统提示词作为首条消息注入；历史消息只落 user/assistant，不会重复。
   const systemPrompt = req.systemPrompt?.trim();
   const messages: ModelMessage[] = systemPrompt
-    ? [{ role: 'system', content: systemPrompt }, ...req.messages]
-    : [...req.messages];
+    ? [{ role: 'system', content: systemPrompt }, ...prepared]
+    : prepared;
+  const requiredModalities = requiredModalitiesOf(prepared);
   const ctx: RunContext = {
     tenantId: req.tenantId,
     userId: req.userId,
@@ -98,6 +103,7 @@ export async function* runAgent(req: RunRequest, deps: RunDeps): AsyncGenerator<
         messages,
         tools: schemas,
         models,
+        ...(requiredModalities.length > 0 ? { requiredModalities } : {}),
       });
       const prev = usageByModel.get(resp.model) ?? { input: 0, output: 0 };
       usageByModel.set(resp.model, {

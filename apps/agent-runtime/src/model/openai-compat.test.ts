@@ -103,6 +103,35 @@ describe('OpenAICompatGateway', () => {
     expect(body.messages[1].tool_call_id).toBe('c1');
   });
 
+  it('含媒体片段时 content 映射为多模态 parts，纯文本仍用字符串', async () => {
+    const gw = new OpenAICompatGateway({ baseUrl, apiKey: 'k', model: 'deepseek-chat' });
+    await gw.chat({
+      messages: [
+        { role: 'system', content: '系统提示' },
+        {
+          role: 'user',
+          content: '看图和听音频',
+          parts: [
+            { type: 'text', text: '看图和听音频' },
+            { type: 'image_url', imageUrl: 'data:image/png;base64,AQID' },
+            { type: 'input_audio', data: 'BAUG', format: 'mp3' },
+            { type: 'video_url', videoUrl: 'data:video/mp4;base64,CgsM' },
+          ],
+        },
+      ],
+      tools: [],
+    });
+
+    const body = lastBody() as { messages: Record<string, unknown>[] };
+    expect(body.messages[0].content).toBe('系统提示');
+    expect(body.messages[1].content).toEqual([
+      { type: 'text', text: '看图和听音频' },
+      { type: 'image_url', image_url: { url: 'data:image/png;base64,AQID' } },
+      { type: 'input_audio', input_audio: { data: 'BAUG', format: 'mp3' } },
+      { type: 'video_url', video_url: { url: 'data:video/mp4;base64,CgsM' } },
+    ]);
+  });
+
   it('发给 provider 的 tools[].function.name 转成下划线（wire 安全），不出现点号', async () => {
     const gw = new OpenAICompatGateway({ baseUrl, apiKey: 'k', model: 'deepseek-chat' });
     await gw.chat({

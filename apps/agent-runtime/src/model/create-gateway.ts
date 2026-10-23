@@ -1,4 +1,4 @@
-import type { RunModelRoute } from '@ai-office/shared';
+import type { ModelModality, RunModelRoute } from '@ai-office/shared';
 import type { ModelGateway } from './types';
 import type { ModelObserver } from './observed-gateway';
 import { ObservedGateway } from './observed-gateway';
@@ -111,7 +111,22 @@ export function createGatewayFromRoutes(
         apiKey: route.apiKey,
         model: route.model,
       }),
+      modalities: parseModalities(route.modalities),
     };
   });
   return new RoutingGateway(built, observer);
+}
+
+/** 路由模态属于受信输入，但配置错误不应静默降级成“纯文本可用”，直接拒绝整批路由。 */
+function parseModalities(raw: unknown): ModelModality[] | undefined {
+  if (raw === undefined) return undefined;
+  if (!Array.isArray(raw)) throw new Error('invalid_model_routes');
+  const out: ModelModality[] = [];
+  for (const m of raw) {
+    if (m !== 'text' && m !== 'image' && m !== 'audio' && m !== 'video') {
+      throw new Error('invalid_model_routes');
+    }
+    if (!out.includes(m)) out.push(m);
+  }
+  return out;
 }

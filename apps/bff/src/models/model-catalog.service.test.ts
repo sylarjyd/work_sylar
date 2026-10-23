@@ -185,7 +185,12 @@ describe('ModelCatalogService', () => {
 
     const run = await svc.resolveForRun('t1', null);
     expect(run.modelRoutes).toEqual([
-      { model: 'deepseek-chat', baseUrl: 'https://api.deepseek.com/v1', apiKey: 'sk-d' },
+      {
+        model: 'deepseek-chat',
+        baseUrl: 'https://api.deepseek.com/v1',
+        apiKey: 'sk-d',
+        modalities: ['text'],
+      },
     ]);
   });
 
@@ -220,9 +225,16 @@ describe('ModelCatalogService', () => {
     });
     const out = await svc.resolveForRun('t1', null);
     expect(out.selectedModel).toBe('m2');
+    // 控制器据此在计费前拒绝该模型不支持的附件类别。
+    expect(out.selectedModalities).toEqual(['text', 'image']);
     expect(out.modelRoutes).toEqual([
-      { model: 'm2', baseUrl: 'https://ark.example/v3', apiKey: 'sk-ark' },
-      { model: 'm1', baseUrl: 'https://ark.example/v3', apiKey: 'sk-ark' },
+      {
+        model: 'm2',
+        baseUrl: 'https://ark.example/v3',
+        apiKey: 'sk-ark',
+        modalities: ['text', 'image'],
+      },
+      { model: 'm1', baseUrl: 'https://ark.example/v3', apiKey: 'sk-ark', modalities: ['text'] },
     ]);
   });
 
@@ -263,7 +275,12 @@ describe('ModelCatalogService', () => {
     const out = await fallbackBroken.resolveForRun('t1', 'm2');
     expect(out.selectedModel).toBe('m2');
     expect(out.modelRoutes).toEqual([
-      { model: 'm2', baseUrl: 'https://ark.example/v3', apiKey: 'sk-ark' },
+      {
+        model: 'm2',
+        baseUrl: 'https://ark.example/v3',
+        apiKey: 'sk-ark',
+        modalities: ['text', 'image'],
+      },
     ]);
   });
 
@@ -285,7 +302,12 @@ describe('ModelCatalogService', () => {
     });
     const out = await blockedFallback.resolveForRun('t1', 'm2');
     expect(out.modelRoutes).toEqual([
-      { model: 'm2', baseUrl: 'https://ark.example/v3', apiKey: 'sk-ark' },
+      {
+        model: 'm2',
+        baseUrl: 'https://ark.example/v3',
+        apiKey: 'sk-ark',
+        modalities: ['text', 'image'],
+      },
     ]);
   });
 });

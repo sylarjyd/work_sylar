@@ -1,8 +1,9 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import { attachmentKindFor, type AgentEvent } from '@ai-office/shared';
 import { PrismaService } from '../db/prisma.service';
 import { SessionsService, type SessionRef } from '../sessions/sessions.service';
-import type { AgentEvent, ChatMessage } from '@ai-office/shared';
+import type { PreparedAttachment, PreparedMessage } from '../attachments/attachments.service';
 
 /** 并发抢占同一 seq 时的最大尝试次数（首次 + 最多 4 次重试）。 */
 const MAX_SEQ_ATTEMPTS = 5;
@@ -16,6 +17,25 @@ function isSeqConflict(err: unknown): boolean {
   if (typeof t === 'string') return t.includes('seq');
   // 老版本/未提供 target 时保守重试。
   return true;
+}
+
+/** 行里的 kind 是历史写入值；旧数据缺类别时按文件名/MIME 重新推断，默认按文本处理。 */
+function toPreparedAttachment(row: {
+  id: string;
+  kind: string;
+  filename: string;
+  mime: string;
+  size: number;
+  storageKey: string;
+}): PreparedAttachment {
+  return {
+    id: row.id,
+    kind: attachmentKindFor(row.filename, row.mime) ?? 'text',
+    filename: row.filename,
+    mime: row.mime,
+    size: row.size,
+    storageKey: row.storageKey,
+  };
 }
 
 @Injectable()
@@ -34,7 +54,10 @@ export class TasksService {
     return this.sessions.assertOwned(sessionId, tenantId, userId);
   }
 
-  /** 建 task/run、落用户消息，并回传喂给模型的完整历史。runId 由控制器预生成（计费预占键）。 */
+  /**
+   * 建 task/run、落用户消息并绑定附件，回传喂给模型的完整历史（尚未读取附件字节）。
+   * runId 由控制器预生成（计费预占键）；附件在事务内原子认领，并发重复发送只会有一次成功。
+   */
   async prepare(
     sessionId: string,
     tenantId: string,
@@ -42,8 +65,16 @@ export class TasksService {
     goal: string,
     runId: string,
     traceId?: string | null,
-  ): Promise<{ taskId: string; runId: string; tenantId: string; userId: string; messages: ChatMessage[] }> {
+    attachmentIds: string[] = [],
+  ): Promise<{
+    taskId: string;
+    runId: string;
+    tenantId: string;
+    userId: string;
+    messages: PreparedMessage[];
+  }> {
     await this.sessions.assertOwned(sessionId, tenantId, userId);
+    const ids = [...new Set(attachmentIds)];
 
     // 并发请求会同时读到相同的 max(seq)，进而撞 (sessionId, seq) 唯一键。
     // 整段放进同一事务：重试时前一次的 task/run 已回滚，不会留下孤儿。
@@ -53,7 +84,21 @@ export class TasksService {
           const prior = await tx.message.findMany({
             where: { sessionId },
             orderBy: { seq: 'asc' },
-            select: { role: true, content: true, seq: true },
+            select: {
+              role: true,
+              content: true,
+              seq: true,
+              attachments: {
+                select: {
+                  id: true,
+                  kind: true,
+                  filename: true,
+                  mime: true,
+                  size: true,
+                  storageKey: true,
+                },
+              },
+            },
           });
           const task = await tx.task.create({
             data: { sessionId, goal, status: 'running' },
@@ -63,13 +108,47 @@ export class TasksService {
           });
           // 用当前最大 seq + 1 而不是长度：历史消息删除后 seq 会有空洞。
           const nextSeq = prior.length > 0 ? prior[prior.length - 1].seq + 1 : 0;
-          await tx.message.create({
+          const message = await tx.message.create({
             data: { sessionId, role: 'user', content: goal, seq: nextSeq },
           });
 
-          const messages: ChatMessage[] = [
-            ...prior.map((m) => ({ role: m.role as ChatMessage['role'], content: m.content })),
-            { role: 'user', content: goal },
+          // 认领条件同时校验归属与「未被占用」：别人或已发送的附件都认领不到，
+          // 数量不符即回滚，避免消息与附件部分绑定。重试时上一次绑定已随事务回滚。
+          let current: PreparedAttachment[] = [];
+          if (ids.length > 0) {
+            const claimed = await tx.attachment.updateMany({
+              where: {
+                id: { in: ids },
+                tenantId,
+                userId,
+                sessionId: null,
+                messageId: null,
+              },
+              data: { sessionId, messageId: message.id },
+            });
+            if (claimed.count !== ids.length) throw new NotFoundException('attachment_not_found');
+            const rows = await tx.attachment.findMany({
+              where: { messageId: message.id },
+              select: {
+                id: true,
+                kind: true,
+                filename: true,
+                mime: true,
+                size: true,
+                storageKey: true,
+              },
+            });
+            const byId = new Map(rows.map((r) => [r.id, r]));
+            current = ids.map((id) => toPreparedAttachment(byId.get(id)!));
+          }
+
+          const messages: PreparedMessage[] = [
+            ...prior.map((m) => ({
+              role: m.role as PreparedMessage['role'],
+              content: m.content,
+              attachments: m.attachments.map(toPreparedAttachment),
+            })),
+            { role: 'user', content: goal, attachments: current },
           ];
           return { taskId: task.id, runId: run.id, tenantId, userId, messages };
         });

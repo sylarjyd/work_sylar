@@ -58,7 +58,14 @@ function makeService(seedArchived = false) {
     },
     message: {
       findMany: async () => [
-        { id: 'm1', role: 'user', content: 'hi', seq: 0, createdAt: new Date('2026-10-01T00:00:00Z') },
+        {
+          id: 'm1',
+          role: 'user',
+          content: 'hi',
+          seq: 0,
+          createdAt: new Date('2026-10-01T00:00:00Z'),
+          attachments: [],
+        },
       ],
       count: async () => 1,
     },

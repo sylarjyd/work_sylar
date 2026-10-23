@@ -2,9 +2,19 @@ import { randomUUID } from 'node:crypto';
 import { Body, Controller, HttpException, Inject, Logger, Param, Post, Res, UseGuards } from '@nestjs/common';
 import type { FastifyReply } from 'fastify';
 import type { AgentEvent, ArtifactRef, RunBilling, UsageEvent } from '@ai-office/shared';
-import { createSseParser, toolsForSkills, type CreateTaskRequest } from '@ai-office/shared';
+import {
+  ATTACHMENT_MAX_PER_MESSAGE,
+  createSseParser,
+  toolsForSkills,
+  type CreateTaskRequest,
+} from '@ai-office/shared';
 import { currentTrace, endSpan, injectTraceparent, startSpan } from '@ai-office/telemetry';
 import { TasksService } from './tasks.service';
+import {
+  AttachmentsService,
+  MAX_RUN_ATTACHMENT_BYTES,
+  type PreparedAttachment,
+} from '../attachments/attachments.service';
 import { ArtifactService } from '../artifacts/artifacts.service';
 import { BillingService } from '../billing/billing.service';
 import { SettingsService } from '../settings/settings.service';
@@ -72,6 +82,7 @@ export class TasksController {
 
   constructor(
     private readonly tasks: TasksService,
+    private readonly attachments: AttachmentsService,
     private readonly artifacts: ArtifactService,
     private readonly billing: BillingService,
     private readonly settings: SettingsService,
@@ -89,10 +100,20 @@ export class TasksController {
     const runtimeUrl = process.env.AGENT_RUNTIME_URL ?? 'http://localhost:4001';
     const runtimeToken = process.env.AGENT_RUNTIME_TOKEN;
     const goal = body?.goal;
+    const rawIds = body?.attachmentIds;
+    if (rawIds !== undefined && (!Array.isArray(rawIds) || rawIds.some((id) => typeof id !== 'string' || !id))) {
+      reply.status(400).send({ error: 'invalid_attachments' });
+      return;
+    }
+    const attachmentIds = [...new Set((rawIds ?? []) as string[])];
+    if (attachmentIds.length > ATTACHMENT_MAX_PER_MESSAGE) {
+      reply.status(400).send({ error: 'too_many_attachments' });
+      return;
+    }
 
-    // 边界校验：goal 必须是非空字符串。此时尚未建 task/run，也尚未 hijack，
-    // 交给 Nest/Fastify 正常回 400 即可。
-    if (typeof goal !== 'string' || goal.length === 0) {
+    // 边界校验：goal 必须是非空字符串；纯附件消息（只发文件不写文字）也允许。
+    // 此时尚未建 task/run，也尚未 hijack，交给 Nest/Fastify 正常回 400 即可。
+    if (typeof goal !== 'string' || (goal.length === 0 && attachmentIds.length === 0)) {
       reply.status(400).send({ error: 'invalid_goal' });
       return;
     }
@@ -124,6 +145,36 @@ export class TasksController {
         return;
       }
       throw err;
+    }
+
+    // 附件预检放在预占之前：不存在、模态不支持或超出预算都不应留下 hold。
+    // 这里只读元数据；真正的认领在 prepare 事务内完成，并发重复发送不会重复绑定。
+    let pending: PreparedAttachment[] = [];
+    if (attachmentIds.length > 0) {
+      try {
+        pending = await this.attachments.listOwnedUnclaimed(attachmentIds, user.tenantId, user.sub);
+      } catch (err) {
+        if (err instanceof HttpException) {
+          reply.status(err.getStatus()).send({ error: err.message });
+          return;
+        }
+        throw err;
+      }
+      const requiredKinds = [...new Set(pending.map((a) => a.kind))];
+      const unsupported = requiredKinds.filter((kind) => !resolution.selectedModalities.includes(kind));
+      if (unsupported.length > 0) {
+        reply.status(400).send({
+          error: 'model_modality_unsupported',
+          model: resolution.selectedModel,
+          modalities: unsupported,
+        });
+        return;
+      }
+      const totalBytes = pending.reduce((sum, a) => sum + a.size, 0);
+      if (totalBytes > MAX_RUN_ATTACHMENT_BYTES) {
+        reply.status(400).send({ error: 'attachments_too_large' });
+        return;
+      }
     }
 
     // 预占额度并做限流；失败在 hijack 之前返回，Nest 可正常写响应。
@@ -170,13 +221,31 @@ export class TasksController {
         runId,
         // onRequest 已建立请求 span；这里把同一条 trace 固化到 run，便于事后按 trace 反查。
         currentTrace()?.traceId ?? null,
+        attachmentIds,
       );
     } catch (err) {
       // 建 task/run 失败：归还预占（best-effort），再交给 Nest 处理原异常。
       await this.billing.releaseHold(runId).catch(() => undefined);
       throw err;
     }
-    const { taskId, tenantId, userId, messages } = prepared;
+    const { taskId, tenantId, userId } = prepared;
+
+    // 附件字节在事务外读取：避免把对象存储的慢请求拖进数据库事务。
+    // 读取失败时 task/run 已落库，必须标记失败并归还预占，不能留下永远 running 的孤儿。
+    let messages;
+    try {
+      messages = await this.attachments.hydrateForRun(prepared.messages);
+    } catch (err) {
+      await this.billing.releaseHold(runId).catch(() => undefined);
+      await this.safeFinish(runId, taskId, 'failed', '', sessionId);
+      if (err instanceof HttpException) {
+        reply.status(err.getStatus()).send({ error: err.message });
+        return;
+      }
+      this.logger.error(`run ${runId} 读取附件失败: ${(err as Error).message}`);
+      reply.status(502).send({ error: 'attachment_unavailable' });
+      return;
+    }
 
     // 运行指标从建好 task/run 之后开始统计；结算失败计数也走同一 BFF 指标注册表。
     const runTelemetry = new RunTelemetry(this.metrics);

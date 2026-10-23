@@ -11,6 +11,7 @@ function makeDb() {
     messages: [] as Row[],
     tasks: [] as Row[],
     runs: [] as Row[],
+    attachments: [] as Row[],
     // 预先排队的 message.create 异常，用来模拟并发唯一键冲突等故障。
     messageCreateErrors: [] as unknown[],
     messageCreateCalls: 0,
@@ -22,7 +23,11 @@ function makeDb() {
 
   const client: any = {
     message: {
-      findMany: async ({ where }: any) => [...sessionMessages(where.sessionId)].sort((a, b) => a.seq - b.seq),
+      // Prisma 的 include/select 总会返回数组；内存版补齐默认值，避免历史夹具漏写 attachments。
+      findMany: async ({ where }: any) =>
+        [...sessionMessages(where.sessionId)]
+          .sort((a, b) => a.seq - b.seq)
+          .map((m) => ({ attachments: [], ...m })),
       findFirst: async ({ where }: any) => {
         const rows = [...sessionMessages(where.sessionId)].sort((a, b) => b.seq - a.seq);
         return rows[0] ?? null;
@@ -65,12 +70,30 @@ function makeDb() {
         return row ?? { id: where.id, ...data };
       },
     },
+    attachment: {
+      // 对齐 Prisma updateMany 语义：仅匹配「归属一致且尚未绑定」的行。
+      updateMany: async ({ where, data }: any) => {
+        const ids: string[] = where.id.in;
+        const rows = db.attachments.filter(
+          (a) =>
+            ids.includes(a.id) &&
+            a.tenantId === where.tenantId &&
+            a.userId === where.userId &&
+            a.sessionId === where.sessionId &&
+            a.messageId === where.messageId,
+        );
+        for (const row of rows) Object.assign(row, data);
+        return { count: rows.length };
+      },
+      findMany: async ({ where }: any) => db.attachments.filter((a) => a.messageId === where.messageId),
+    },
     // 模拟事务回滚：回调抛错时恢复进入事务前的数据快照。
     $transaction: async (fn: any) => {
       const snapshot = {
         messages: [...db.messages],
         tasks: [...db.tasks],
         runs: [...db.runs],
+        attachments: db.attachments.map((a) => ({ ...a })),
       };
       try {
         return await fn(client);
@@ -78,6 +101,7 @@ function makeDb() {
         db.messages = snapshot.messages;
         db.tasks = snapshot.tasks;
         db.runs = snapshot.runs;
+        db.attachments = snapshot.attachments;
         throw err;
       }
     },
@@ -116,7 +140,7 @@ describe('TasksService', () => {
     expect(ctx.db.messageCreateCalls).toBe(2);
     expect(ctx.db.messages.filter((m) => m.role === 'user').map((m) => m.seq)).toEqual([0, 1]);
     expect(ctx.db.messages.find((m) => m.role === 'user' && m.seq === 1)?.content).toBe('新目标');
-    expect(result.messages.at(-1)).toEqual({ role: 'user', content: '新目标' });
+    expect(result.messages.at(-1)).toEqual({ role: 'user', content: '新目标', attachments: [] });
     // 首次事务已回滚：重试成功后不应残留第一次创建的 task/run 孤儿。
     expect(ctx.db.tasks).toHaveLength(1);
     expect(ctx.db.runs).toHaveLength(1);
@@ -178,5 +202,54 @@ describe('TasksService', () => {
 
     await svc.prepare('s1', 't1', 'u1', '目标', 'run2');
     expect(ctx.db.runs[1].traceId).toBeNull();
+  });
+
+  it('prepare 原子认领附件并按入参顺序回传，历史附件一并带上', async () => {
+    ctx.db.messages.push({
+      id: 'm0',
+      sessionId: 's1',
+      role: 'user',
+      content: '旧消息',
+      seq: 0,
+      attachments: [
+        {
+          id: 'a-old',
+          kind: 'image',
+          filename: 'old.png',
+          mime: 'image/png',
+          size: 10,
+          storageKey: 'attachments/t1/u1/x/old.png',
+        },
+      ],
+    });
+    ctx.db.attachments.push(
+      { id: 'a1', tenantId: 't1', userId: 'u1', sessionId: null, messageId: null, kind: 'text', filename: 'a.txt', mime: 'text/plain', size: 3, storageKey: 'k1' },
+      { id: 'a2', tenantId: 't1', userId: 'u1', sessionId: null, messageId: null, kind: 'image', filename: 'b.png', mime: 'image/png', size: 4, storageKey: 'k2' },
+    );
+
+    const result = await svc.prepare('s1', 't1', 'u1', '看附件', 'run1', null, ['a2', 'a1', 'a2']);
+
+    // 去重后按调用方给的顺序（a2、a1）返回，便于前端/模型看到稳定顺序。
+    expect(result.messages.at(-1)?.attachments.map((a) => a.id)).toEqual(['a2', 'a1']);
+    expect(result.messages[0].attachments.map((a) => a.id)).toEqual(['a-old']);
+    expect(ctx.db.attachments).toMatchObject([
+      { id: 'a1', sessionId: 's1', messageId: 'm2' },
+      { id: 'a2', sessionId: 's1', messageId: 'm2' },
+    ]);
+  });
+
+  it('prepare 认领数量不符时整体回滚，不留下消息/任务/绑定', async () => {
+    ctx.db.attachments.push(
+      { id: 'a1', tenantId: 't1', userId: 'u2', sessionId: null, messageId: null, kind: 'text', filename: 'a.txt', mime: 'text/plain', size: 3, storageKey: 'k1' },
+    );
+
+    await expect(svc.prepare('s1', 't1', 'u1', '看附件', 'run1', null, ['a1'])).rejects.toThrow(
+      'attachment_not_found',
+    );
+
+    expect(ctx.db.messages).toHaveLength(0);
+    expect(ctx.db.tasks).toHaveLength(0);
+    expect(ctx.db.runs).toHaveLength(0);
+    expect(ctx.db.attachments[0]).toMatchObject({ sessionId: null, messageId: null });
   });
 });

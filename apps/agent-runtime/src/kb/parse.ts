@@ -18,6 +18,9 @@ const EXT: Record<string, DocType> = {
   txt: 'txt',
   md: 'md',
   csv: 'csv',
+  // json/log 与纯文本同构：直接按 UTF-8 读取，供聊天附件复用同一抽取入口。
+  json: 'txt',
+  log: 'txt',
   docx: 'docx',
   xlsx: 'xlsx',
   pdf: 'pdf',
@@ -27,6 +30,7 @@ const MIME: Record<string, DocType> = {
   'text/plain': 'txt',
   'text/markdown': 'md',
   'text/csv': 'csv',
+  'application/json': 'txt',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
   'application/pdf': 'pdf',
@@ -43,6 +47,21 @@ export function detectType(filename: string, mime?: string): DocType | null {
   return null;
 }
 
+/**
+ * 文本类附件按 BOM → 严格 UTF-8 → GBK 依次尝试。
+ * 中文 Windows 上导出的 CSV/TXT 仍常是 GBK（ANSI）；直接按 UTF-8 解码会变成乱码，
+ * 而 GBK 对字节序列几乎总能解码成功，所以只有在严格 UTF-8 失败时才回退。
+ */
+function decodeText(data: Buffer): string {
+  if (data[0] === 0xff && data[1] === 0xfe) return new TextDecoder('utf-16le').decode(data);
+  if (data[0] === 0xfe && data[1] === 0xff) return new TextDecoder('utf-16be').decode(data);
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(data).replace(/^﻿/, '');
+  } catch {
+    return new TextDecoder('gbk').decode(data);
+  }
+}
+
 export async function parseDocument(input: ParseInput, deps: ParseDeps = {}): Promise<string> {
   const type = detectType(input.filename, input.mime);
   if (!type) throw new Error('unsupported_type');
@@ -50,7 +69,7 @@ export async function parseDocument(input: ParseInput, deps: ParseDeps = {}): Pr
     case 'txt':
     case 'md':
     case 'csv':
-      return input.data.toString('utf8').replace(/^\uFEFF/, '');
+      return decodeText(input.data);
     case 'docx':
       return (await mammoth.extractRawText({ buffer: input.data })).value;
     case 'xlsx':

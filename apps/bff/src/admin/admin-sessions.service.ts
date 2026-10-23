@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import { attachmentKindFor } from '@ai-office/shared';
 import type {
   AdminMessageDto,
   AdminSessionDetailDto,
@@ -105,6 +106,11 @@ export class AdminSessionsService {
         orderBy: { seq: 'asc' },
         skip,
         take,
+        include: {
+          attachments: {
+            select: { id: true, kind: true, filename: true, mime: true, size: true },
+          },
+        },
       }),
       this.prisma.message.count({ where: { sessionId: id } }),
     ]);
@@ -124,6 +130,13 @@ export class AdminSessionsService {
         content: m.content,
         seq: m.seq,
         createdAt: m.createdAt.toISOString(),
+        attachments: m.attachments.map((a) => ({
+          id: a.id,
+          kind: attachmentKindFor(a.filename, a.mime) ?? 'text',
+          filename: a.filename,
+          mime: a.mime,
+          size: a.size,
+        })),
       })),
       total,
       page,

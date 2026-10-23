@@ -14,7 +14,21 @@ let token: string;
 
 // 内存假库：会话归属用 tenantId/userId 过滤，模拟行级隔离。
 const sessions: { id: string; tenantId: string; userId: string; title: string; createdAt: Date }[] = [];
-const messages: { id: string; sessionId: string; role: string; content: string; seq: number }[] = [];
+const messages: {
+  id: string;
+  sessionId: string;
+  role: string;
+  content: string;
+  seq: number;
+  attachments?: {
+    id: string;
+    kind: string;
+    filename: string;
+    mime: string;
+    size: number;
+    storageKey: string;
+  }[];
+}[] = [];
 
 // 单调递增，跨 beforeEach 不重置，贴近真实自增主键（否则 id 会随 fake 重置而复用）。
 let seq = 0;
@@ -44,7 +58,10 @@ const fakePrisma = {
   },
   message: {
     findMany: async ({ where }: { where: { sessionId: string } }) =>
-      messages.filter((m) => m.sessionId === where.sessionId).sort((a, b) => a.seq - b.seq),
+      messages
+        .filter((m) => m.sessionId === where.sessionId)
+        .sort((a, b) => a.seq - b.seq)
+        .map((m) => ({ attachments: [], ...m })),
   },
 } as unknown as PrismaService;
 

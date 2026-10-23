@@ -5,6 +5,7 @@ import type {
   AssistantDto,
   AssistantInput,
   AssistantPatch,
+  AttachmentDto,
   BillingSummaryDto,
   ClientModelsDto,
   ConnectorDto,
@@ -92,11 +93,44 @@ export async function listModels(): Promise<ClientModelsDto> {
   return (await res.json()) as ClientModelsDto;
 }
 
-export async function streamTask(sessionId: string, goal: string): Promise<Response> {
+export async function streamTask(
+  sessionId: string,
+  goal: string,
+  attachmentIds: string[] = [],
+): Promise<Response> {
   return authFetch(`/api/sessions/${sessionId}/tasks`, {
     method: 'POST',
-    body: JSON.stringify({ goal }),
+    body: JSON.stringify({ goal, ...(attachmentIds.length > 0 ? { attachmentIds } : {}) }),
   });
+}
+
+/** 上传聊天附件。FormData 不能手设 content-type，否则 boundary 丢失。 */
+export async function uploadAttachment(file: File): Promise<AttachmentDto> {
+  const token = getToken();
+  const form = new FormData();
+  form.append('file', file);
+  const headers: Record<string, string> = {
+    traceparent: newTraceparent(),
+    'x-request-id': newRequestId(),
+  };
+  if (token) headers.authorization = `Bearer ${token}`;
+  const res = await fetch(`${BFF_URL}/api/attachments`, {
+    method: 'POST',
+    headers,
+    body: form,
+  });
+  if (res.status === 401) {
+    clearToken();
+    throw new Error('unauthorized');
+  }
+  if (!res.ok) throw new Error(`attachment_upload_failed_${res.status}`);
+  return (await res.json()) as AttachmentDto;
+}
+
+/** 撤回尚未发送的附件；已绑定消息的附件服务端会拒绝（409）。 */
+export async function deleteAttachment(id: string): Promise<void> {
+  const res = await authFetch(`/api/attachments/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  if (!res.ok && res.status !== 404) throw new Error(`attachment_delete_failed_${res.status}`);
 }
 
 export async function listArtifacts(sessionId: string): Promise<ArtifactDto[]> {

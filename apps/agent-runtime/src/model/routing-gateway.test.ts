@@ -75,4 +75,43 @@ describe('RoutingGateway', () => {
     const gw = new RoutingGateway([{ model: 'a', gateway: gatewayOf('a', 'ok') }]);
     await expect(gw.chat({ ...req, models: ['mock'] })).rejects.toThrow('model_not_allowed');
   });
+
+  it('按必需模态跳过能力不足的候选', async () => {
+    let textCalled = false;
+    const gw = new RoutingGateway([
+      {
+        model: 'text-only',
+        gateway: {
+          async chat() {
+            textCalled = true;
+            return ok('text-only');
+          },
+        },
+      },
+      {
+        model: 'vision',
+        gateway: gatewayOf('vision', 'ok'),
+        modalities: ['text', 'image'],
+      },
+    ]);
+
+    const out = await gw.chat({
+      ...req,
+      models: ['text-only', 'vision'],
+      requiredModalities: ['text', 'image'],
+    });
+    expect(out.model).toBe('vision');
+    expect(textCalled).toBe(false);
+  });
+
+  it('没有模型支持所需模态时报 model_modality_unsupported', async () => {
+    const gw = new RoutingGateway([
+      { model: 'text-only', gateway: gatewayOf('text-only', 'ok') },
+      { model: 'vision', gateway: gatewayOf('vision', 'ok'), modalities: ['text', 'image'] },
+    ]);
+
+    await expect(
+      gw.chat({ ...req, models: ['text-only', 'vision'], requiredModalities: ['text', 'audio'] }),
+    ).rejects.toThrow('model_modality_unsupported');
+  });
 });

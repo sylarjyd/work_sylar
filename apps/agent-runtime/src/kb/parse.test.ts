@@ -33,6 +33,19 @@ describe('parseDocument', () => {
     expect(out).toContain('a,b');
   });
 
+  it('非 UTF-8 的中文文本回退按 GBK 解码', async () => {
+    // 「项目周报」的 GBK 字节，模拟中文 Windows 下 ANSI 保存的 txt/csv。
+    const gbk = Buffer.from([0xcf, 0xee, 0xc4, 0xbf, 0xd6, 0xdc, 0xb1, 0xa8]);
+    const out = await parseDocument({ data: gbk, filename: 'a.csv' });
+    expect(out).toBe('项目周报');
+  });
+
+  it('带 BOM 的 UTF-16LE 文本按原编码解码', async () => {
+    const utf16 = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('报告', 'utf16le')]);
+    const out = await parseDocument({ data: utf16, filename: 'a.txt' });
+    expect(out).toBe('报告');
+  });
+
   it('docx 用 mammoth 抽出正文（真实生成 fixture）', async () => {
     const { Document, Packer, Paragraph } = await import('docx');
     const doc = new Document({ sections: [{ children: [new Paragraph('知识库里的那句话')] }] });

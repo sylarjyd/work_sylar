@@ -8,6 +8,7 @@ import { createServer, type Server } from 'node:http';
 import { encodeSse } from '@ai-office/shared';
 import { TasksController } from './tasks.controller';
 import { TasksService } from './tasks.service';
+import { AttachmentsService } from '../attachments/attachments.service';
 import { ArtifactService } from '../artifacts/artifacts.service';
 import { ARTIFACT_STORAGE } from '../artifacts/storage';
 import { SessionsController } from '../sessions/sessions.controller';
@@ -90,6 +91,7 @@ const fakeBilling = {
 // 模型目录调用记录与故障注入：断言运行前解析到的会话模型与错误分支。
 const catalogCalls: unknown[][] = [];
 let resolveForRunError: unknown = null;
+let selectedModalities: string[] = ['text', 'image', 'audio', 'video'];
 const fakeCatalog = {
   available: async () => ({
     models: [
@@ -106,9 +108,29 @@ const fakeCatalog = {
   resolveForRun: async (tenantId: string, model: string | null) => {
     catalogCalls.push([tenantId, model]);
     if (resolveForRunError) throw resolveForRunError;
-    return { selectedModel: 'mock', modelRoutes: [] };
+    return {
+      selectedModel: 'mock',
+      modelRoutes: [],
+      selectedModalities,
+    };
   },
 } as unknown as ModelCatalogService;
+
+// 附件预检与水合：无附件的用例返回空；附件用例按需注入记录。
+const attachmentCalls: unknown[][] = [];
+let ownedAttachments: unknown[] = [];
+let hydrateError: unknown = null;
+const fakeAttachments = {
+  listOwnedUnclaimed: async (ids: string[], tenantId: string, userId: string) => {
+    attachmentCalls.push(['list', ids, tenantId, userId]);
+    return ownedAttachments;
+  },
+  hydrateForRun: async (messages: unknown[]) => {
+    attachmentCalls.push(['hydrate', messages]);
+    if (hydrateError) throw hydrateError;
+    return messages;
+  },
+} as unknown as AttachmentsService;
 
 // 逃逸到 Nest 异常处理器的异常会被登记在这里。
 // 存在的意义：Nest 的 BaseExceptionFilter 在 reply 已 hijack 时会兜底
@@ -151,6 +173,12 @@ const fakePrisma = {
       stored.messages.push(data);
       return data;
     },
+  },
+  attachment: {
+    updateMany: async ({ where }: { where: { id: { in: string[] } } }) => ({
+      count: where.id.in.length,
+    }),
+    findMany: async () => ownedAttachments,
   },
   task: {
     create: async ({ data }: { data: unknown }) => {
@@ -269,6 +297,7 @@ beforeAll(async () => {
       },
       { provide: PrismaService, useValue: fakePrisma },
       { provide: ModelCatalogService, useValue: fakeCatalog },
+      { provide: AttachmentsService, useValue: fakeAttachments },
       { provide: BFF_METRICS, useValue: createBffMetrics({ defaultMetrics: false }) },
       { provide: ARTIFACT_STORAGE, useValue: { getObjectStream: async () => { throw new Error('unused'); } } },
     ],
@@ -308,6 +337,10 @@ beforeEach(() => {
   beginRunError = null;
   catalogCalls.length = 0;
   resolveForRunError = null;
+  selectedModalities = ['text', 'image', 'audio', 'video'];
+  attachmentCalls.length = 0;
+  ownedAttachments = [];
+  hydrateError = null;
   session.model = 'mock';
   escapedErrors.length = 0;
   lastRunsBody = '';
@@ -675,6 +708,99 @@ describe('TasksController', () => {
     expect(JSON.parse(res.payload)).toEqual({ error: 'model_unavailable' });
     expect(billingCalls).toEqual([]);
     expect(stored.runCreates).toHaveLength(0);
+  });
+
+  it('附件 id 结构非法或数量超限时在预占前返回 400', async () => {
+    const token = signToken({ sub: 'u1', tenantId: 't1' });
+    const headers = { authorization: `Bearer ${token}` };
+
+    const invalid = await app.inject({
+      method: 'POST',
+      url: '/api/sessions/s1/tasks',
+      headers,
+      payload: { goal: 'g', attachmentIds: ['a1', ''] },
+    });
+    expect(invalid.statusCode).toBe(400);
+    expect(JSON.parse(invalid.payload)).toEqual({ error: 'invalid_attachments' });
+
+    const tooMany = await app.inject({
+      method: 'POST',
+      url: '/api/sessions/s1/tasks',
+      headers,
+      payload: { goal: 'g', attachmentIds: Array.from({ length: 11 }, (_, i) => `a${i}`) },
+    });
+    expect(tooMany.statusCode).toBe(400);
+    expect(JSON.parse(tooMany.payload)).toEqual({ error: 'too_many_attachments' });
+    expect(billingCalls).toEqual([]);
+  });
+
+  it('纯附件消息允许空目标；模型不支持的模态在预占前拒绝', async () => {
+    const token = signToken({ sub: 'u1', tenantId: 't1' });
+    const headers = { authorization: `Bearer ${token}` };
+    ownedAttachments = [
+      {
+        id: 'a1',
+        kind: 'image',
+        filename: 'p.png',
+        mime: 'image/png',
+        size: 3,
+        storageKey: 'attachments/t1/u1/x/p.png',
+      },
+    ];
+
+    selectedModalities = ['text'];
+    const unsupported = await app.inject({
+      method: 'POST',
+      url: '/api/sessions/s1/tasks',
+      headers,
+      payload: { goal: '', attachmentIds: ['a1'] },
+    });
+    expect(unsupported.statusCode).toBe(400);
+    expect(JSON.parse(unsupported.payload)).toEqual({
+      error: 'model_modality_unsupported',
+      model: 'mock',
+      modalities: ['image'],
+    });
+    expect(billingCalls).toEqual([]);
+    expect(stored.runCreates).toHaveLength(0);
+
+    selectedModalities = ['text', 'image'];
+    const ok = await app.inject({
+      method: 'POST',
+      url: '/api/sessions/s1/tasks',
+      headers,
+      payload: { goal: '', attachmentIds: ['a1'] },
+    });
+    expect(ok.statusCode).toBe(200);
+    // 附件元数据随 messages 下发给 runtime；纯附件消息是唯一的 user 消息。
+    const body = JSON.parse(lastRunsBody) as { messages: { attachments?: unknown[] }[] };
+    expect(body.messages.at(-1)?.attachments).toHaveLength(1);
+  });
+
+  it('附件读取失败时归还预占并把 run 标记 failed', async () => {
+    ownedAttachments = [
+      {
+        id: 'a1',
+        kind: 'text',
+        filename: 'a.txt',
+        mime: 'text/plain',
+        size: 3,
+        storageKey: 'k1',
+      },
+    ];
+    hydrateError = new Error('storage down');
+    const token = signToken({ sub: 'u1', tenantId: 't1' });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/sessions/s1/tasks',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { goal: '看附件', attachmentIds: ['a1'] },
+    });
+
+    expect(res.statusCode).toBe(502);
+    expect(JSON.parse(res.payload)).toEqual({ error: 'attachment_unavailable' });
+    expect(billingCalls).toContainEqual(['release', expect.any(String)]);
+    expect(stored.runUpdates.at(-1)).toMatchObject({ data: { status: 'failed' } });
   });
 
   it('历史会话首次运行成功后回填模型', async () => {

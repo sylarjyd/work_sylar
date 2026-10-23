@@ -50,6 +50,7 @@ model Session {
   messages  Message[]
   tasks     Task[]
   artifacts Artifact[]
+  attachments Attachment[]
 
   @@index([tenantId, userId])
   @@index([assistantId])
@@ -85,8 +86,31 @@ model Message {
   tokens    Int?
   createdAt DateTime @default(now())
   session   Session  @relation(fields: [sessionId], references: [id])
+  attachments Attachment[]
 
   @@unique([sessionId, seq])
+}
+
+/// 聊天附件：先上传（sessionId/messageId 为空），发送时在事务内绑定到用户消息。
+/// 文本类附件由 runtime 按需抽取正文，二进制附件按模型模态下发。
+model Attachment {
+  id         String   @id @default(uuid())
+  tenantId   String
+  userId     String
+  sessionId  String?
+  messageId  String?
+  kind       String
+  filename   String
+  mime       String
+  size       Int
+  storageKey String
+  createdAt  DateTime @default(now())
+  session    Session? @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  message    Message? @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, userId])
+  @@index([sessionId])
+  @@index([messageId])
 }
 
 model Task {

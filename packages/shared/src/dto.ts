@@ -3,6 +3,135 @@ export type ChatRole = 'system' | 'user' | 'assistant' | 'tool';
 export interface ChatMessage {
   role: ChatRole;
   content: string;
+  /** 用户消息的多模态附件；历史消息按预算携带内容，缺省表示纯文本。 */
+  attachments?: ChatAttachment[];
+}
+
+/**
+ * 附件分类：text 覆盖纯文本与可抽取正文的文档（PDF/Word/Excel）；
+ * image/audio/video 以原始字节交给支持对应模态的模型。
+ */
+export const ATTACHMENT_KINDS = ['text', 'image', 'audio', 'video'] as const;
+export type AttachmentKind = (typeof ATTACHMENT_KINDS)[number];
+
+export const ATTACHMENT_KIND_LABELS: Record<AttachmentKind, string> = {
+  text: '文本',
+  image: '图片',
+  audio: '音频',
+  video: '视频',
+};
+
+/** 单条消息附件数量上限。 */
+export const ATTACHMENT_MAX_PER_MESSAGE = 10;
+
+export interface AttachmentSpec {
+  /** 单文件上限；文本类含可抽取正文的文档。 */
+  maxBytes: number;
+  extensions: readonly string[];
+  /** 扩展名 → 规范 MIME；服务端按此保存与回放，不信任客户端声明。 */
+  mimeByExtension: Record<string, string>;
+}
+
+const TEXT_MIME: Record<string, string> = {
+  txt: 'text/plain',
+  md: 'text/markdown',
+  csv: 'text/csv',
+  json: 'application/json',
+  log: 'text/plain',
+  pdf: 'application/pdf',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+};
+
+const IMAGE_MIME: Record<string, string> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  webp: 'image/webp',
+  gif: 'image/gif',
+};
+
+const AUDIO_MIME: Record<string, string> = {
+  mp3: 'audio/mpeg',
+  wav: 'audio/wav',
+  m4a: 'audio/mp4',
+  ogg: 'audio/ogg',
+  webm: 'audio/webm',
+};
+
+const VIDEO_MIME: Record<string, string> = {
+  mp4: 'video/mp4',
+  webm: 'video/webm',
+  mov: 'video/quicktime',
+};
+
+export const ATTACHMENT_SPECS: Record<AttachmentKind, AttachmentSpec> = {
+  text: { maxBytes: 10 * 1024 * 1024, extensions: Object.keys(TEXT_MIME), mimeByExtension: TEXT_MIME },
+  image: { maxBytes: 10 * 1024 * 1024, extensions: Object.keys(IMAGE_MIME), mimeByExtension: IMAGE_MIME },
+  audio: { maxBytes: 20 * 1024 * 1024, extensions: Object.keys(AUDIO_MIME), mimeByExtension: AUDIO_MIME },
+  video: { maxBytes: 30 * 1024 * 1024, extensions: Object.keys(VIDEO_MIME), mimeByExtension: VIDEO_MIME },
+};
+
+/** 客户端 `accept` 属性用的扩展名清单。 */
+export const ATTACHMENT_ACCEPT = ATTACHMENT_KINDS.flatMap((k) =>
+  ATTACHMENT_SPECS[k].extensions.map((ext) => `.${ext}`),
+).join(',');
+
+function extensionOf(filename: string): string {
+  const dot = filename.lastIndexOf('.');
+  return dot >= 0 ? filename.slice(dot + 1).toLowerCase() : '';
+}
+
+/**
+ * 识别附件类别：扩展名决定是否受支持，MIME 仅用于消歧（webm 同时属于音频/视频）。
+ * 未知扩展名即使声明了受支持的 MIME 也拒绝，避免把可执行/HTML 内容伪装成媒体回放。
+ */
+export function attachmentKindFor(filename: string, mime?: string): AttachmentKind | null {
+  const ext = extensionOf(filename);
+  const extKinds = ATTACHMENT_KINDS.filter((k) =>
+    ATTACHMENT_SPECS[k].extensions.includes(ext),
+  );
+  if (extKinds.length === 0) return null;
+  const normalizedMime = mime?.split(';')[0]?.trim().toLowerCase() ?? '';
+  const mimeKind = ATTACHMENT_KINDS.find((k) =>
+    Object.values(ATTACHMENT_SPECS[k].mimeByExtension).includes(normalizedMime),
+  );
+  return mimeKind && extKinds.includes(mimeKind) ? mimeKind : extKinds[0];
+}
+
+/** 按扩展名给出规范 MIME；仅用于已通过 attachmentKindFor 的文件。 */
+export function attachmentMimeFor(filename: string, kind: AttachmentKind): string {
+  return ATTACHMENT_SPECS[kind].mimeByExtension[extensionOf(filename)] ?? 'application/octet-stream';
+}
+
+export function attachmentKindLabel(kind: AttachmentKind): string {
+  return ATTACHMENT_KIND_LABELS[kind] ?? kind;
+}
+
+/** 附件元数据；列表与消息回放共用，不含存储 Key。 */
+export interface AttachmentRef {
+  id: string;
+  kind: AttachmentKind;
+  filename: string;
+  mime: string;
+  size: number;
+}
+
+/** 上传成功后返回给客户端的附件。 */
+export interface AttachmentDto extends AttachmentRef {
+  createdAt: string;
+}
+
+/**
+ * 下发给 runtime 的附件：data 为 base64，缺省表示因预算未随本次运行发送。
+ * 文本类附件由 runtime 抽取正文，二进制附件按模型模态组装 content parts。
+ */
+export interface ChatAttachment {
+  kind: AttachmentKind;
+  filename: string;
+  mime: string;
+  size: number;
+  data?: string;
 }
 
 /**
@@ -13,6 +142,8 @@ export interface RunModelRoute {
   model: string;
   baseUrl: string;
   apiKey: string;
+  /** 该模型支持的输入模态；缺省按 text，供 runtime 过滤不支持多模态的回退路由。 */
+  modalities?: ModelModality[];
 }
 
 /**
@@ -90,10 +221,13 @@ export interface MessageDto {
   role: ChatRole;
   content: string;
   seq: number;
+  attachments: AttachmentRef[];
 }
 
 export interface CreateTaskRequest {
   goal: string;
+  /** 已上传且未使用的附件 id；按上传顺序绑定到本次用户消息。 */
+  attachmentIds?: string[];
 }
 
 export type ArtifactKind = 'docx' | 'xlsx' | 'pptx';

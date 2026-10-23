@@ -1,4 +1,5 @@
 import { endSpan, startSpan } from '@ai-office/telemetry';
+import type { ModelModality } from '@ai-office/shared';
 import type { ChatRequest, ChatResponse, ModelGateway } from './types';
 import type { ModelObserver } from './observed-gateway';
 import { ModelHttpError } from './errors';
@@ -6,6 +7,8 @@ import { ModelHttpError } from './errors';
 export interface ModelRoute {
   model: string;
   gateway: ModelGateway;
+  /** 该模型支持的输入模态；缺省视为仅文本。 */
+  modalities?: ModelModality[];
 }
 
 /** 仅网络错误、429、5xx 值得换模型；其余 4xx 多半是参数/鉴权问题，重试只会放大错误。 */
@@ -33,7 +36,18 @@ export class RoutingGateway implements ModelGateway {
         (a, b) => (order.get(a.model) ?? 0) - (order.get(b.model) ?? 0),
       );
     }
-    if (candidates.length === 0) throw new Error('model_not_allowed');
+    // 带多模态附件时先剔除能力不足的模型：否则 400 不在重试范围内，
+    // 会直接失败而不是回退到支持该模态的下一个候选。
+    const required = req.requiredModalities ?? [];
+    if (required.length > 0) {
+      candidates = candidates.filter((r) => {
+        const supported = r.modalities ?? ['text'];
+        return required.every((m) => supported.includes(m));
+      });
+    }
+    if (candidates.length === 0) {
+      throw new Error(required.length > 0 ? 'model_modality_unsupported' : 'model_not_allowed');
+    }
 
     let lastErr: unknown;
     for (let i = 0; i < candidates.length; i++) {

@@ -14,6 +14,7 @@ import { ArtifactController } from './artifacts/artifacts.controller';
 import { ArtifactService } from './artifacts/artifacts.service';
 import { ARTIFACT_STORAGE, createArtifactStorage } from './artifacts/storage';
 import { KbModule } from './kb/kb.module';
+import { AttachmentsModule } from './attachments/attachments.module';
 import { AssistantsModule } from './assistants/assistants.module';
 import { ConnectorModule } from './connector/connector.module';
 import { BillingModule } from './billing/billing.module';
@@ -30,6 +31,7 @@ import { SettingsModule } from './settings/settings.module';
     BillingModule,
     ModelsModule,
     KbModule,
+    AttachmentsModule,
     AssistantsModule,
     ConnectorModule,
     SettingsModule,

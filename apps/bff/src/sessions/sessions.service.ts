@@ -1,9 +1,11 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import {
+  attachmentKindFor,
   isAssistantPermissionMode,
   normalizeSkills,
   type AssistantPermissionMode,
   type AssistantSkillKey,
+  type AttachmentRef,
   type CreateSessionRequest,
   type MessageDto,
   type SessionSummary,
@@ -147,14 +149,36 @@ export class SessionsService {
     const rows = await this.prisma.message.findMany({
       where: { sessionId },
       orderBy: { seq: 'asc' },
+      include: {
+        attachments: {
+          select: { id: true, kind: true, filename: true, mime: true, size: true },
+        },
+      },
     });
     return rows.map((m) => ({
       id: m.id,
       role: m.role as MessageDto['role'],
       content: m.content,
       seq: m.seq,
+      attachments: m.attachments.map(toAttachmentRef),
     }));
   }
+}
+
+function toAttachmentRef(row: {
+  id: string;
+  kind: string;
+  filename: string;
+  mime: string;
+  size: number;
+}): AttachmentRef {
+  return {
+    id: row.id,
+    kind: attachmentKindFor(row.filename, row.mime) ?? 'text',
+    filename: row.filename,
+    mime: row.mime,
+    size: row.size,
+  };
 }
 
 function toAssistantRef(row: AssistantRow): SessionAssistantRef {

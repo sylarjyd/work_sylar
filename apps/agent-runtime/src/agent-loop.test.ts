@@ -59,6 +59,42 @@ describe('runAgent', () => {
     ]);
   });
 
+  it('发送前把附件转成多模态消息，并把所需模态传给路由', async () => {
+    const seen: { parts?: unknown; requiredModalities?: string[] }[] = [];
+    const gateway: ModelGateway = {
+      async chat(request) {
+        seen.push({
+          parts: request.messages.at(-1)?.parts,
+          requiredModalities: request.requiredModalities,
+        });
+        return { content: '看到了', toolCalls: [], usage: { input: 1, output: 1 }, model: 'mock' };
+      },
+    };
+    await collect(
+      runAgent(
+        {
+          ...req,
+          messages: [
+            {
+              role: 'user',
+              content: '看图',
+              attachments: [
+                { kind: 'image', filename: 'p.png', mime: 'image/png', size: 3, data: 'AQID' },
+              ],
+            },
+          ],
+        },
+        { gateway, tools: [] },
+      ),
+    );
+
+    expect(seen[0].parts).toEqual([
+      { type: 'text', text: '看图' },
+      { type: 'image_url', imageUrl: 'data:image/png;base64,AQID' },
+    ]);
+    expect(seen[0].requiredModalities).toEqual(['image']);
+  });
+
   it('模型调用中途抛错时仍上报已产生的用量', async () => {
     let round = 0;
     const gateway: ModelGateway = {

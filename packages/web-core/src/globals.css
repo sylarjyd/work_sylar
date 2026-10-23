@@ -2984,7 +2984,9 @@ a {
 
 .wb-user-msg {
   display: flex;
-  justify-content: flex-end;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
 }
 
 .wb-user-text {
@@ -3181,6 +3183,171 @@ a {
   width: 100%;
   max-width: 936px;
   margin: 0 auto;
+}
+
+/* 拖拽悬停：只高亮输入区，不拦截内部子元素的 dragover。 */
+.wb-composer-wrap.dragging .wb-composer {
+  border-color: #1a1a1a;
+  border-style: dashed;
+  background: #fafafa;
+}
+
+.wb-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 2px 2px 8px;
+}
+
+.wb-attachment {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  max-width: 260px;
+  padding: 5px 6px;
+  background: var(--surface-2);
+  border: 1px solid var(--wb-line-strong);
+  border-radius: 12px;
+}
+
+.wb-attachment.is-error {
+  background: #fff8ec;
+  border-color: #f1d9ae;
+}
+
+.wb-attachment-thumb {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  object-fit: cover;
+  background: #fff;
+  border-radius: 6px;
+}
+
+.wb-attachment-icon {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  color: var(--wb-ink-2);
+  background: #fff;
+  border-radius: 6px;
+}
+
+.wb-attachment-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.wb-attachment-name {
+  overflow: hidden;
+  font-size: 12.5px;
+  color: var(--wb-ink);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wb-attachment-meta {
+  font-size: 11px;
+  color: var(--wb-ink-2);
+}
+
+.wb-attachment.is-error .wb-attachment-meta {
+  color: var(--amber-ink);
+}
+
+.wb-attachment-remove {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  color: var(--wb-ink-2);
+  background: transparent;
+  border: 0;
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.wb-attachment-remove:hover:not(:disabled) {
+  color: var(--wb-ink);
+  background: rgba(0, 0, 0, 0.07);
+}
+
+.wb-attachment-remove:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.wb-attachment-warning {
+  color: var(--amber-ink);
+}
+
+.wb-attach {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  color: var(--wb-ink-2);
+  background: transparent;
+  border: 0;
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.wb-attach:hover:not(:disabled) {
+  color: var(--wb-ink);
+  background: var(--surface-2);
+}
+
+.wb-attach:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.wb-user-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  max-width: 78%;
+}
+
+.wb-user-attachment {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 240px;
+  padding: 5px 9px;
+  font-size: 12px;
+  color: var(--wb-ink);
+  background: var(--wb-sidebar);
+  border-radius: 10px;
+}
+
+.wb-user-attachment .wb-attachment-thumb {
+  width: 20px;
+  height: 20px;
+}
+
+.wb-user-attachment-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wb-user-attachment-meta {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--wb-ink-2);
 }
 
 .wb-composer {

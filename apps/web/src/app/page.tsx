@@ -3,10 +3,16 @@
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
+  ATTACHMENT_ACCEPT,
+  ATTACHMENT_MAX_PER_MESSAGE,
   MODEL_MODALITY_LABELS,
+  attachmentKindLabel,
   type AgentEvent,
   type ArtifactDto,
   type AssistantDto,
+  type AttachmentDto,
+  type AttachmentKind,
+  type AttachmentRef,
   type ClientModelDto,
   type SessionSummary,
 } from '@ai-office/shared';
@@ -17,6 +23,7 @@ import {
   IconCheck,
   IconCopy,
   IconFile,
+  IconPlus,
   IconSend,
   IconSpark,
   IconTool,
@@ -27,6 +34,7 @@ import { createSseParser } from '../lib/sse-parser';
 import {
   confirmRun,
   createSession,
+  deleteAttachment,
   downloadArtifact,
   getToken,
   isUnauthorized,
@@ -35,9 +43,34 @@ import {
   listModels,
   listSessions,
   streamTask,
+  uploadAttachment,
 } from '../lib/api';
+import {
+  checkFiles,
+  fileRejectText,
+  formatBytes,
+  modalityWarning,
+  unsupportedModalities,
+} from '../lib/attachments';
 import { currentConfirmCard } from '../lib/pending-confirm';
 import { renderStep } from '../lib/render-step';
+
+/** 尚未发送的附件：先本地展示，上传完成后再拿服务端 id。 */
+interface PendingAttachment {
+  localId: string;
+  filename: string;
+  kind: AttachmentKind;
+  size: number;
+  status: 'uploading' | 'ready' | 'error';
+  dto?: AttachmentDto;
+  previewUrl?: string;
+  error?: string;
+}
+
+/** 已提交消息的附件；previewUrl 仅供本次会话内即时预览，刷新后不再保留。 */
+interface SubmittedAttachment extends AttachmentRef {
+  previewUrl?: string;
+}
 
 const SUGGESTIONS = [
   { label: '写一份周报', goal: '整理本周工作进展，生成一份周报文档' },
@@ -168,11 +201,20 @@ export default function Home() {
   // 自定义助手：仅新建任务（草稿态）可选择，会话创建后助手固定。
   const [assistants, setAssistants] = useState<AssistantDto[]>([]);
   const [selectedAssistantId, setSelectedAssistantId] = useState('');
+  const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
+  const [submittedAttachments, setSubmittedAttachments] = useState<SubmittedAttachment[]>([]);
+  const [dragOver, setDragOver] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
   const composerRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const pendingRef = useRef<PendingAttachment[]>([]);
+  const addFilesRef = useRef<(files: File[]) => void>(() => undefined);
+  // 所有由本页创建的 object URL 统一登记，卸载时兜底释放，避免长期占用 blob 内存。
+  const objectUrlsRef = useRef(new Set<string>());
   const artifactReqRef = useRef(0);
   const lastUserScrollRef = useRef(0);
+  pendingRef.current = pendingAttachments;
 
   useEffect(() => {
     if (!getToken()) {
@@ -183,6 +225,27 @@ export default function Home() {
     void refreshModels();
     void refreshAssistants();
   }, [router]);
+
+  // 直接粘贴文件（截图/复制的图片、音视频）即上传；文本粘贴仍走 textarea 默认行为。
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent) => {
+      if (running) return;
+      const files = Array.from(e.clipboardData?.files ?? []);
+      if (files.length === 0) return;
+      e.preventDefault();
+      addFilesRef.current(files);
+    };
+    window.addEventListener('paste', onPaste);
+    return () => window.removeEventListener('paste', onPaste);
+  }, [running]);
+
+  useEffect(
+    () => () => {
+      for (const url of objectUrlsRef.current) URL.revokeObjectURL(url);
+      objectUrlsRef.current.clear();
+    },
+    [],
+  );
 
   async function refreshAssistants() {
     try {
@@ -263,6 +326,30 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, running]);
 
+  function trackUrl(url: string): void {
+    objectUrlsRef.current.add(url);
+  }
+
+  function releaseUrl(url: string): void {
+    URL.revokeObjectURL(url);
+    objectUrlsRef.current.delete(url);
+  }
+
+  function discardPending(): void {
+    for (const p of pendingRef.current) {
+      if (p.previewUrl) releaseUrl(p.previewUrl);
+    }
+    pendingRef.current = [];
+    setPendingAttachments([]);
+  }
+
+  function discardSubmitted(): void {
+    setSubmittedAttachments((prev) => {
+      for (const a of prev) if (a.previewUrl) releaseUrl(a.previewUrl);
+      return [];
+    });
+  }
+
   function resetConversation() {
     setEvents([]);
     setSubmittedGoal('');
@@ -271,6 +358,8 @@ export default function Home() {
     stickToBottomRef.current = true;
     artifactReqRef.current += 1;
     setArtifacts([]);
+    discardPending();
+    discardSubmitted();
   }
 
   function handleSelect(id: string) {
@@ -306,12 +395,87 @@ export default function Home() {
     }
   }
 
+  /** 客户端预检后立即展示 chip，并并发上传；单个失败只影响该附件。 */
+  function addFiles(files: File[]): void {
+    if (running || files.length === 0) return;
+    const { accepted, rejected } = checkFiles(files, pendingRef.current.length);
+    if (rejected.length > 0) setError(rejected.map(fileRejectText).join('；'));
+    if (accepted.length === 0) return;
+
+    const queued = accepted.map(({ file, kind }) => {
+      const previewUrl = kind === 'image' ? URL.createObjectURL(file) : undefined;
+      if (previewUrl) trackUrl(previewUrl);
+      const item: PendingAttachment = {
+        localId: crypto.randomUUID(),
+        filename: file.name,
+        kind,
+        size: file.size,
+        status: 'uploading',
+        previewUrl,
+      };
+      return { file, item };
+    });
+    pendingRef.current = [...pendingRef.current, ...queued.map((q) => q.item)];
+    setPendingAttachments(pendingRef.current);
+    for (const { file, item } of queued) void uploadOne(file, item.localId);
+  }
+  addFilesRef.current = addFiles;
+
+  async function uploadOne(file: File, localId: string): Promise<void> {
+    try {
+      const dto = await uploadAttachment(file);
+      // 上传期间用户可能已移除该 chip：此时把刚写入的对象立即删掉，避免孤儿附件。
+      if (!pendingRef.current.some((p) => p.localId === localId)) {
+        void deleteAttachment(dto.id).catch(() => undefined);
+        return;
+      }
+      pendingRef.current = pendingRef.current.map((p) =>
+        p.localId === localId ? { ...p, status: 'ready' as const, dto } : p,
+      );
+      setPendingAttachments(pendingRef.current);
+    } catch (err) {
+      if (isUnauthorized(err)) {
+        router.push('/login');
+        return;
+      }
+      pendingRef.current = pendingRef.current.map((p) =>
+        p.localId === localId
+          ? { ...p, status: 'error' as const, error: errorText(err) }
+          : p,
+      );
+      setPendingAttachments(pendingRef.current);
+    }
+  }
+
+  function removePending(localId: string): void {
+    if (running) return;
+    const target = pendingRef.current.find((p) => p.localId === localId);
+    pendingRef.current = pendingRef.current.filter((p) => p.localId !== localId);
+    setPendingAttachments(pendingRef.current);
+    if (target?.previewUrl) releaseUrl(target.previewUrl);
+    // 已上传的立即回收；上传中的会在 uploadOne 完成后自行清理。
+    if (target?.dto) void deleteAttachment(target.dto.id).catch(() => undefined);
+  }
+
   async function run() {
     const currentGoal = goal;
+    const ready = pendingRef.current.filter(
+      (a): a is PendingAttachment & { dto: AttachmentDto } => a.status === 'ready' && !!a.dto,
+    );
+    const attachmentIds = ready.map((a) => a.dto.id);
+    const submitted: SubmittedAttachment[] = ready.map((a) => ({
+      id: a.dto.id,
+      kind: a.kind,
+      filename: a.filename,
+      mime: a.dto.mime,
+      size: a.size,
+      ...(a.previewUrl ? { previewUrl: a.previewUrl } : {}),
+    }));
     stickToBottomRef.current = true;
     artifactReqRef.current += 1;
     setEvents([]);
     setSubmittedGoal(currentGoal);
+    setSubmittedAttachments(submitted);
     setGoal('');
     setRunning(true);
     setError('');
@@ -331,7 +495,15 @@ export default function Home() {
         setSessionId(created.id);
         sid = created.id;
       }
-      const res = await streamTask(sid, currentGoal);
+      // 会话创建成功后再清空输入区：失败时可保留附件重试。
+      // 已发送附件的预览 URL 转交给 submittedAttachments，待切换会话时统一释放。
+      const sentIds = new Set(ready.map((a) => a.localId));
+      for (const p of pendingRef.current) {
+        if (!sentIds.has(p.localId) && p.previewUrl) releaseUrl(p.previewUrl);
+      }
+      pendingRef.current = [];
+      setPendingAttachments([]);
+      const res = await streamTask(sid, currentGoal, attachmentIds);
       if (!res.ok) {
         // 错误响应通常带 JSON body 但没有 SSE 帧；不在此拦截就会静默结束、既不报错也无事件。
         const detail = await res.text().catch(() => '');
@@ -406,8 +578,25 @@ export default function Home() {
   const modelValue = sessionId ? (current?.model || defaultModel || selectedModel) : selectedModel;
   const modelAvailable =
     !sessionId || models.length === 0 || models.some((m) => m.model === modelValue);
-  const canSend = !running && !!goal.trim() && models.length > 0 && modelAvailable;
-  const inConversation = running || events.length > 0 || submittedGoal !== '';
+  const selectedModelInfo = models.find((m) => m.model === modelValue);
+  const readyAttachments = pendingAttachments.filter((a) => a.status === 'ready');
+  const uploadingAttachments = pendingAttachments.some((a) => a.status === 'uploading');
+  const failedAttachments = pendingAttachments.filter((a) => a.status === 'error');
+  const blockedKinds = unsupportedModalities(
+    pendingAttachments.filter((a) => a.status !== 'error').map((a) => a.kind),
+    selectedModelInfo?.modalities,
+  );
+  const canSend =
+    !running &&
+    (!!goal.trim() || readyAttachments.length > 0) &&
+    !uploadingAttachments &&
+    // 上传失败的附件不能静默丢弃：用户以为附上了却实际没发，必须显式移除后再发送。
+    failedAttachments.length === 0 &&
+    blockedKinds.length === 0 &&
+    models.length > 0 &&
+    modelAvailable;
+  const inConversation =
+    running || events.length > 0 || submittedGoal !== '' || submittedAttachments.length > 0;
   const confirmCard = currentConfirmCard(events);
 
   useEffect(() => {
@@ -424,7 +613,38 @@ export default function Home() {
   }, [running]);
 
   const composer = (
-    <div className="wb-composer-wrap">
+    <div
+      className={`wb-composer-wrap${dragOver ? ' dragging' : ''}`}
+      onDragOver={(e) => {
+        if (running) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'copy';
+        setDragOver(true);
+      }}
+      onDragLeave={(e) => {
+        const next = e.relatedTarget;
+        if (next instanceof Node && e.currentTarget.contains(next)) return;
+        setDragOver(false);
+      }}
+      onDrop={(e) => {
+        e.preventDefault();
+        setDragOver(false);
+        if (!running) addFiles(Array.from(e.dataTransfer.files));
+      }}
+    >
+      <input
+        ref={fileInputRef}
+        type="file"
+        hidden
+        multiple
+        accept={ATTACHMENT_ACCEPT}
+        onChange={(e) => {
+          const files = Array.from(e.target.files ?? []);
+          // 先清空 value，同一个文件再次选择时仍会触发 change。
+          e.target.value = '';
+          addFiles(files);
+        }}
+      />
       <div className="wb-composer">
         <div className="wb-composer-model">
           {!sessionId && assistants.length > 0 && (
@@ -475,6 +695,54 @@ export default function Home() {
         {!modelAvailable && (
           <div className="wb-model-empty">该会话使用的模型已停用，请新建任务。</div>
         )}
+        {pendingAttachments.length > 0 && (
+          <div className="wb-attachments" aria-label="待发送附件">
+            {pendingAttachments.map((a) => (
+              <div
+                key={a.localId}
+                className={`wb-attachment${a.status === 'error' ? ' is-error' : ''}`}
+                title={a.error ?? a.filename}
+              >
+                {a.previewUrl ? (
+                  // 本地 object URL 预览，不上传两次；发送后由会话内附件状态接管。
+                  <img className="wb-attachment-thumb" src={a.previewUrl} alt="" />
+                ) : (
+                  <span className="wb-attachment-icon" aria-hidden="true">
+                    <IconFile size={14} />
+                  </span>
+                )}
+                <span className="wb-attachment-body">
+                  <span className="wb-attachment-name">{a.filename}</span>
+                  <span className="wb-attachment-meta">
+                    {attachmentKindLabel(a.kind)} · {formatBytes(a.size)}
+                    {a.status === 'uploading' ? ' · 上传中…' : ''}
+                    {a.status === 'error' ? ' · 上传失败' : ''}
+                  </span>
+                </span>
+                <button
+                  type="button"
+                  className="wb-attachment-remove"
+                  onClick={() => removePending(a.localId)}
+                  disabled={running}
+                  aria-label={`移除 ${a.filename}`}
+                  title="移除"
+                >
+                  <IconX size={12} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        {blockedKinds.length > 0 && (
+          <div className="wb-model-empty wb-attachment-warning" role="alert">
+            {modalityWarning(blockedKinds)}
+          </div>
+        )}
+        {failedAttachments.length > 0 && (
+          <div className="wb-model-empty wb-attachment-warning" role="alert">
+            有 {failedAttachments.length} 个附件上传失败，请移除或重新添加后再发送。
+          </div>
+        )}
         <textarea
           ref={composerRef}
           value={goal}
@@ -485,12 +753,22 @@ export default function Home() {
               if (canSend) void run();
             }
           }}
-          placeholder="今天帮你做些什么？写下目标，智能体会规划并执行…"
+          placeholder="今天帮你做些什么？写下目标，智能体会规划并执行；可拖入或粘贴文件…"
           rows={2}
           readOnly={running}
           aria-label="任务目标"
         />
         <div className="wb-composer-foot">
+          <button
+            type="button"
+            className="wb-attach"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={running || pendingAttachments.length >= ATTACHMENT_MAX_PER_MESSAGE}
+            aria-label="添加附件"
+            title="添加附件（文本、图片、音频、视频，支持直接粘贴）"
+          >
+            <IconPlus size={16} />
+          </button>
           <span className="wb-composer-hint">Enter 发送 · Shift + Enter 换行</span>
           <div className="spacer" />
           <button
@@ -570,9 +848,26 @@ export default function Home() {
               onKeyDown={markUserScroll}
             >
               <div className="wb-thread">
-                {submittedGoal && (
+                {(submittedGoal || submittedAttachments.length > 0) && (
                   <div className="wb-user-msg">
-                    <div className="wb-user-text">{submittedGoal}</div>
+                    {submittedGoal && <div className="wb-user-text">{submittedGoal}</div>}
+                    {submittedAttachments.length > 0 && (
+                      <div className="wb-user-attachments">
+                        {submittedAttachments.map((a) => (
+                          <span key={a.id} className="wb-user-attachment" title={a.filename}>
+                            {a.previewUrl ? (
+                              <img className="wb-attachment-thumb" src={a.previewUrl} alt="" />
+                            ) : (
+                              <IconFile size={14} />
+                            )}
+                            <span className="wb-user-attachment-name">{a.filename}</span>
+                            <span className="wb-user-attachment-meta">
+                              {attachmentKindLabel(a.kind)}
+                            </span>
+                          </span>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 )}
                 {events.map((ev) => (

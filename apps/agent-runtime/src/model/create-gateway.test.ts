@@ -136,4 +136,54 @@ describe('createGatewayFromRoutes', () => {
       ]),
     ).toThrow('invalid_model_routes');
   });
+
+  it('路由模态非法时拒绝整批路由，而不是静默按纯文本处理', () => {
+    expect(() =>
+      createGatewayFromRoutes([
+        {
+          model: 'a',
+          baseUrl: 'https://x/v1',
+          apiKey: 'k',
+          modalities: ['text', 'hologram'] as unknown as ('text' | 'image' | 'audio' | 'video')[],
+        },
+      ]),
+    ).toThrow('invalid_model_routes');
+  });
+
+  it('按路由声明的模态跳过能力不足的模型', async () => {
+    let lastModel = '';
+    const server = createServer((req, res) => {
+      let raw = '';
+      req.on('data', (c) => (raw += c));
+      req.on('end', () => {
+        lastModel = (JSON.parse(raw || '{}') as { model?: string }).model ?? '';
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            choices: [{ message: { content: 'ok' } }],
+            usage: { prompt_tokens: 1, completion_tokens: 1 },
+          }),
+        );
+      });
+    });
+    await new Promise<void>((r) => server.listen(0, () => r()));
+    const addr = server.address();
+    const port = typeof addr === 'object' && addr ? addr.port : 0;
+    try {
+      const baseUrl = `http://127.0.0.1:${port}/v1`;
+      const gw = createGatewayFromRoutes([
+        { model: 'text-only', baseUrl, apiKey: 'k' },
+        { model: 'vision', baseUrl, apiKey: 'k', modalities: ['text', 'image'] },
+      ]);
+      const resp = await gw!.chat({
+        messages: [{ role: 'user', content: '看图' }],
+        tools: [],
+        requiredModalities: ['image'],
+      });
+      expect(resp.model).toBe('vision');
+      expect(lastModel).toBe('vision');
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  });
 });

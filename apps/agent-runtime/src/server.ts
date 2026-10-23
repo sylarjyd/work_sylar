@@ -34,6 +34,12 @@ import { McpHost } from './mcp/host';
 import { fetchConnectors } from './mcp/bff-connector-client';
 import { buildMcpTools } from './mcp/discovery';
 
+/**
+ * /runs 请求体上限：BFF 的附件预算是 32MiB 原始字节，base64 后约 42.7MiB，
+ * 再留出 JSON 与历史消息余量。超过即拒绝，避免无界拼接字符串耗尽内存。
+ */
+const MAX_RUN_BODY_BYTES = 48 * 1024 * 1024;
+
 export interface RuntimeDeps {
   gateway?: ModelGateway;
   tools?: Tool[];
@@ -138,8 +144,24 @@ export function createRuntimeServer(deps: RuntimeDeps = {}): Server {
         return;
       }
       let body = '';
-      req.on('data', (chunk) => (body += chunk));
+      let bytes = 0;
+      let tooLarge = false;
+      req.on('data', (chunk: Buffer) => {
+        if (tooLarge) return;
+        bytes += chunk.length;
+        if (bytes > MAX_RUN_BODY_BYTES) {
+          tooLarge = true;
+          body = '';
+          return;
+        }
+        body += chunk;
+      });
       req.on('end', () => {
+        if (tooLarge) {
+          res.writeHead(413, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ error: 'payload_too_large' }));
+          return;
+        }
         let runReq: RunRequest;
         try {
           runReq = JSON.parse(body || '{}') as RunRequest;
