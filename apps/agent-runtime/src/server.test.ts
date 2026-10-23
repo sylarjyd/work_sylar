@@ -686,8 +686,8 @@ describe('/runs çš„ per-run MCP å·¥å…·æ‹¼è£…', () => {
   });
 });
 
-describe('run ¼¶Ä£ĞÍÂ·ÓÉ', () => {
-  it('ÇëÇóÌå´ø modelRoutes Ê±¸²¸ÇÆô¶¯Íø¹Ø', async () => {
+describe('run çº§æ¨¡å‹è·¯ç”±', () => {
+  it('ä¸‹å‘äº† modelRoutes æ—¶ä¼˜å…ˆä½¿ç”¨æœ¬æ¬¡è·¯ç”±', async () => {
     let seenModel = '';
     const modelServer = createServer((req, res) => {
       let raw = '';
@@ -697,7 +697,7 @@ describe('run ¼¶Ä£ĞÍÂ·ÓÉ', () => {
         res.writeHead(200, { 'content-type': 'application/json' });
         res.end(
           JSON.stringify({
-            choices: [{ message: { content: 'À´×ÔÏÂ·¢Â·ÓÉ' } }],
+            choices: [{ message: { content: 'æ¥è‡ªä¸‹å‘è·¯ç”±' } }],
             usage: { prompt_tokens: 1, completion_tokens: 1 },
           }),
         );
@@ -720,10 +720,11 @@ describe('run ¼¶Ä£ĞÍÂ·ÓÉ', () => {
       });
       const text = await res.text();
       expect(res.status).toBe(200);
-      expect(text).toContain('À´×ÔÏÂ·¢Â·ÓÉ');
+      expect(text).toContain('æ¥è‡ªä¸‹å‘è·¯ç”±');
       expect(seenModel).toBe('doubao-x');
     } finally {
       await new Promise<void>((r) => modelServer.close(() => r()));
     }
   });
 });
+

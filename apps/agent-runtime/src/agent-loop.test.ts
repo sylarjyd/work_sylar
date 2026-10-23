@@ -575,13 +575,13 @@ function stubGate(approved: boolean, reason?: 'user_denied' | 'confirm_timeout')
   };
 }
 
-describe('runAgent Ä£ÐÍÑ¡Ôñ', () => {
-  it('selectedModel ÅÅµÚÒ»£¬think ÊÂ¼þ´øÊµ¼ÊÄ£ÐÍ', async () => {
+describe('runAgent æ¨¡åž‹é€‰æ‹©', () => {
+  it('selectedModel æ”¾åˆ°ç¬¬ä¸€ä½ï¼Œthink äº‹ä»¶å¸¦å®žé™…æ¨¡åž‹', async () => {
     let seen: string[] | undefined;
     const gateway: ModelGateway = {
       async chat(req) {
         seen = req.models;
-        return { content: 'ºÃµÄ', toolCalls: [], usage: { input: 1, output: 1 }, model: req.models?.[0] ?? 'x' };
+        return { content: 'å¥½çš„', toolCalls: [], usage: { input: 1, output: 1 }, model: req.models?.[0] ?? 'x' };
       },
     };
     const events = await collect(
@@ -601,10 +601,10 @@ describe('runAgent Ä£ÐÍÑ¡Ôñ', () => {
       }),
     );
     expect(seen).toEqual(['b', 'a', 'c']);
-    expect(events[0].payload).toMatchObject({ text: 'ºÃµÄ', model: 'b' });
+    expect(events[0].payload).toMatchObject({ text: 'å¥½çš„', model: 'b' });
   });
 
-  it('Ã»ÓÐ selectedModel Ê±±£³Ö allowedModels Ô­Ë³Ðò', async () => {
+  it('æ²¡æœ‰ selectedModel æ—¶æŒ‰ allowedModels åŽŸé¡ºåº', async () => {
     let seen: string[] | undefined;
     const gateway: ModelGateway = {
       async chat(req) {
@@ -629,3 +629,4 @@ describe('runAgent Ä£ÐÍÑ¡Ôñ', () => {
     expect(seen).toEqual(['a', 'b']);
   });
 });
+
