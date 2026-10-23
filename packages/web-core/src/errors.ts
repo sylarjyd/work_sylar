@@ -8,6 +8,7 @@ export function errorText(err: unknown): string {
   const msg = err instanceof Error ? err.message : String(err);
   const status = msg.match(/_(4\d\d|5\d\d)(?:$|:)/)?.[1];
   if (status) {
+    if (status === '402') return '套餐已到期或积分不足，请前往「套餐与用量」查看';
     if (status === '401') return '登录已过期，请重新登录';
     if (status === '403') return '没有权限执行该操作';
     if (status === '404') return '请求的资源不存在';

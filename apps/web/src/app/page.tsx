@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import type { AgentEvent, ArtifactDto, SessionSummary } from '@ai-office/shared';
+import type { AgentEvent, ArtifactDto, ClientModelDto, SessionSummary } from '@ai-office/shared';
 import { AppShell } from '../components/app-shell';
 import { ArtifactDrawer } from '../components/artifact-drawer';
 import {
@@ -24,6 +24,7 @@ import {
   getToken,
   isUnauthorized,
   listArtifacts,
+  listModels,
   listSessions,
   streamTask,
 } from '../lib/api';
@@ -39,9 +40,11 @@ const SUGGESTIONS = [
 
 function EventRow({
   ev,
+  expectedModel,
   onOpenArtifacts,
 }: {
   ev: AgentEvent;
+  expectedModel: string;
   onOpenArtifacts: () => void;
 }) {
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
@@ -57,7 +60,12 @@ function EventRow({
   let icon = <IconTool size={15} />;
 
   if (ev.type === 'think') {
-    meta = '思考';
+    const actual = typeof ev.payload.model === 'string' ? ev.payload.model : '';
+    meta = actual
+      ? expectedModel && actual !== expectedModel
+        ? `思考 · ${actual}（已自动切换）`
+        : `思考 · ${actual}`
+      : '思考';
     iconCls = 'think';
     icon = <IconSpark size={15} />;
   } else if (ev.type === 'tool_call') {
@@ -144,6 +152,11 @@ export default function Home() {
   const [runId, setRunId] = useState('');
   const [decisions, setDecisions] = useState<Record<string, boolean>>({});
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [models, setModels] = useState<ClientModelDto[]>([]);
+  const [selectedModel, setSelectedModel] = useState('');
+  // 运营端默认模型：历史会话（model 为空）首次运行前展示的就是它。
+  const [defaultModel, setDefaultModel] = useState('');
+  const [modelsLoaded, setModelsLoaded] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
   const composerRef = useRef<HTMLTextAreaElement>(null);
@@ -156,13 +169,38 @@ export default function Home() {
       return;
     }
     void refresh();
+    void refreshModels();
   }, [router]);
+
+  async function refreshModels() {
+    try {
+      const data = await listModels();
+      setModels(data.models);
+      const fallback = data.defaultModel ?? data.models[0]?.model ?? '';
+      setDefaultModel(fallback);
+      setSelectedModel((prev) => {
+        if (prev && data.models.some((m) => m.model === prev)) return prev;
+        return fallback;
+      });
+    } catch (err) {
+      if (isUnauthorized(err)) {
+        router.push('/login');
+        return;
+      }
+      setError(errorText(err));
+    } finally {
+      setModelsLoaded(true);
+    }
+  }
 
   async function refresh() {
     try {
       const list = await listSessions();
       setSessions(list);
-      if (list.length) setSessionId(list[0].id);
+      if (list.length) {
+        setSessionId(list[0].id);
+        if (list[0].model) setSelectedModel(list[0].model);
+      }
     } catch (err) {
       if (isUnauthorized(err)) {
         router.push('/login');
@@ -200,13 +238,6 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, running]);
 
-  async function newSession(): Promise<SessionSummary> {
-    const s = await createSession();
-    setSessions((prev) => [s, ...prev]);
-    setSessionId(s.id);
-    return s;
-  }
-
   function resetConversation() {
     setEvents([]);
     setSubmittedGoal('');
@@ -219,6 +250,9 @@ export default function Home() {
 
   function handleSelect(id: string) {
     if (running || id === sessionId) return;
+    const target = sessions.find((s) => s.id === id);
+    // 历史会话没有固化的模型：展示当前默认模型，实际运行由服务端按默认值解析。
+    setSelectedModel(target?.model ?? defaultModel);
     setSessionId(id);
     resetConversation();
   }
@@ -227,17 +261,13 @@ export default function Home() {
     lastUserScrollRef.current = Date.now();
   }
 
-  async function handleNewSession() {
-    try {
-      await newSession();
-      resetConversation();
-    } catch (err) {
-      if (isUnauthorized(err)) {
-        router.push('/login');
-        return;
-      }
-      setError(errorText(err));
-    }
+  function handleNewSession() {
+    if (running) return;
+    // 新任务先清成草稿：真正建会话推迟到首次发送，才能把用户选的模型写进会话。
+    setSessionId('');
+    resetConversation();
+    void refreshModels();
+    composerRef.current?.focus();
   }
 
   async function run() {
@@ -253,9 +283,15 @@ export default function Home() {
     composerRef.current?.focus();
     let sid = sessionId;
     try {
-      // sessionId 为 state，newSession 的 setSessionId 不会同步更新本次渲染闭包里的值，
-      // 故必须用 newSession 返回的 id 直接发起请求，否则会 POST 到空 id 的会话。
-      if (!sid) sid = (await newSession()).id;
+      // 草稿态首次发送才建会话，并把选中的模型固化到会话上。
+      // 不能用 setSessionId 后的 state：本次渲染闭包拿不到新值。
+      if (!sid) {
+        const created = await createSession(selectedModel || undefined);
+        setSessions((prev) => [created, ...prev]);
+        if (created.model) setSelectedModel(created.model);
+        setSessionId(created.id);
+        sid = created.id;
+      }
       const res = await streamTask(sid, currentGoal);
       if (!res.ok) {
         // 错误响应通常带 JSON body 但没有 SSE 帧；不在此拦截就会静默结束、既不报错也无事件。
@@ -327,6 +363,11 @@ export default function Home() {
   }
 
   const current = sessions.find((s) => s.id === sessionId);
+  // 历史会话没有固化模型时展示运营端默认值（与服务端 resolveForRun 的缺省一致）。
+  const modelValue = sessionId ? (current?.model || defaultModel || selectedModel) : selectedModel;
+  const modelAvailable =
+    !sessionId || models.length === 0 || models.some((m) => m.model === modelValue);
+  const canSend = !running && !!goal.trim() && models.length > 0 && modelAvailable;
   const inConversation = running || events.length > 0 || submittedGoal !== '';
   const confirmCard = currentConfirmCard(events);
 
@@ -346,6 +387,34 @@ export default function Home() {
   const composer = (
     <div className="wb-composer-wrap">
       <div className="wb-composer">
+        <div className="wb-composer-model">
+          <select
+            className="wb-model-select"
+            value={modelValue}
+            onChange={(e) => setSelectedModel(e.target.value)}
+            disabled={running || !!sessionId || models.length === 0}
+            aria-label="选择模型"
+            title={sessionId ? '切换模型请新建任务' : '选择本次任务使用的模型'}
+          >
+            {!modelAvailable && modelValue && (
+              <option value={modelValue}>{modelValue}（已停用）</option>
+            )}
+            {models.map((m) => (
+              <option key={m.model} value={m.model}>
+                {m.displayName && m.displayName !== m.model
+                  ? `${m.displayName} · ${m.model} · ${m.providerName}`
+                  : `${m.model} · ${m.providerName}`}
+              </option>
+            ))}
+          </select>
+          {sessionId && <span className="wb-model-lock">切换模型请新建任务</span>}
+        </div>
+        {modelsLoaded && models.length === 0 && (
+          <div className="wb-model-empty">当前套餐暂无可用模型，请联系管理员。</div>
+        )}
+        {!modelAvailable && (
+          <div className="wb-model-empty">该会话使用的模型已停用，请新建任务。</div>
+        )}
         <textarea
           ref={composerRef}
           value={goal}
@@ -353,7 +422,7 @@ export default function Home() {
           onKeyDown={(e) => {
             if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault();
-              if (!running && goal.trim()) void run();
+              if (canSend) void run();
             }
           }}
           placeholder="今天帮你做些什么？写下目标，智能体会规划并执行…"
@@ -368,7 +437,7 @@ export default function Home() {
             type="button"
             className="wb-send"
             onClick={() => void run()}
-            disabled={running || !goal.trim()}
+            disabled={!canSend}
             aria-label="开始执行"
             title="开始执行"
           >
@@ -445,6 +514,7 @@ export default function Home() {
                   <EventRow
                     key={ev.seq}
                     ev={ev}
+                    expectedModel={modelValue}
                     onOpenArtifacts={() => setDrawerOpen(true)}
                   />
                 ))}

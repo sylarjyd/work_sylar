@@ -15,4 +15,16 @@ describe('errorText', () => {
   it('无法识别的错误保留原文', () => {
     expect(errorText(new Error('something_odd'))).toBe('something_odd');
   });
+
+  it('402 引导用户查看套餐', () => {
+    expect(errorText(new Error('models_failed_402'))).toBe(
+      '套餐已到期或积分不足，请前往「套餐与用量」查看',
+    );
+  });
+
+  it('409 仍为通用输入提示', () => {
+    expect(errorText(new Error('stream_failed_409: model_unavailable'))).toBe(
+      '请求无效，请检查输入后重试',
+    );
+  });
 });

@@ -3,6 +3,7 @@
 import type {
   ArtifactDto,
   BillingSummaryDto,
+  ClientModelsDto,
   ConnectorDto,
   CreditLedgerPageDto,
   KbDocDto,
@@ -33,10 +34,19 @@ export async function listSessions(): Promise<SessionSummary[]> {
   return (await res.json()) as SessionSummary[];
 }
 
-export async function createSession(): Promise<SessionSummary> {
-  const res = await authFetch('/api/sessions', { method: 'POST', body: JSON.stringify({}) });
+export async function createSession(model?: string): Promise<SessionSummary> {
+  const res = await authFetch('/api/sessions', {
+    method: 'POST',
+    body: JSON.stringify(model ? { model } : {}),
+  });
   if (!res.ok) throw new Error(`create_session_failed_${res.status}`);
   return (await res.json()) as SessionSummary;
+}
+
+export async function listModels(): Promise<ClientModelsDto> {
+  const res = await authFetch('/api/models');
+  if (!res.ok) throw new Error(`models_failed_${res.status}`);
+  return (await res.json()) as ClientModelsDto;
 }
 
 export async function streamTask(sessionId: string, goal: string): Promise<Response> {
