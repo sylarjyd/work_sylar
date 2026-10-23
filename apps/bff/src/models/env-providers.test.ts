@@ -15,8 +15,24 @@ describe('parseEnvModelProviders', () => {
       KEY_A: 'sk-a',
     });
     expect(out).toEqual([
-      { name: 'KEY_A', model: 'a', baseUrl: 'https://x/v1', apiKey: 'sk-a' },
-      { name: 'KEY_A', model: 'b', baseUrl: 'https://y/v1', apiKey: 'sk-a' },
+      { name: 'KEY_A', model: 'a', baseUrl: 'https://x/v1', modalities: ['text'], apiKey: 'sk-a' },
+      { name: 'KEY_A', model: 'b', baseUrl: 'https://y/v1', modalities: ['text'], apiKey: 'sk-a' },
+    ]);
+  });
+
+  it('MODEL_PROVIDERS 可声明 modalities，非法值忽略并回退纯文本', () => {
+    const out = parseEnvModelProviders({
+      MODEL_PROVIDERS: JSON.stringify([
+        { model: 'vision', baseUrl: 'https://x/v1', apiKeyEnv: 'K', modalities: ['image', 'text', 'bogus'] },
+        { model: 'tts', baseUrl: 'https://x/v1', apiKeyEnv: 'K', modalities: ['audio'] },
+        { model: 'bad', baseUrl: 'https://x/v1', apiKeyEnv: 'K', modalities: ['bogus'] },
+      ]),
+      K: 'sk',
+    });
+    expect(out.map((m) => [m.model, m.modalities])).toEqual([
+      ['vision', ['text', 'image']],
+      ['tts', ['audio']],
+      ['bad', ['text']],
     ]);
   });
 
@@ -33,7 +49,9 @@ describe('parseEnvModelProviders', () => {
         ]),
         K: 'sk',
       }),
-    ).toEqual([{ name: 'K', model: 'a', baseUrl: 'https://x/v1', apiKey: 'sk' }]);
+    ).toEqual([
+      { name: 'K', model: 'a', baseUrl: 'https://x/v1', modalities: ['text'], apiKey: 'sk' },
+    ]);
   });
 
   it('未配置 MODEL_PROVIDERS 时回退 DEEPSEEK_API_KEY 单模型', () => {
@@ -48,6 +66,7 @@ describe('parseEnvModelProviders', () => {
         name: 'default',
         model: 'deepseek-reasoner',
         baseUrl: 'https://d/v1',
+        modalities: ['text'],
         apiKey: 'sk-d',
       },
     ]);
@@ -56,7 +75,7 @@ describe('parseEnvModelProviders', () => {
   it('完全没有密钥时返回空数组（由 runtime 走 Mock）', () => {
     expect(parseEnvModelProviders({})).toEqual([]);
     expect(parseEnvModelProviders({ MODEL_PROVIDERS: JSON.stringify([{ model: 'a', baseUrl: 'https://x', apiKeyEnv: 'MISSING' }]) })).toEqual([
-      { name: 'MISSING', model: 'a', baseUrl: 'https://x', apiKey: '' },
+      { name: 'MISSING', model: 'a', baseUrl: 'https://x', modalities: ['text'], apiKey: '' },
     ]);
   });
 
@@ -64,7 +83,13 @@ describe('parseEnvModelProviders', () => {
     expect(
       parseEnvModelProviders({ DEEPSEEK_API_KEY: 'sk-d', MODEL_NAME: '', MODEL_BASE_URL: '' }),
     ).toEqual([
-      { name: 'default', model: 'deepseek-chat', baseUrl: 'https://api.deepseek.com/v1', apiKey: 'sk-d' },
+      {
+        name: 'default',
+        model: 'deepseek-chat',
+        baseUrl: 'https://api.deepseek.com/v1',
+        modalities: ['text'],
+        apiKey: 'sk-d',
+      },
     ]);
   });
 
@@ -77,7 +102,9 @@ describe('parseEnvModelProviders', () => {
         ]),
         K: 'sk',
       }),
-    ).toEqual([{ name: '__proto__', model: 'b', baseUrl: 'https://x', apiKey: '' }]);
+    ).toEqual([
+      { name: '__proto__', model: 'b', baseUrl: 'https://x', modalities: ['text'], apiKey: '' },
+    ]);
   });
 
   it('DEEPSEEK 的 MODEL_BASE_URL 归一化后为空时不产出可用配置', () => {
@@ -97,7 +124,9 @@ describe('resolveEnvModelProviders', () => {
         KEY_A: 'sk-a',
         DEEPSEEK_API_KEY: 'sk-d',
       }),
-    ).toEqual([{ name: 'KEY_A', model: 'a', baseUrl: 'https://x/v1', apiKey: 'sk-a' }]);
+    ).toEqual([
+      { name: 'KEY_A', model: 'a', baseUrl: 'https://x/v1', modalities: ['text'], apiKey: 'sk-a' },
+    ]);
   });
 
   it('MODEL_PROVIDERS 全部缺密钥时按 runtime 顺序回退 DEEPSEEK_API_KEY', () => {
@@ -111,7 +140,13 @@ describe('resolveEnvModelProviders', () => {
         MODEL_BASE_URL: 'https://d/v1/',
       }),
     ).toEqual([
-      { name: 'default', model: 'deepseek-reasoner', baseUrl: 'https://d/v1', apiKey: 'sk-d' },
+      {
+        name: 'default',
+        model: 'deepseek-reasoner',
+        baseUrl: 'https://d/v1',
+        modalities: ['text'],
+        apiKey: 'sk-d',
+      },
     ]);
   });
 

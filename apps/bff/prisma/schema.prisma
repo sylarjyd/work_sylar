@@ -286,6 +286,8 @@ model ModelConfig {
   providerId              String?
   displayName             String?
   enabled                 Boolean        @default(false)
+  /** 模型支持的输入/输出模态：text | image | audio | video。 */
+  modalities              String[]       @default(["text"])
   sortOrder               Int            @default(0)
   inputMilliCreditsPer1k  Int
   outputMilliCreditsPer1k Int

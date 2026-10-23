@@ -27,7 +27,7 @@ beforeEach(() => {
 
 function makeService(opts: {
   providers?: { id: string; name: string; baseUrl: string; apiKeyEnc: string }[];
-  models?: { model: string; providerId: string | null; enabled: boolean; sortOrder: number; displayName: string | null; inputMilliCreditsPer1k: number; outputMilliCreditsPer1k: number; updatedAt: Date }[];
+  models?: { model: string; providerId: string | null; enabled: boolean; sortOrder: number; displayName: string | null; modalities: string[]; inputMilliCreditsPer1k: number; outputMilliCreditsPer1k: number; updatedAt: Date }[];
   allowed?: string[];
   defaultModel?: string | null;
   expired?: boolean;
@@ -77,6 +77,7 @@ const dbModels = [
     enabled: true,
     sortOrder: 20,
     displayName: '模型二',
+    modalities: ['text', 'image'],
     inputMilliCreditsPer1k: 1,
     outputMilliCreditsPer1k: 2,
     updatedAt: new Date(),
@@ -87,6 +88,7 @@ const dbModels = [
     enabled: true,
     sortOrder: 10,
     displayName: null,
+    modalities: ['text'],
     inputMilliCreditsPer1k: 3,
     outputMilliCreditsPer1k: 4,
     updatedAt: new Date(),
@@ -97,6 +99,7 @@ const dbModels = [
     enabled: true,
     sortOrder: 30,
     displayName: '不在套餐',
+    modalities: ['text'],
     inputMilliCreditsPer1k: 1,
     outputMilliCreditsPer1k: 1,
     updatedAt: new Date(),
@@ -112,7 +115,14 @@ describe('ModelCatalogService', () => {
     });
     const out = await svc.listForClient('t1');
     expect(out.models.map((m) => m.model)).toEqual(['m1', 'm2', 'm3']);
-    expect(out.models[0]).toEqual({ model: 'm1', displayName: 'm1', providerName: '豆包' });
+    expect(out.models[0]).toEqual({
+      model: 'm1',
+      displayName: 'm1',
+      providerName: '豆包',
+      modalities: ['text'],
+    });
+    // 模态按固定顺序输出，库中顺序不影响展示。
+    expect(out.models[1].modalities).toEqual(['text', 'image']);
   });
 
   it('默认模型取运营端设置；不在可用列表时回退第一项', async () => {
@@ -165,7 +175,12 @@ describe('ModelCatalogService', () => {
 
     const out = await svc.listForClient('t1');
     expect(out.models).toEqual([
-      { model: 'deepseek-chat', displayName: 'deepseek-chat', providerName: '环境变量' },
+      {
+        model: 'deepseek-chat',
+        displayName: 'deepseek-chat',
+        providerName: '环境变量',
+        modalities: ['text'],
+      },
     ]);
 
     const run = await svc.resolveForRun('t1', null);

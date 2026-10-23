@@ -43,6 +43,7 @@ interface FakeModel {
   providerId: string | null;
   displayName: string | null;
   enabled: boolean;
+  modalities: string[];
   sortOrder: number;
   inputMilliCreditsPer1k: number;
   outputMilliCreditsPer1k: number;
@@ -72,6 +73,7 @@ function makeService(
     providerId: 'p1',
     displayName: null,
     enabled: true,
+    modalities: ['text'],
     sortOrder: 10,
     inputMilliCreditsPer1k: 100,
     outputMilliCreditsPer1k: 200,
@@ -310,12 +312,19 @@ describe('AdminModelsService', () => {
         displayName: '模型二',
         providerId: 'p1',
         enabled: true,
+        modalities: ['image', 'text'],
         sortOrder: 20,
         prices: { inputMilliCreditsPer1k: 1, outputMilliCreditsPer1k: 2 },
       },
       actor,
     );
-    expect(dto).toMatchObject({ model: 'm2', providerName: '豆包', enabled: true, sortOrder: 20 });
+    expect(dto).toMatchObject({
+      model: 'm2',
+      providerName: '豆包',
+      enabled: true,
+      modalities: ['text', 'image'],
+      sortOrder: 20,
+    });
     expect(audits.at(-1)).toMatchObject({ action: 'model.create', targetType: 'modelConfig' });
 
     await expect(
@@ -328,6 +337,42 @@ describe('AdminModelsService', () => {
         actor,
       ),
     ).rejects.toMatchObject({ message: 'invalid_price' });
+  });
+
+  it('未声明模态按文本处理；非法模态与空数组被拒绝', async () => {
+    const { svc } = makeService();
+    const dto = await svc.createModel(
+      { model: 'm2', providerId: 'p1', prices: { inputMilliCreditsPer1k: 1, outputMilliCreditsPer1k: 1 } },
+      actor,
+    );
+    expect(dto.modalities).toEqual(['text']);
+
+    for (const bad of [[], ['text', 'hologram'], 'text', [1]]) {
+      await expect(
+        svc.createModel(
+          {
+            model: `bad-${JSON.stringify(bad)}`,
+            providerId: 'p1',
+            modalities: bad,
+            prices: { inputMilliCreditsPer1k: 1, outputMilliCreditsPer1k: 1 },
+          },
+          actor,
+        ),
+      ).rejects.toMatchObject({ message: 'invalid_modalities' });
+    }
+  });
+
+  it('更新模态写入审计前后快照', async () => {
+    const { svc, audits } = makeService();
+    const updated = await svc.updateModel({ model: 'm1', modalities: ['audio', 'text'] }, actor);
+    expect(updated.modalities).toEqual(['text', 'audio']);
+    expect(audits.at(-1)).toMatchObject({
+      action: 'model.update',
+      summary: {
+        before: { modalities: ['text'] },
+        after: { modalities: ['text', 'audio'] },
+      },
+    });
   });
 
   it('重复模型返回 409；厂商不存在返回 404', async () => {

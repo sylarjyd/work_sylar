@@ -2,11 +2,12 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import type {
-  AdminModelDto,
-  AdminPlanDto,
-  AdminPlanInput,
-  AdminPlanPatch,
+import {
+  MODEL_MODALITY_LABELS,
+  type AdminModelDto,
+  type AdminPlanDto,
+  type AdminPlanInput,
+  type AdminPlanPatch,
 } from '@ai-office/shared';
 import {
   adminErrorText,
@@ -357,6 +358,7 @@ export default function AdminPlansPage() {
                       displayName: model,
                       enabled: false,
                       providerName: null,
+                      modalities: [] as AdminModelDto['modalities'],
                     })),
                 ].map((m) => {
                   const checked = form.allowedModels.includes(m.model);
@@ -377,6 +379,9 @@ export default function AdminPlansPage() {
                       />
                       <span>
                         {m.displayName || m.model}
+                        {m.modalities.length > 0
+                          ? `（${m.modalities.map((x) => MODEL_MODALITY_LABELS[x]).join('、')}）`
+                          : ''}
                         {!m.enabled ? '（已停用）' : ''}
                       </span>
                     </label>

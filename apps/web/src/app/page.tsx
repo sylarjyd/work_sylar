@@ -2,7 +2,13 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import type { AgentEvent, ArtifactDto, ClientModelDto, SessionSummary } from '@ai-office/shared';
+import {
+  MODEL_MODALITY_LABELS,
+  type AgentEvent,
+  type ArtifactDto,
+  type ClientModelDto,
+  type SessionSummary,
+} from '@ai-office/shared';
 import { AppShell } from '../components/app-shell';
 import { ArtifactDrawer } from '../components/artifact-drawer';
 import {
@@ -399,13 +405,17 @@ export default function Home() {
             {!modelAvailable && modelValue && (
               <option value={modelValue}>{modelValue}（已停用）</option>
             )}
-            {models.map((m) => (
-              <option key={m.model} value={m.model}>
-                {m.displayName && m.displayName !== m.model
-                  ? `${m.displayName} · ${m.model} · ${m.providerName}`
-                  : `${m.model} · ${m.providerName}`}
-              </option>
-            ))}
+            {models.map((m) => {
+              const tags = m.modalities.map((x) => MODEL_MODALITY_LABELS[x]).join('、');
+              return (
+                <option key={m.model} value={m.model}>
+                  {m.displayName && m.displayName !== m.model
+                    ? `${m.displayName} · ${m.model} · ${m.providerName}`
+                    : `${m.model} · ${m.providerName}`}
+                  {tags ? `［${tags}］` : ''}
+                </option>
+              );
+            })}
           </select>
           {sessionId && <span className="wb-model-lock">切换模型请新建任务</span>}
         </div>

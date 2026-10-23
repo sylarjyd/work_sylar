@@ -34,6 +34,7 @@ import type {
   AdminUserItemDto,
   AdminUserPatch,
   BillingSummaryDto,
+  ModelModality,
   PageDto,
 } from '@ai-office/shared';
 import { authFetch, errorText } from '@ai-office/web-core';
@@ -286,6 +287,7 @@ export function createAdminModel(input: {
   displayName?: string;
   providerId: string;
   enabled?: boolean;
+  modalities?: ModelModality[];
   sortOrder?: number;
   prices: { inputMilliCreditsPer1k: number; outputMilliCreditsPer1k: number };
 }): Promise<AdminModelDto> {
@@ -297,6 +299,7 @@ export function updateAdminModel(input: {
   displayName?: string | null;
   providerId?: string;
   enabled?: boolean;
+  modalities?: ModelModality[];
   sortOrder?: number;
   prices?: { inputMilliCreditsPer1k: number; outputMilliCreditsPer1k: number };
 }): Promise<AdminModelDto> {

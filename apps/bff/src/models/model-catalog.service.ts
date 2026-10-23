@@ -1,5 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
-import type { ClientModelDto, ClientModelsDto, RunModelRoute } from '@ai-office/shared';
+import {
+  normalizeModalities,
+  type ClientModelDto,
+  type ClientModelsDto,
+  type ModelModality,
+  type RunModelRoute,
+} from '@ai-office/shared';
 import { PrismaService } from '../db/prisma.service';
 import { BillingService } from '../billing/billing.service';
 import { decryptSecret } from '../secrets/secret-box';
@@ -22,6 +28,7 @@ export interface AvailableModel {
   model: string;
   displayName: string;
   providerName: string;
+  modalities: ModelModality[];
   sortOrder: number;
   source: ModelSource;
 }
@@ -70,6 +77,7 @@ export class ModelCatalogService {
       model: m.model,
       displayName: m.displayName,
       providerName: m.providerName,
+      modalities: m.modalities,
     }));
     return { models: out, defaultModel };
   }
@@ -152,6 +160,7 @@ export class ModelCatalogService {
           model: row.model,
           displayName: row.displayName ?? row.model,
           providerName: provider.name,
+          modalities: normalizeModalities(row.modalities),
           sortOrder: row.sortOrder,
           source: {
             kind: 'db' as const,
@@ -173,6 +182,7 @@ export class ModelCatalogService {
         model,
         displayName: model,
         providerName: '环境变量',
+        modalities: ['text' as const],
         sortOrder: 0,
         source: { kind: 'mock' as const },
       }));
@@ -188,6 +198,7 @@ export class ModelCatalogService {
       model: p.model,
       displayName: p.model,
       providerName: '环境变量',
+      modalities: p.modalities,
       sortOrder: 0,
       source: { kind: 'env' as const, baseUrl: p.baseUrl, apiKey: p.apiKey },
     }));

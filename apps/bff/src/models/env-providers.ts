@@ -1,11 +1,17 @@
 import { Logger } from '@nestjs/common';
-import type { AdminLegacyProviderDto } from '@ai-office/shared';
+import {
+  normalizeModalities,
+  type AdminLegacyProviderDto,
+  type ModelModality,
+} from '@ai-office/shared';
 
 export interface EnvModelProvider {
   /** 展示用分组名：优先 apiKeyEnv；单模型配置为 default。不含密钥。 */
   name: string;
   model: string;
   baseUrl: string;
+  /** 可选；未声明时按纯文本处理。 */
+  modalities: ModelModality[];
   /** 未配置对应环境变量时为空串；调用方据此判断能否真正发请求。 */
   apiKey: string;
 }
@@ -24,6 +30,21 @@ function readEnv(env: NodeJS.ProcessEnv, name: string): string | undefined {
 
 function normalizeBaseUrl(raw: string): string {
   return raw.replace(/\/+$/, '');
+}
+
+/** MODEL_PROVIDERS 里可选的 modalities；非法值忽略，全部无效时回退纯文本。 */
+function envModalities(raw: unknown, index: number): ModelModality[] {
+  if (raw === undefined) return ['text'];
+  if (!Array.isArray(raw)) {
+    logger.warn(`MODEL_PROVIDERS 第 ${index} 项 modalities 不是数组，已按纯文本处理`);
+    return ['text'];
+  }
+  const valid = normalizeModalities(raw.filter((v): v is string => typeof v === 'string'));
+  if (valid.length === 0) {
+    logger.warn(`MODEL_PROVIDERS 第 ${index} 项 modalities 无有效值，已按纯文本处理`);
+    return ['text'];
+  }
+  return valid;
 }
 
 /** 解析 MODEL_PROVIDERS；宽容跳过非法项，告警文本不得包含配置值或密钥。 */
@@ -67,7 +88,13 @@ function parseModelProviders(raw: string, env: NodeJS.ProcessEnv): EnvModelProvi
       continue;
     }
     seen.add(p.model);
-    out.push({ name: p.apiKeyEnv, model: p.model, baseUrl, apiKey: readEnv(env, p.apiKeyEnv) ?? '' });
+    out.push({
+      name: p.apiKeyEnv,
+      model: p.model,
+      baseUrl,
+      modalities: envModalities(p.modalities, index),
+      apiKey: readEnv(env, p.apiKeyEnv) ?? '',
+    });
   }
   return out;
 }
@@ -86,6 +113,7 @@ function deepseekProvider(env: NodeJS.ProcessEnv): EnvModelProvider | null {
     name: 'default',
     model: readEnv(env, 'MODEL_NAME') || DEFAULT_ENV_MODEL,
     baseUrl,
+    modalities: ['text'],
     apiKey,
   };
 }

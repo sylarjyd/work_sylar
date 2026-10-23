@@ -184,11 +184,31 @@ export interface ModelPriceDto {
   outputMilliCreditsPer1k: number;
 }
 
+/** 模型支持的模态；一个模型可同时支持多种（如文本输入 + 图片输入）。 */
+export const MODEL_MODALITIES = ['text', 'image', 'audio', 'video'] as const;
+export type ModelModality = (typeof MODEL_MODALITIES)[number];
+
+/** 运营端与客户端共用的中文标签。 */
+export const MODEL_MODALITY_LABELS: Record<ModelModality, string> = {
+  text: '文本',
+  image: '图片',
+  audio: '音频',
+  video: '视频',
+};
+
+/** 去重并按固定顺序输出，未知值直接丢弃（仅用于读取存量数据）。 */
+export function normalizeModalities(raw: readonly string[]): ModelModality[] {
+  const set = new Set(raw);
+  return MODEL_MODALITIES.filter((m) => set.has(m));
+}
+
 /** Web 端模型选择器的一项；不含 Base URL、密钥或内部 ID。 */
 export interface ClientModelDto {
   model: string;
   displayName: string;
   providerName: string;
+  /** 按固定顺序输出的模态标签。 */
+  modalities: ModelModality[];
 }
 
 /** `GET /api/models` 响应：仅当前套餐可用的已启用模型。 */
@@ -423,6 +443,7 @@ export interface AdminModelDto {
   providerId: string | null;
   providerName: string | null;
   enabled: boolean;
+  modalities: ModelModality[];
   sortOrder: number;
   inputMilliCreditsPer1k: number;
   outputMilliCreditsPer1k: number;

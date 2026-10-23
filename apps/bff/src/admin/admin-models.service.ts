@@ -8,11 +8,14 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
-import type {
-  AdminModelDto,
-  AdminModelProviderDto,
-  AdminModelsDto,
-  AdminModelTestResultDto,
+import {
+  MODEL_MODALITIES,
+  normalizeModalities,
+  type AdminModelDto,
+  type AdminModelProviderDto,
+  type AdminModelsDto,
+  type AdminModelTestResultDto,
+  type ModelModality,
 } from '@ai-office/shared';
 import { PrismaService } from '../db/prisma.service';
 import { AuditService } from '../audit/audit.service';
@@ -42,6 +45,7 @@ interface ModelRow {
   displayName: string | null;
   providerId: string | null;
   enabled: boolean;
+  modalities: string[];
   sortOrder: number;
   inputMilliCreditsPer1k: number;
   outputMilliCreditsPer1k: number;
@@ -107,6 +111,19 @@ function modelName(raw: unknown): string {
   return text(raw, 'invalid_model', 128);
 }
 
+/** 模态至少选一项；未知值或非字符串一律拒绝，避免脏数据进入目录。 */
+function modalities(raw: unknown): ModelModality[] {
+  if (!Array.isArray(raw) || raw.length === 0) {
+    throw new BadRequestException('invalid_modalities');
+  }
+  for (const item of raw) {
+    if (typeof item !== 'string' || !MODEL_MODALITIES.includes(item as ModelModality)) {
+      throw new BadRequestException('invalid_modalities');
+    }
+  }
+  return normalizeModalities(raw as string[]);
+}
+
 function hint(secret: string): string {
   return secret.length >= 4 ? `****${secret.slice(-4)}` : '****';
 }
@@ -134,6 +151,7 @@ function toModelDto(row: ModelRow, defaultModel: string | null): AdminModelDto {
     providerId: row.providerId,
     providerName: row.provider?.name ?? null,
     enabled: row.enabled,
+    modalities: normalizeModalities(row.modalities),
     sortOrder: row.sortOrder,
     inputMilliCreditsPer1k: row.inputMilliCreditsPer1k,
     outputMilliCreditsPer1k: row.outputMilliCreditsPer1k,
@@ -288,6 +306,9 @@ export class AdminModelsService {
     const providerId = text(body?.providerId, 'provider_required', 64);
     const displayName = optionalText(body?.displayName, 128);
     const isEnabled = body?.enabled === undefined ? false : enabled(body.enabled);
+    // 未携带模态时按纯文本处理，兼容旧版管理端与脚本调用。
+    const modelModalities: ModelModality[] =
+      body?.modalities === undefined ? ['text'] : modalities(body.modalities);
     const order = body?.sortOrder === undefined ? 0 : sortOrder(body.sortOrder);
     const price = prices(body?.prices);
     try {
@@ -298,6 +319,7 @@ export class AdminModelsService {
             providerId,
             displayName,
             enabled: isEnabled,
+            modalities: modelModalities,
             sortOrder: order,
             ...price,
           },
@@ -307,7 +329,7 @@ export class AdminModelsService {
           action: 'model.create',
           targetType: 'modelConfig',
           targetId: model,
-          summary: { providerId, enabled: isEnabled, ...price },
+          summary: { providerId, enabled: isEnabled, modalities: modelModalities, ...price },
         });
         return created;
       });
@@ -329,6 +351,7 @@ export class AdminModelsService {
       displayName?: string | null;
       providerId?: string;
       enabled?: boolean;
+      modalities?: ModelModality[];
       sortOrder?: number;
       inputMilliCreditsPer1k?: number;
       outputMilliCreditsPer1k?: number;
@@ -338,6 +361,7 @@ export class AdminModelsService {
       data.providerId = text(body.providerId, 'provider_required', 64);
     }
     if (body?.enabled !== undefined) data.enabled = enabled(body.enabled);
+    if (body?.modalities !== undefined) data.modalities = modalities(body.modalities);
     if (body?.sortOrder !== undefined) data.sortOrder = sortOrder(body.sortOrder);
     if (body?.prices !== undefined) Object.assign(data, prices(body.prices));
     if (Object.keys(data).length === 0) throw new BadRequestException('invalid_model_patch');
@@ -365,6 +389,7 @@ export class AdminModelsService {
               displayName: before.displayName,
               providerId: before.providerId,
               enabled: before.enabled,
+              modalities: normalizeModalities(before.modalities),
               sortOrder: before.sortOrder,
               input: before.inputMilliCreditsPer1k,
               output: before.outputMilliCreditsPer1k,
@@ -373,6 +398,7 @@ export class AdminModelsService {
               displayName: updated.displayName,
               providerId: updated.providerId,
               enabled: updated.enabled,
+              modalities: normalizeModalities(updated.modalities),
               sortOrder: updated.sortOrder,
               input: updated.inputMilliCreditsPer1k,
               output: updated.outputMilliCreditsPer1k,

@@ -2,10 +2,13 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import type {
-  AdminModelDto,
-  AdminModelsDto,
-  AdminModelTestResultDto,
+import {
+  MODEL_MODALITIES,
+  MODEL_MODALITY_LABELS,
+  type AdminModelDto,
+  type AdminModelsDto,
+  type AdminModelTestResultDto,
+  type ModelModality,
 } from '@ai-office/shared';
 import {
   adminErrorText,
@@ -50,6 +53,7 @@ interface ModelForm {
   displayName: string;
   providerId: string;
   enabled: boolean;
+  modalities: ModelModality[];
   sortOrder: string;
   input: string;
   output: string;
@@ -62,6 +66,7 @@ function emptyModelForm(providerId = ''): ModelForm {
     displayName: '',
     providerId,
     enabled: false,
+    modalities: ['text'],
     sortOrder: '0',
     input: '0',
     output: '0',
@@ -210,6 +215,10 @@ export default function AdminModelsPage() {
       setError('排序必须是非负整数');
       return;
     }
+    if (modelForm.modalities.length === 0) {
+      setError('请至少选择一种模态');
+      return;
+    }
     if (!window.confirm(`确认${modelForm.editing ? '更新' : '新增'}模型 ${name}？`)) return;
     inFlight.current = true;
     setBusy(true);
@@ -222,6 +231,7 @@ export default function AdminModelsPage() {
           displayName,
           providerId: modelForm.providerId,
           enabled: modelForm.enabled,
+          modalities: modelForm.modalities,
           sortOrder: order,
           prices,
         });
@@ -231,6 +241,7 @@ export default function AdminModelsPage() {
           ...(displayName ? { displayName } : {}),
           providerId: modelForm.providerId,
           enabled: modelForm.enabled,
+          modalities: modelForm.modalities,
           sortOrder: order,
           prices,
         });
@@ -457,6 +468,31 @@ export default function AdminModelsPage() {
                   ))}
                 </select>
               </label>
+              <div className="admin-field" style={{ minWidth: 240 }}>
+                模态
+                <div className="admin-checks">
+                  {MODEL_MODALITIES.map((m) => (
+                    <label className="admin-check" key={m}>
+                      <input
+                        type="checkbox"
+                        checked={modelForm.modalities.includes(m)}
+                        disabled={busy}
+                        onChange={(e) =>
+                          setModelForm({
+                            ...modelForm,
+                            modalities: e.target.checked
+                              ? MODEL_MODALITIES.filter(
+                                  (x) => x === m || modelForm.modalities.includes(x),
+                                )
+                              : modelForm.modalities.filter((x) => x !== m),
+                          })
+                        }
+                      />
+                      <span>{MODEL_MODALITY_LABELS[m]}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
               <label className="admin-field">
                 排序
                 <input
@@ -568,6 +604,7 @@ export default function AdminModelsPage() {
               <tr>
                 <th>模型</th>
                 <th>厂商</th>
+                <th>模态</th>
                 <th>启用</th>
                 <th>排序</th>
                 <th>输入</th>
@@ -592,6 +629,7 @@ export default function AdminModelsPage() {
                       )}
                     </td>
                     <td>{m.providerName ?? '未绑定'}</td>
+                    <td>{m.modalities.map((x) => MODEL_MODALITY_LABELS[x]).join('、')}</td>
                     <td>
                       <input
                         type="checkbox"
@@ -618,6 +656,7 @@ export default function AdminModelsPage() {
                             displayName: m.displayName,
                             providerId: m.providerId ?? providers[0]?.id ?? '',
                             enabled: m.enabled,
+                            modalities: m.modalities,
                             sortOrder: String(m.sortOrder),
                             input: String(m.inputMilliCreditsPer1k),
                             output: String(m.outputMilliCreditsPer1k),
