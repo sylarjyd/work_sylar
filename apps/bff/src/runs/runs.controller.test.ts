@@ -6,6 +6,7 @@ import { createServer, type Server } from 'node:http';
 import { RunsController } from './runs.controller';
 import { TasksService } from '../tasks/tasks.service';
 import { SessionsService } from '../sessions/sessions.service';
+import { ModelCatalogService } from '../models/model-catalog.service';
 import { PrismaService } from '../db/prisma.service';
 import { signToken } from '../auth/jwt';
 
@@ -62,6 +63,8 @@ beforeAll(async () => {
       TasksService,
       SessionsService,
       { provide: PrismaService, useValue: fakePrisma },
+      // SessionsService 依赖模型目录；本文件只验证 run 归属，给一个不会被调用的桩。
+      { provide: ModelCatalogService, useValue: { available: async () => ({ models: [], defaultModel: null }) } },
     ],
   }).compile();
   app = moduleRef.createNestApplication<NestFastifyApplication>(new FastifyAdapter());

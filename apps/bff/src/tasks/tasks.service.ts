@@ -25,9 +25,13 @@ export class TasksService {
     private readonly sessions: SessionsService,
   ) {}
 
-  /** 只为归属校验：让控制器能在计费预占之前先做 404 判断。 */
-  async assertOwned(sessionId: string, tenantId: string, userId: string): Promise<void> {
-    await this.sessions.assertOwned(sessionId, tenantId, userId);
+  /** 只为归属校验：让控制器能在计费预占之前先做 404 判断，并拿到会话选定的模型。 */
+  async assertOwned(
+    sessionId: string,
+    tenantId: string,
+    userId: string,
+  ): Promise<{ id: string; model: string | null }> {
+    return this.sessions.assertOwned(sessionId, tenantId, userId);
   }
 
   /** 建 task/run、落用户消息，并回传喂给模型的完整历史。runId 由控制器预生成（计费预占键）。 */
@@ -76,6 +80,17 @@ export class TasksService {
         }
       }
     }
+  }
+
+  /**
+   * 回填历史会话的模型：只写 model 仍为空的行，首次运行成功后生效，
+   * 之后即使用户切换默认模型也不会改写已有会话。
+   */
+  async bindModel(sessionId: string, model: string): Promise<void> {
+    await this.prisma.session.updateMany({
+      where: { id: sessionId, model: null },
+      data: { model },
+    });
   }
 
   async recordStep(runId: string, ev: AgentEvent): Promise<void> {

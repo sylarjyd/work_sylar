@@ -16,6 +16,8 @@ import { PrismaService } from '../db/prisma.service';
 import { signToken } from '../auth/jwt';
 import { BillingService } from '../billing/billing.service';
 import { SettingsService } from '../settings/settings.service';
+import { ModelCatalogService } from '../models/model-catalog.service';
+import { ModelUnavailableError } from '../models/model.errors';
 import { InsufficientCreditsError, PlanExpiredError, RateLimitedError } from '../billing/billing.errors';
 import { initTelemetry, shutdownTelemetry } from '@ai-office/telemetry';
 import pino from 'pino';
@@ -48,9 +50,18 @@ const stored: {
   runUpdates: unknown[];
   taskUpdates: unknown[];
   artifacts: unknown[];
-} = { steps: [], messages: [], runCreates: [], runUpdates: [], taskUpdates: [], artifacts: [] };
+  sessionModelUpdates: unknown[];
+} = {
+  steps: [],
+  messages: [],
+  runCreates: [],
+  runUpdates: [],
+  taskUpdates: [],
+  artifacts: [],
+  sessionModelUpdates: [],
+};
 
-const session = { id: 's1', tenantId: 't1', userId: 'u1', title: 'x', createdAt: new Date() };
+const session = { id: 's1', tenantId: 't1', userId: 'u1', title: 'x', model: 'mock' as string | null, createdAt: new Date() };
 
 // 计费调用记录与故障注入：用例据此断言预占/记录/结算/释放的顺序与结果。
 const billingCalls: unknown[][] = [];
@@ -75,6 +86,29 @@ const fakeBilling = {
     billingCalls.push(['release', runId]);
   },
 } as unknown as BillingService;
+
+// 模型目录调用记录与故障注入：断言运行前解析到的会话模型与错误分支。
+const catalogCalls: unknown[][] = [];
+let resolveForRunError: unknown = null;
+const fakeCatalog = {
+  available: async () => ({
+    models: [
+      {
+        model: 'mock',
+        displayName: 'mock',
+        providerName: '环境变量',
+        sortOrder: 0,
+        source: { kind: 'mock' as const },
+      },
+    ],
+    defaultModel: 'mock',
+  }),
+  resolveForRun: async (tenantId: string, model: string | null) => {
+    catalogCalls.push([tenantId, model]);
+    if (resolveForRunError) throw resolveForRunError;
+    return { selectedModel: 'mock', modelRoutes: [] };
+  },
+} as unknown as ModelCatalogService;
 
 // 逃逸到 Nest 异常处理器的异常会被登记在这里。
 // 存在的意义：Nest 的 BaseExceptionFilter 在 reply 已 hijack 时会兜底
@@ -104,6 +138,10 @@ const fakePrisma = {
       where.id === session.id && where.tenantId === session.tenantId && where.userId === session.userId
         ? session
         : null,
+    updateMany: async (args: { where: { id: string; model: null }; data: { model: string } }) => {
+      stored.sessionModelUpdates.push(args);
+      return { count: 1 };
+    },
   },
   message: {
     findMany: async () => [],
@@ -230,6 +268,7 @@ beforeAll(async () => {
         },
       },
       { provide: PrismaService, useValue: fakePrisma },
+      { provide: ModelCatalogService, useValue: fakeCatalog },
       { provide: BFF_METRICS, useValue: createBffMetrics({ defaultMetrics: false }) },
       { provide: ARTIFACT_STORAGE, useValue: { getObjectStream: async () => { throw new Error('unused'); } } },
     ],
@@ -258,6 +297,7 @@ beforeEach(() => {
   stored.runUpdates.length = 0;
   stored.taskUpdates.length = 0;
   stored.artifacts.length = 0;
+  stored.sessionModelUpdates.length = 0;
   // 恢复上游行为、注入开关与地址，避免用例间互相污染。
   upstreamMode = 'ok';
   failStepCreate = false;
@@ -266,6 +306,9 @@ beforeEach(() => {
   getRunConfigError = null;
   billingCalls.length = 0;
   beginRunError = null;
+  catalogCalls.length = 0;
+  resolveForRunError = null;
+  session.model = 'mock';
   escapedErrors.length = 0;
   lastRunsBody = '';
   lastTraceparent = '';
@@ -318,6 +361,9 @@ describe('TasksController', () => {
       confirmTimeoutMs: 1000,
       codeExecTimeoutMs: 1234,
     });
+    const body = JSON.parse(lastRunsBody);
+    expect(body.billing.selectedModel).toBe('mock');
+    expect(body.modelRoutes).toBeUndefined();
   });
 
   it('SSE 里的 artifact step 触发产物落库', async () => {
@@ -614,5 +660,34 @@ describe('TasksController', () => {
     });
     expect(res.statusCode).toBe(200);
     expect(stored.runCreates[0]).toMatchObject({ traceId });
+  });
+
+  it('模型解析失败时不预占、不建 task，并返回明确状态码', async () => {
+    resolveForRunError = new ModelUnavailableError();
+    const token = signToken({ sub: 'u1', tenantId: 't1' });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/sessions/s1/tasks',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { goal: 'g' },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(JSON.parse(res.payload)).toEqual({ error: 'model_unavailable' });
+    expect(billingCalls).toEqual([]);
+    expect(stored.runCreates).toHaveLength(0);
+  });
+
+  it('历史会话首次运行成功后回填模型', async () => {
+    session.model = null;
+    const token = signToken({ sub: 'u1', tenantId: 't1' });
+    const res = await fetch(`${baseUrl}/api/sessions/s1/tasks`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+      body: JSON.stringify({ goal: 'g' }),
+    });
+    await res.text();
+    expect(stored.sessionModelUpdates).toEqual([
+      { where: { id: 's1', model: null }, data: { model: 'mock' } },
+    ]);
   });
 });

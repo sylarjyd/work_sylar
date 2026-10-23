@@ -4,6 +4,7 @@ import { Test } from '@nestjs/testing';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
 import { SessionsController } from './sessions.controller';
 import { SessionsService } from './sessions.service';
+import { ModelCatalogService } from '../models/model-catalog.service';
 import { PrismaService } from '../db/prisma.service';
 import { signToken } from '../auth/jwt';
 
@@ -54,7 +55,27 @@ beforeAll(async () => {
   token = signToken({ sub: userId, tenantId });
   const moduleRef = await Test.createTestingModule({
     controllers: [SessionsController],
-    providers: [SessionsService, { provide: PrismaService, useValue: fakePrisma }],
+    providers: [
+      SessionsService,
+      { provide: PrismaService, useValue: fakePrisma },
+      {
+        provide: ModelCatalogService,
+        useValue: {
+          available: async () => ({
+            models: [
+              {
+                model: 'mock',
+                displayName: 'mock',
+                providerName: '环境变量',
+                sortOrder: 0,
+                source: { kind: 'mock' as const },
+              },
+            ],
+            defaultModel: 'mock',
+          }),
+        },
+      },
+    ],
   }).compile();
   app = moduleRef.createNestApplication<NestFastifyApplication>(new FastifyAdapter());
   await app.init();

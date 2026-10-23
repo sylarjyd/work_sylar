@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { Body, Controller, Inject, Logger, Param, Post, Res, UseGuards } from '@nestjs/common';
+import { Body, Controller, HttpException, Inject, Logger, Param, Post, Res, UseGuards } from '@nestjs/common';
 import type { FastifyReply } from 'fastify';
 import type { AgentEvent, ArtifactRef, RunBilling, UsageEvent } from '@ai-office/shared';
 import { createSseParser, type CreateTaskRequest } from '@ai-office/shared';
@@ -8,6 +8,7 @@ import { TasksService } from './tasks.service';
 import { ArtifactService } from '../artifacts/artifacts.service';
 import { BillingService } from '../billing/billing.service';
 import { SettingsService } from '../settings/settings.service';
+import { ModelCatalogService } from '../models/model-catalog.service';
 import { InsufficientCreditsError, PlanExpiredError, RateLimitedError } from '../billing/billing.errors';
 import { parseUsageEvent } from '../billing/usage';
 import { JwtGuard } from '../auth/jwt.guard';
@@ -74,6 +75,7 @@ export class TasksController {
     private readonly artifacts: ArtifactService,
     private readonly billing: BillingService,
     private readonly settings: SettingsService,
+    private readonly catalog: ModelCatalogService,
     @Inject(BFF_METRICS) private readonly metrics: BffMetrics,
   ) {}
 
@@ -95,12 +97,24 @@ export class TasksController {
       return;
     }
 
-    // 归属校验放在预占之前：404 不应留下 hold。
+    // 归属校验放在预占之前：404 不应留下 hold；返回值带出会话选定的模型。
     // 与 prepare 内的归属校验重复一次查询，换取「404 早于预占」。
-    await this.tasks.assertOwned(sessionId, user.tenantId, user.sub);
+    const session = await this.tasks.assertOwned(sessionId, user.tenantId, user.sub);
 
     // 配置读取放在预占之前：读失败不应留下 hold。
     const config = await this.settings.getRunConfig();
+
+    // 模型解析同样前置：套餐过期/模型停用/密钥不可用都不应留下 hold。
+    let resolution: Awaited<ReturnType<ModelCatalogService['resolveForRun']>>;
+    try {
+      resolution = await this.catalog.resolveForRun(user.tenantId, session.model);
+    } catch (err) {
+      if (err instanceof HttpException) {
+        reply.status(err.getStatus()).send({ error: err.message });
+        return;
+      }
+      throw err;
+    }
 
     // 预占额度并做限流；失败在 hijack 之前返回，Nest 可正常写响应。
     const runId = randomUUID();
@@ -125,6 +139,16 @@ export class TasksController {
       }
       throw err;
     }
+
+    // 历史会话在首次成功预占后固化模型；失败只记日志，不影响本次运行。
+    if (!session.model) {
+      try {
+        await this.tasks.bindModel(sessionId, resolution.selectedModel);
+      } catch (err) {
+        this.logger.warn(`run ${runId} 回填会话模型失败: ${(err as Error).message}`);
+      }
+    }
+    billing = { ...billing, selectedModel: resolution.selectedModel };
 
     let prepared: Awaited<ReturnType<TasksService['prepare']>>;
     try {
@@ -188,6 +212,9 @@ export class TasksController {
             messages,
             billing,
             config,
+            ...(resolution.modelRoutes.length > 0
+              ? { modelRoutes: resolution.modelRoutes }
+              : {}),
           }),
           signal: connectController.signal,
         });
