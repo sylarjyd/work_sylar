@@ -3,6 +3,23 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
+  Alert,
+  App,
+  Button,
+  Card,
+  Checkbox,
+  Col,
+  Empty,
+  Input,
+  List,
+  Row,
+  Select,
+  Space,
+  Tag,
+  Typography,
+} from 'antd';
+import { DeleteOutlined, PlusOutlined, RobotOutlined } from '@ant-design/icons';
+import {
   ASSISTANT_PERMISSION_MODES,
   ASSISTANT_PERMISSION_MODE_HINTS,
   ASSISTANT_PERMISSION_MODE_LABELS,
@@ -11,17 +28,16 @@ import {
   type AssistantInput,
   type AssistantPermissionMode,
   type ClientModelDto,
-  type KbDocDto,
+  type KbBaseDto,
 } from '@ai-office/shared';
 import { AppShell } from '../../components/app-shell';
-import { IconPlus, IconSpark, IconTrash } from '../../components/icons';
 import {
   createAssistant,
   deleteAssistant,
   getToken,
   isUnauthorized,
   listAssistants,
-  listKbDocs,
+  listKbBases,
   listModels,
   updateAssistant,
 } from '../../lib/api';
@@ -34,7 +50,7 @@ interface FormState {
   permissionMode: AssistantPermissionMode;
   model: string;
   skills: string[];
-  kbDocIds: string[];
+  kbIds: string[];
 }
 
 const EMPTY: FormState = {
@@ -44,14 +60,15 @@ const EMPTY: FormState = {
   permissionMode: 'standard',
   model: '',
   skills: ASSISTANT_SKILLS.map((s) => s.key),
-  kbDocIds: [],
+  kbIds: [],
 };
 
 export default function AssistantsPage() {
   const router = useRouter();
+  const { message, modal } = App.useApp();
   const [assistants, setAssistants] = useState<AssistantDto[]>([]);
   const [models, setModels] = useState<ClientModelDto[]>([]);
-  const [docs, setDocs] = useState<KbDocDto[]>([]);
+  const [bases, setBases] = useState<KbBaseDto[]>([]);
   const [form, setForm] = useState<FormState>(EMPTY);
   const [editing, setEditing] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -73,14 +90,14 @@ export default function AssistantsPage() {
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const [rows, modelData, kbDocs] = await Promise.all([
+      const [rows, modelData, kbBases] = await Promise.all([
         listAssistants(),
         listModels(),
-        listKbDocs(),
+        listKbBases(),
       ]);
       setAssistants(rows);
       setModels(modelData.models);
-      setDocs(kbDocs);
+      setBases(kbBases);
     } catch (err) {
       handleErr(err);
     } finally {
@@ -111,16 +128,13 @@ export default function AssistantsPage() {
       permissionMode: a.permissionMode,
       model: a.model ?? '',
       skills: a.skills,
-      kbDocIds: a.kbDocIds,
+      // 服务端可能返回已删除知识库的残留 id：只保留当前仍存在的库，避免无意义绑定。
+      kbIds: a.kbIds.filter((id) => bases.some((b) => b.id === id)),
     });
     setError('');
   }
 
-  function toggle(list: string[], value: string): string[] {
-    return list.includes(value) ? list.filter((x) => x !== value) : [...list, value];
-  }
-
-  async function save() {
+  function save() {
     if (inFlight.current) return;
     setError('');
     const name = form.name.trim();
@@ -135,16 +149,28 @@ export default function AssistantsPage() {
       permissionMode: form.permissionMode,
       model: form.model || null,
       skills: form.skills,
-      kbDocIds: form.kbDocIds,
+      kbIds: form.kbIds,
     };
     const verb = editing ? '保存修改' : '创建助手';
-    if (!window.confirm(`确认${verb}「${name}」？`)) return;
+    modal.confirm({
+      title: verb,
+      content: `确认${verb}「${name}」？`,
+      okText: verb,
+      cancelText: '取消',
+      onOk: () => runSave(payload),
+    });
+  }
+
+  async function runSave(payload: AssistantInput) {
+    if (inFlight.current) return;
     inFlight.current = true;
     setBusy(true);
+    setError('');
     try {
       if (editing) await updateAssistant(editing, payload);
       else await createAssistant(payload);
       resetForm();
+      message.success('已保存');
       await refresh();
     } catch (err) {
       handleErr(err);
@@ -154,9 +180,20 @@ export default function AssistantsPage() {
     }
   }
 
-  async function remove(a: AssistantDto) {
+  function remove(a: AssistantDto) {
     if (inFlight.current) return;
-    if (!window.confirm(`确认删除助手「${a.name}」？已创建的历史任务会退化为默认助手。`)) return;
+    modal.confirm({
+      title: '删除助手',
+      content: `确认删除助手「${a.name}」？已创建的历史任务会退化为默认助手。`,
+      okText: '删除',
+      okType: 'danger',
+      cancelText: '取消',
+      onOk: () => runRemove(a),
+    });
+  }
+
+  async function runRemove(a: AssistantDto) {
+    if (inFlight.current) return;
     inFlight.current = true;
     setBusy(true);
     setError('');
@@ -164,6 +201,7 @@ export default function AssistantsPage() {
       await deleteAssistant(a.id);
       if (editing === a.id) resetForm();
       setAssistants((prev) => prev.filter((x) => x.id !== a.id));
+      message.success(`已删除「${a.name}」`);
     } catch (err) {
       handleErr(err);
     } finally {
@@ -177,6 +215,12 @@ export default function AssistantsPage() {
       .map((s) => s.name)
       .join('、') || '未绑定技能';
 
+  const kbSummary = (ids: string[]): string => {
+    if (ids.length === 0) return '全部知识库';
+    const names = ids.map((id) => bases.find((b) => b.id === id)?.name ?? '已删除的知识库');
+    return names.length <= 3 ? names.join('、') : `${names.slice(0, 3).join('、')} 等 ${names.length} 个`;
+  };
+
   return (
     <AppShell active="assistants">
       <div className="page-scroll">
@@ -189,215 +233,271 @@ export default function AssistantsPage() {
               </p>
             </div>
             <div className="page-head-actions">
-              <button type="button" className="btn btn-mint" disabled={busy} onClick={resetForm}>
-                <IconPlus size={15} />
+              <Button type="primary" icon={<PlusOutlined />} disabled={busy} onClick={resetForm}>
                 新建助手
-              </button>
+              </Button>
             </div>
           </header>
 
-          {error && (
-            <div className="banner banner-error" role="alert" style={{ marginBottom: 16 }}>
-              {error}
-            </div>
-          )}
+          {error ? (
+            <Alert
+              type="error"
+              showIcon
+              message={error}
+              closable
+              onClose={() => setError('')}
+              style={{ marginBottom: 16 }}
+            />
+          ) : null}
 
-          <section className="admin-panel">
-            <h2 className="billing-heading">{editing ? `编辑 ${form.name}` : '新建助手'}</h2>
-            <div className="admin-form">
-              <label className="admin-field">
-                名称
-                <input
-                  className="admin-input"
-                  value={form.name}
-                  maxLength={40}
-                  disabled={busy}
-                  placeholder="如：合同审阅助手"
-                  onChange={(e) => setForm({ ...form, name: e.target.value })}
-                />
-              </label>
-              <label className="admin-field">
-                简介
-                <input
-                  className="admin-input"
-                  value={form.description}
-                  maxLength={200}
-                  disabled={busy}
-                  placeholder="一句话说明这个助手擅长什么"
-                  onChange={(e) => setForm({ ...form, description: e.target.value })}
-                />
-              </label>
-              <label className="admin-field">
-                默认模型
-                <select
-                  className="admin-input"
-                  value={form.model}
-                  disabled={busy}
-                  onChange={(e) => setForm({ ...form, model: e.target.value })}
-                >
-                  <option value="">跟随运营端默认模型</option>
-                  {models.map((m) => (
-                    <option key={m.model} value={m.model}>
-                      {m.displayName && m.displayName !== m.model
-                        ? `${m.displayName} · ${m.model}`
-                        : m.model}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="admin-field">
-                权限模式
-                <select
-                  className="admin-input"
-                  value={form.permissionMode}
-                  disabled={busy}
-                  onChange={(e) =>
-                    setForm({
-                      ...form,
-                      permissionMode: e.target.value as AssistantPermissionMode,
-                    })
-                  }
-                >
-                  {ASSISTANT_PERMISSION_MODES.map((mode) => (
-                    <option key={mode} value={mode}>
-                      {ASSISTANT_PERMISSION_MODE_LABELS[mode]}
-                    </option>
-                  ))}
-                </select>
-                <span className="page-sub">{ASSISTANT_PERMISSION_MODE_HINTS[form.permissionMode]}</span>
-              </label>
-              <div className="admin-field" style={{ minWidth: 280 }}>
-                技能
-                <div className="admin-checks">
-                  {ASSISTANT_SKILLS.map((s) => (
-                    <label className="admin-check" key={s.key} title={s.description}>
-                      <input
-                        type="checkbox"
+          <Card
+            size="small"
+            title={editing ? `编辑 ${form.name}` : '新建助手'}
+            style={{ marginBottom: 16 }}
+          >
+            <Row gutter={[16, 0]}>
+              <Col xs={24} md={12}>
+                <div className="admin-field">
+                  <Typography.Text>名称</Typography.Text>
+                  <Input
+                    value={form.name}
+                    maxLength={40}
+                    disabled={busy}
+                    placeholder="如：合同审阅助手"
+                    onChange={(e) => setForm({ ...form, name: e.target.value })}
+                  />
+                </div>
+              </Col>
+              <Col xs={24} md={12}>
+                <div className="admin-field">
+                  <Typography.Text>简介</Typography.Text>
+                  <Input
+                    value={form.description}
+                    maxLength={200}
+                    disabled={busy}
+                    placeholder="一句话说明这个助手擅长什么"
+                    onChange={(e) => setForm({ ...form, description: e.target.value })}
+                  />
+                </div>
+              </Col>
+              <Col xs={24} md={12}>
+                <div className="admin-field">
+                  <Typography.Text>默认模型</Typography.Text>
+                  <Select
+                    style={{ width: '100%' }}
+                    value={form.model || ''}
+                    disabled={busy}
+                    onChange={(value: string) => setForm({ ...form, model: value })}
+                    options={[
+                      { value: '', label: '跟随运营端默认模型' },
+                      ...models.map((m) => ({
+                        value: m.model,
+                        label:
+                          m.displayName && m.displayName !== m.model
+                            ? `${m.displayName} · ${m.model}`
+                            : m.model,
+                      })),
+                    ]}
+                  />
+                </div>
+              </Col>
+              <Col xs={24} md={12}>
+                <div className="admin-field">
+                  <Typography.Text>权限模式</Typography.Text>
+                  <Select
+                    style={{ width: '100%' }}
+                    value={form.permissionMode}
+                    disabled={busy}
+                    onChange={(value: AssistantPermissionMode) =>
+                      setForm({ ...form, permissionMode: value })
+                    }
+                    options={ASSISTANT_PERMISSION_MODES.map((mode) => ({
+                      value: mode,
+                      label: ASSISTANT_PERMISSION_MODE_LABELS[mode],
+                    }))}
+                  />
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    {ASSISTANT_PERMISSION_MODE_HINTS[form.permissionMode]}
+                  </Typography.Text>
+                </div>
+              </Col>
+
+              <Col xs={24} md={12}>
+                <div className="admin-field">
+                  <Typography.Text>技能</Typography.Text>
+                  <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                    {ASSISTANT_SKILLS.map((s) => (
+                      <Checkbox
+                        key={s.key}
                         checked={form.skills.includes(s.key)}
                         disabled={busy}
-                        onChange={() => setForm({ ...form, skills: toggle(form.skills, s.key) })}
-                      />
-                      <span>
+                        onChange={(e) =>
+                          setForm({
+                            ...form,
+                            skills: e.target.checked
+                              ? [...form.skills, s.key]
+                              : form.skills.filter((x) => x !== s.key),
+                          })
+                        }
+                      >
                         {s.name}
-                        <span className="page-sub"> · {s.description}</span>
-                      </span>
-                    </label>
-                  ))}
-                </div>
-              </div>
-              <div className="admin-field" style={{ minWidth: 280 }}>
-                知识库范围
-                <span className="page-sub">
-                  {form.kbDocIds.length === 0
-                    ? '未选择时检索全部已上传文档'
-                    : `仅检索已选的 ${form.kbDocIds.length} 份文档`}
-                </span>
-                {docs.length === 0 ? (
-                  <span className="page-sub">知识库暂无文档，可稍后在「知识库」页上传。</span>
-                ) : (
-                  <div className="admin-checks">
-                    {docs.map((d) => (
-                      <label className="admin-check" key={d.id}>
-                        <input
-                          type="checkbox"
-                          checked={form.kbDocIds.includes(d.id)}
-                          disabled={busy}
-                          onChange={() =>
-                            setForm({ ...form, kbDocIds: toggle(form.kbDocIds, d.id) })
-                          }
-                        />
-                        <span>
-                          {d.filename}
-                          {d.status !== 'ready' ? `（${d.status === 'pending' ? '摄取中' : '失败'}）` : ''}
-                        </span>
-                      </label>
+                        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                          {' '}
+                          · {s.description}
+                        </Typography.Text>
+                      </Checkbox>
                     ))}
-                  </div>
-                )}
-              </div>
-              <label className="admin-field" style={{ flexBasis: '100%' }}>
-                系统提示词
-                <textarea
-                  className="admin-input"
-                  rows={8}
-                  maxLength={8000}
-                  value={form.systemPrompt}
-                  disabled={busy}
-                  placeholder="描述助手的角色、目标、工作方式与输出要求。例如：你是资深合同审阅助手，逐条指出风险条款并给出修改建议…"
-                  onChange={(e) => setForm({ ...form, systemPrompt: e.target.value })}
-                />
-              </label>
-              <div className="admin-field">
-                <div style={{ display: 'flex', gap: 8 }}>
-                  <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void save()}>
+                  </Space>
+                </div>
+              </Col>
+
+              <Col xs={24} md={12}>
+                <div className="admin-field">
+                  <Typography.Text>知识库范围</Typography.Text>
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    {form.kbIds.length === 0
+                      ? '未选择时检索全部知识库'
+                      : `仅检索已选的 ${form.kbIds.length} 个知识库`}
+                  </Typography.Text>
+                  <Select
+                    mode="multiple"
+                    style={{ width: '100%' }}
+                    allowClear
+                    disabled={busy || bases.length === 0}
+                    value={form.kbIds}
+                    placeholder={bases.length === 0 ? '知识库为空，可先到「知识库」页创建' : '选择要检索的知识库'}
+                    onChange={(value: string[]) => setForm({ ...form, kbIds: value })}
+                    options={bases.map((b) => ({
+                      value: b.id,
+                      label: `${b.name}（${b.docCount} 篇）`,
+                    }))}
+                    optionFilterProp="label"
+                  />
+                  {bases.length === 0 ? (
+                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                      知识库暂无内容，可稍后在「知识库」页创建并上传文档。
+                    </Typography.Text>
+                  ) : null}
+                </div>
+              </Col>
+
+              <Col span={24}>
+                <div className="admin-field">
+                  <Typography.Text>系统提示词</Typography.Text>
+                  <Input.TextArea
+                    rows={6}
+                    maxLength={8000}
+                    showCount
+                    value={form.systemPrompt}
+                    disabled={busy}
+                    placeholder="描述助手的角色、目标、工作方式与输出要求。例如：你是资深合同审阅助手，逐条指出风险条款并给出修改建议…"
+                    onChange={(e) => setForm({ ...form, systemPrompt: e.target.value })}
+                  />
+                </div>
+              </Col>
+
+              <Col span={24}>
+                <Space>
+                  <Button type="primary" loading={busy} onClick={save}>
                     {editing ? '保存' : '创建助手'}
-                  </button>
-                  {editing && (
-                    <button type="button" className="btn" disabled={busy} onClick={resetForm}>
+                  </Button>
+                  {editing ? (
+                    <Button disabled={busy} onClick={resetForm}>
                       取消
-                    </button>
-                  )}
-                </div>
-              </div>
-            </div>
-          </section>
+                    </Button>
+                  ) : null}
+                </Space>
+              </Col>
+            </Row>
+          </Card>
 
-          <div className="section-label">
-            全部助手
-            <span>{assistants.length}</span>
-          </div>
-
-          {loading ? (
-            <div className="empty">
-              <div className="empty-title">加载中…</div>
-            </div>
-          ) : assistants.length === 0 ? (
-            <div className="empty">
-              <div className="empty-icon">
-                <IconSpark size={22} />
-              </div>
-              <div className="empty-title">还没有自定义助手</div>
-              <div className="empty-sub">新建助手后，可在工作台新建任务时选择它。</div>
-            </div>
-          ) : (
-            <div className="list">
-              {assistants.map((a) => (
-                <div key={a.id} className="card-row">
-                  <div className="file-tile">
-                    <IconSpark size={18} />
-                  </div>
-                  <div className="card-main">
-                    <div className="card-title">{a.name}</div>
-                    <div className="card-meta">
-                      <span>{skillLabels(a.skills)}</span>
-                      <span className="dot-sep" />
-                      <span>{ASSISTANT_PERMISSION_MODE_LABELS[a.permissionMode].split('：')[0]}</span>
-                      <span className="dot-sep" />
-                      <span>{a.model || '默认模型'}</span>
-                      <span className="dot-sep" />
-                      <span>{a.kbDocIds.length === 0 ? '全部知识库' : `${a.kbDocIds.length} 份文档`}</span>
-                    </div>
-                    {a.description && <div className="card-meta">{a.description}</div>}
-                  </div>
-                  <div className="row-actions">
-                    <button type="button" className="btn btn-sm" disabled={busy} onClick={() => startEdit(a)}>
-                      编辑
-                    </button>
-                    <button
-                      type="button"
-                      className="icon-btn danger"
-                      disabled={busy}
-                      onClick={() => void remove(a)}
-                      title="删除助手"
-                      aria-label={`删除 ${a.name}`}
-                    >
-                      <IconTrash size={16} />
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
+          <Card
+            size="small"
+            title="全部助手"
+            extra={
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                共 {assistants.length} 个
+              </Typography.Text>
+            }
+            loading={loading && assistants.length === 0}
+          >
+            {assistants.length === 0 && !loading ? (
+              <Empty
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
+                description={
+                  <Space direction="vertical" size={2}>
+                    <Typography.Text>还没有自定义助手</Typography.Text>
+                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                      新建助手后，可在工作台新建任务时选择它。
+                    </Typography.Text>
+                  </Space>
+                }
+              >
+                <Button type="primary" icon={<PlusOutlined />} onClick={resetForm}>
+                  新建助手
+                </Button>
+              </Empty>
+            ) : (
+              <List
+                dataSource={assistants}
+                rowKey="id"
+                split
+                renderItem={(a) => (
+                  <List.Item
+                    actions={[
+                      <Button
+                        key="edit"
+                        size="small"
+                        disabled={busy}
+                        onClick={() => startEdit(a)}
+                      >
+                        编辑
+                      </Button>,
+                      <Button
+                        key="delete"
+                        size="small"
+                        type="text"
+                        danger
+                        icon={<DeleteOutlined />}
+                        disabled={busy}
+                        aria-label={`删除 ${a.name}`}
+                        onClick={() => remove(a)}
+                      >
+                        删除
+                      </Button>,
+                    ]}
+                  >
+                    <List.Item.Meta
+                      avatar={<RobotOutlined style={{ fontSize: 20, color: '#00b07b' }} />}
+                      title={
+                        <Space size={8} wrap>
+                          <Typography.Text strong>{a.name}</Typography.Text>
+                          {editing === a.id ? <Tag color="processing">编辑中</Tag> : null}
+                        </Space>
+                      }
+                      description={
+                        <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                          <Space size={4} wrap>
+                            <Tag>{skillLabels(a.skills)}</Tag>
+                            <Tag>{ASSISTANT_PERMISSION_MODE_LABELS[a.permissionMode].split('：')[0]}</Tag>
+                            <Tag>{a.model || '默认模型'}</Tag>
+                            <Tag color={a.kbIds.length === 0 ? undefined : 'success'}>
+                              {kbSummary(a.kbIds)}
+                            </Tag>
+                          </Space>
+                          {a.description ? (
+                            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                              {a.description}
+                            </Typography.Text>
+                          ) : null}
+                        </Space>
+                      }
+                    />
+                  </List.Item>
+                )}
+              />
+            )}
+          </Card>
         </div>
       </div>
     </AppShell>

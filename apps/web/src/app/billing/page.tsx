@@ -2,6 +2,21 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import {
+  Alert,
+  Card,
+  Col,
+  Empty,
+  Progress,
+  Row,
+  Segmented,
+  Space,
+  Statistic,
+  Table,
+  Tag,
+  Typography,
+} from 'antd';
+import type { TableColumnsType } from 'antd';
 import type {
   BillingSummaryDto,
   CreditLedgerItemDto,
@@ -36,6 +51,54 @@ function money(cents: number): string {
 function stamp(iso: string): string {
   return new Date(iso).toLocaleString('zh-CN', { hour12: false });
 }
+
+function useUsageColumns(groupBy: 'day' | 'model'): TableColumnsType<UsageAggregateDto> {
+  return [
+    { title: groupBy === 'day' ? '日期' : '模型', dataIndex: 'key', ellipsis: true },
+    { title: '运行次数', dataIndex: 'runs', width: 110, align: 'right' },
+    { title: '输入 token', dataIndex: 'inputTokens', width: 130, align: 'right' },
+    { title: '输出 token', dataIndex: 'outputTokens', width: 130, align: 'right' },
+    { title: '积分', dataIndex: 'credits', width: 100, align: 'right' },
+  ];
+}
+
+const ledgerColumns: TableColumnsType<CreditLedgerItemDto> = [
+  {
+    title: '时间',
+    dataIndex: 'createdAt',
+    width: 180,
+    render: (v: string) => stamp(v),
+  },
+  {
+    title: '类型',
+    dataIndex: 'type',
+    width: 90,
+    render: (v: string) => TYPE_LABEL[v] ?? v,
+  },
+  {
+    title: '来源',
+    dataIndex: 'source',
+    width: 140,
+    render: (v: string | null) => v ?? '—',
+  },
+  {
+    title: '数量',
+    dataIndex: 'amount',
+    width: 100,
+    align: 'right',
+    render: (v: number) => (
+      <Typography.Text type={v < 0 ? 'danger' : 'success'}>
+        {v > 0 ? `+${v}` : v}
+      </Typography.Text>
+    ),
+  },
+  {
+    title: '备注',
+    dataIndex: 'note',
+    ellipsis: true,
+    render: (v: string | null) => v ?? '—',
+  },
+];
 
 export default function BillingPage() {
   const router = useRouter();
@@ -130,174 +193,143 @@ export default function BillingPage() {
               <h1 className="page-title">套餐与用量</h1>
               <p className="page-sub">积分按模型 token 折算，每月到期作废、不结转。</p>
             </div>
-            {summary && (
+            {summary ? (
               <div className="page-head-actions">
-                <span className={`status ${summary.subscription.status === 'active' ? 'status-ready' : 'status-failed'}`}>
+                <Tag color={summary.subscription.status === 'active' ? 'success' : 'error'}>
                   {summary.subscription.status === 'active' ? '生效中' : '已过期'}
-                </span>
+                </Tag>
               </div>
-            )}
+            ) : null}
           </header>
 
-          {error && (
-            <div className="banner banner-error" role="alert" style={{ marginBottom: 16 }}>
-              {error}
-            </div>
-          )}
+          {error ? (
+            <Alert
+              type="error"
+              showIcon
+              message={error}
+              closable
+              onClose={() => setError('')}
+              style={{ marginBottom: 16 }}
+            />
+          ) : null}
 
-          {summary && (
-            <section className="billing-grid">
-              <div className="billing-card billing-card-main">
-                <div className="billing-label">当前套餐</div>
-                <div className="billing-plan">{summary.plan.name}</div>
-                <div className="billing-sub">
-                  周期 {stamp(summary.subscription.periodStart)} — {stamp(summary.subscription.periodEnd)}
-                </div>
-                <div
-                  className="billing-bar"
-                  role="progressbar"
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                  aria-valuenow={percent}
-                  aria-label="本周期剩余积分进度"
-                >
-                  <div className="billing-bar-fill" style={{ width: `${percent}%` }} />
-                </div>
-                <div className="billing-sub">
-                  可用 {summary.balance} 积分{summary.reserved > 0 ? ` · 已预占 ${summary.reserved}` : ''}
-                </div>
-              </div>
-              <div className="billing-card">
-                <div className="billing-label">本周期额度</div>
-                <div className="billing-stat">{quota}</div>
-                <div className="billing-sub">
-                  基础 {summary.plan.monthlyBaseCredits} + 赠送 {summary.plan.monthlyBonusCredits}
-                </div>
-              </div>
-              <div className="billing-card">
-                <div className="billing-label">最近到期</div>
-                <div className="billing-stat">{summary.nextExpiry ? summary.nextExpiry.amount : 0}</div>
-                <div className="billing-sub">
-                  {summary.nextExpiry ? stamp(summary.nextExpiry.expiresAt) : '无到期积分'}
-                </div>
-              </div>
-            </section>
-          )}
+          {summary ? (
+            <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>
+              <Col xs={24} md={10}>
+                <Card size="small" title="当前套餐" style={{ height: '100%' }}>
+                  <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                    <Typography.Title level={4} style={{ margin: 0 }}>
+                      {summary.plan.name}
+                    </Typography.Title>
+                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                      周期 {stamp(summary.subscription.periodStart)} — {stamp(summary.subscription.periodEnd)}
+                    </Typography.Text>
+                    <Progress
+                      percent={percent}
+                      showInfo={false}
+                      aria-label="本周期剩余积分进度"
+                    />
+                    <Typography.Text type="secondary">
+                      可用 {summary.balance} 积分
+                      {summary.reserved > 0 ? ` · 已预占 ${summary.reserved}` : ''}
+                    </Typography.Text>
+                  </Space>
+                </Card>
+              </Col>
+              <Col xs={12} md={7}>
+                <Card size="small" title="本周期额度" style={{ height: '100%' }}>
+                  <Statistic value={quota} suffix="积分" />
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    基础 {summary.plan.monthlyBaseCredits} + 赠送 {summary.plan.monthlyBonusCredits}
+                  </Typography.Text>
+                </Card>
+              </Col>
+              <Col xs={12} md={7}>
+                <Card size="small" title="最近到期" style={{ height: '100%' }}>
+                  <Statistic value={summary.nextExpiry ? summary.nextExpiry.amount : 0} suffix="积分" />
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    {summary.nextExpiry ? stamp(summary.nextExpiry.expiresAt) : '无到期积分'}
+                  </Typography.Text>
+                </Card>
+              </Col>
+            </Row>
+          ) : null}
 
-          <section className="billing-section">
-            <h2 className="billing-heading">套餐目录</h2>
-            <div className="billing-plans">
-              {plans.map((p) => (
-                <div key={p.id} className={`billing-card${summary?.plan.id === p.id ? ' current' : ''}`}>
-                  <div className="billing-plan">{p.name}</div>
-                  <div className="billing-price">{money(p.priceCents)}</div>
-                  <ul className="billing-list">
-                    <li>每月 {p.monthlyBaseCredits + p.monthlyBonusCredits} 积分</li>
-                    <li>单次最多 {p.maxCreditsPerRun} 积分</li>
-                    <li>每分钟 {p.rpm} 次运行</li>
-                    <li>模型：{p.allowedModels.join('、')}</li>
-                  </ul>
-                </div>
-              ))}
-            </div>
-          </section>
-
-          <section className="billing-section">
-            <div className="billing-section-head">
-              <h2 className="billing-heading">用量</h2>
-              <div className="billing-tabs" role="tablist" aria-label="用量分组">
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={groupBy === 'day'}
-                  className={`billing-tab${groupBy === 'day' ? ' active' : ''}`}
-                  onClick={() => setGroupBy('day')}
-                >
-                  按日
-                </button>
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={groupBy === 'model'}
-                  className={`billing-tab${groupBy === 'model' ? ' active' : ''}`}
-                  onClick={() => setGroupBy('model')}
-                >
-                  按模型
-                </button>
-              </div>
-            </div>
-            {loadingUsage && usage.length > 0 && (
-              <div className="billing-sub" role="status" style={{ marginBottom: 8 }}>
-                加载中…
-              </div>
-            )}
-            {usage.length === 0 && loadingUsage ? (
-              <div className="billing-empty">加载中…</div>
-            ) : usage.length === 0 ? (
-              <div className="billing-empty">暂无用量记录</div>
+          <Card size="small" title="套餐目录" style={{ marginBottom: 16 }} loading={loadingBase && plans.length === 0}>
+            {plans.length === 0 ? (
+              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无套餐" />
             ) : (
-              <table className="billing-table">
-                <caption className="visually-hidden">
-                  用量统计（{groupBy === 'day' ? '按日' : '按模型'}）
-                </caption>
-                <thead>
-                  <tr>
-                    <th>{groupBy === 'day' ? '日期' : '模型'}</th>
-                    <th>运行次数</th>
-                    <th>输入 token</th>
-                    <th>输出 token</th>
-                    <th>积分</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {usage.map((u) => (
-                    <tr key={u.key}>
-                      <td>{u.key}</td>
-                      <td>{u.runs}</td>
-                      <td>{u.inputTokens}</td>
-                      <td>{u.outputTokens}</td>
-                      <td>{u.credits}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <Row gutter={[12, 12]}>
+                {plans.map((p) => {
+                  const current = summary?.plan.id === p.id;
+                  return (
+                    <Col key={p.id} xs={24} sm={12} lg={8}>
+                      <Card
+                        size="small"
+                        style={{
+                          height: '100%',
+                          borderColor: current ? '#00b07b' : undefined,
+                        }}
+                        title={
+                          <Space size={8}>
+                            <Typography.Text strong>{p.name}</Typography.Text>
+                            {current ? <Tag color="success">当前</Tag> : null}
+                          </Space>
+                        }
+                        extra={<Typography.Text type="secondary">{money(p.priceCents)}</Typography.Text>}
+                      >
+                        <Space direction="vertical" size={4} style={{ fontSize: 13 }}>
+                          <span>每月 {p.monthlyBaseCredits + p.monthlyBonusCredits} 积分</span>
+                          <span>单次最多 {p.maxCreditsPerRun} 积分</span>
+                          <span>每分钟 {p.rpm} 次运行</span>
+                          <span>模型：{p.allowedModels.join('、')}</span>
+                        </Space>
+                      </Card>
+                    </Col>
+                  );
+                })}
+              </Row>
             )}
-          </section>
+          </Card>
 
-          <section className="billing-section">
-            <h2 className="billing-heading">积分流水</h2>
-            {ledger.length === 0 && loadingBase ? (
-              <div className="billing-empty">加载中…</div>
-            ) : ledger.length === 0 ? (
-              <div className="billing-empty">暂无流水</div>
-            ) : (
-              <table className="billing-table">
-                <caption className="visually-hidden">最近 30 条积分流水</caption>
-                <thead>
-                  <tr>
-                    <th>时间</th>
-                    <th>类型</th>
-                    <th>来源</th>
-                    <th>数量</th>
-                    <th>备注</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {ledger.map((t) => (
-                    <tr key={t.id}>
-                      <td>{stamp(t.createdAt)}</td>
-                      <td>{TYPE_LABEL[t.type] ?? t.type}</td>
-                      <td>{t.source ?? '—'}</td>
-                      <td className={t.amount < 0 ? 'billing-negative' : 'billing-positive'}>
-                        {t.amount > 0 ? `+${t.amount}` : t.amount}
-                      </td>
-                      <td>{t.note ?? '—'}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </section>
+          <Card
+            size="small"
+            title="用量"
+            style={{ marginBottom: 16 }}
+            extra={
+              <Segmented
+                value={groupBy}
+                onChange={(value) => setGroupBy(value as 'day' | 'model')}
+                options={[
+                  { value: 'day', label: '按日' },
+                  { value: 'model', label: '按模型' },
+                ]}
+              />
+            }
+          >
+            <Table<UsageAggregateDto>
+              rowKey="key"
+              size="small"
+              loading={loadingUsage}
+              columns={useUsageColumns(groupBy)}
+              dataSource={usage}
+              pagination={{ pageSize: 20, hideOnSinglePage: true }}
+              locale={{ emptyText: '暂无用量记录' }}
+            />
+          </Card>
+
+          <Card size="small" title="积分流水" extra={<Typography.Text type="secondary" style={{ fontSize: 12 }}>最近 30 条</Typography.Text>}>
+            <Table<CreditLedgerItemDto>
+              rowKey="id"
+              size="small"
+              loading={loadingBase && ledger.length === 0}
+              columns={ledgerColumns}
+              dataSource={ledger}
+              scroll={{ x: 760 }}
+              pagination={{ pageSize: 20, hideOnSinglePage: true }}
+              locale={{ emptyText: '暂无流水' }}
+            />
+          </Card>
         </div>
       </div>
     </AppShell>

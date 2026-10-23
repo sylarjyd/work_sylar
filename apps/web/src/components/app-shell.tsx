@@ -10,22 +10,24 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from 'react';
+import { Layout, Menu } from 'antd';
+import {
+  ApiOutlined,
+  AppstoreOutlined,
+  BookOutlined,
+  LogoutOutlined,
+  MenuFoldOutlined,
+  MessageOutlined,
+  PlusOutlined,
+  RobotOutlined,
+  SearchOutlined,
+  WalletOutlined,
+} from '@ant-design/icons';
 import type { SessionSummary } from '@ai-office/shared';
 import { clearToken, fetchMe, getEmail, getRole, getToken, isUnauthorized } from '../lib/api';
 import { relativeTime } from '../lib/format';
 import { filterSessions } from '../lib/session-filter';
-import {
-  IconBook,
-  IconChat,
-  IconGrid,
-  IconLogout,
-  IconPlug,
-  IconPlus,
-  IconSearch,
-  IconSidebar,
-  IconSpark,
-  IconWallet,
-} from './icons';
+import { IconSpark } from './icons';
 
 type ActiveNav = 'workbench' | 'assistants' | 'kb' | 'connectors' | 'billing';
 
@@ -44,12 +46,12 @@ interface AppShellProps {
   sessionDisabled?: boolean;
 }
 
-const NAV: { key: ActiveNav; href: string; label: string; icon: typeof IconChat }[] = [
-  { key: 'workbench', href: '/', label: '工作台', icon: IconChat },
-  { key: 'assistants', href: '/assistants', label: '助手', icon: IconSpark },
-  { key: 'kb', href: '/kb', label: '知识库', icon: IconBook },
-  { key: 'connectors', href: '/connectors', label: '连接器', icon: IconPlug },
-  { key: 'billing', href: '/billing', label: '套餐与用量', icon: IconWallet },
+const NAV: { key: ActiveNav; href: string; label: string; icon: ReactNode }[] = [
+  { key: 'workbench', href: '/', label: '工作台', icon: <MessageOutlined /> },
+  { key: 'assistants', href: '/assistants', label: '助手', icon: <RobotOutlined /> },
+  { key: 'kb', href: '/kb', label: '知识库', icon: <BookOutlined /> },
+  { key: 'connectors', href: '/connectors', label: '连接器', icon: <ApiOutlined /> },
+  { key: 'billing', href: '/billing', label: '套餐与用量', icon: <WalletOutlined /> },
 ];
 
 export function AppShell({
@@ -148,11 +150,41 @@ export function AppShell({
     router.push('/login');
   }
 
+  const menuItems = [
+    ...NAV.map(({ key, label, icon }) => ({ key, label, icon })),
+    ...(role === 'admin' && ADMIN_URL
+      ? [{ key: 'admin', label: '运营平台', icon: <AppstoreOutlined /> }]
+      : []),
+  ];
+
+  function onMenuClick(key: string) {
+    // 运营端是独立应用，用新标签页打开，避免离开工作台丢掉未完成的任务。
+    if (key === 'admin') {
+      window.open(ADMIN_URL, '_blank', 'noopener,noreferrer');
+      return;
+    }
+    const target = NAV.find((item) => item.key === key);
+    if (target) router.push(target.href);
+  }
+
   const avatarLetter = email ? email[0].toUpperCase() : '?';
 
   return (
-    <div className={`shell wb-shell${collapsed ? ' sidebar-collapsed' : ''}`}>
-      <aside id="wb-sidebar" className="sidebar wb-sidebar" aria-label="侧栏">
+    <Layout
+      hasSider
+      className={`shell wb-shell${collapsed ? ' sidebar-collapsed' : ''}`}
+    >
+      <Layout.Sider
+        id="wb-sidebar"
+        className="sidebar wb-sidebar"
+        width={272}
+        collapsedWidth={64}
+        collapsed={collapsed}
+        trigger={null}
+        theme="light"
+        aria-label="侧栏"
+        style={{ background: 'var(--wb-sidebar)' }}
+      >
         <div className="wb-side-head">
           <div className="wb-brand">
             <div className="wb-brand-mark">
@@ -170,7 +202,7 @@ export function AppShell({
               aria-expanded={!collapsed}
               title={collapsed ? '展开侧栏' : '收起侧栏'}
             >
-              <IconSidebar size={16} />
+              <MenuFoldOutlined />
             </button>
             {sessions !== undefined && (
               <button
@@ -183,7 +215,7 @@ export function AppShell({
                 aria-expanded={searchOpen}
                 title="搜索会话"
               >
-                <IconSearch size={16} />
+                <SearchOutlined />
               </button>
             )}
           </div>
@@ -191,7 +223,7 @@ export function AppShell({
 
         {sessions !== undefined && !collapsed && searchOpen && (
           <div className="wb-search">
-            <IconSearch size={14} />
+            <SearchOutlined />
             <input
               id="wb-session-search"
               ref={searchRef}
@@ -213,44 +245,26 @@ export function AppShell({
             aria-label="新建任务"
             title="新建任务"
           >
-            <IconPlus size={16} />
+            <PlusOutlined />
             {!collapsed && <span>新建任务</span>}
           </button>
         ) : (
           <Link className="wb-new-task" href="/" aria-label="新建任务" title="新建任务">
-            <IconPlus size={16} />
+            <PlusOutlined />
             {!collapsed && <span>新建任务</span>}
           </Link>
         )}
 
-        <nav className="wb-nav" aria-label="主导航">
-          {NAV.map(({ key, href, label, icon: Icon }) => (
-            <Link
-              key={key}
-              href={href}
-              className={`wb-nav-item${active === key ? ' active' : ''}`}
-              aria-current={active === key ? 'page' : undefined}
-              aria-label={label}
-              title={label}
-            >
-              <Icon size={16} />
-              {!collapsed && <span>{label}</span>}
-            </Link>
-          ))}
-          {role === 'admin' && ADMIN_URL && (
-            <a
-              className="wb-nav-item"
-              href={ADMIN_URL}
-              target="_blank"
-              rel="noreferrer"
-              aria-label="运营平台"
-              title="运营平台"
-            >
-              <IconGrid size={16} />
-              {!collapsed && <span>运营平台</span>}
-            </a>
-          )}
-        </nav>
+        <Menu
+          className="wb-nav-menu"
+          mode="inline"
+          inlineCollapsed={collapsed}
+          selectedKeys={[active]}
+          aria-label="主导航"
+          items={menuItems}
+          onClick={({ key }) => onMenuClick(key)}
+          style={{ background: 'transparent', borderInlineEnd: 'none' }}
+        />
 
         {sessions !== undefined && !collapsed && (
           <div className="wb-recent">
@@ -299,11 +313,11 @@ export function AppShell({
             aria-label="退出登录"
             title="退出登录"
           >
-            <IconLogout size={16} />
+            <LogoutOutlined />
           </button>
         </div>
-      </aside>
-      <main className="main wb-main">{children}</main>
-    </div>
+      </Layout.Sider>
+      <Layout.Content className="main wb-main">{children}</Layout.Content>
+    </Layout>
   );
 }

@@ -2,31 +2,40 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { Alert, Button, Form, Input } from 'antd';
 import { IconSpark } from '../../components/icons';
 import { authErrorMessage, login, register } from '../../lib/api';
 
+interface LoginValues {
+  email: string;
+  password: string;
+}
+
 export default function LoginPage() {
   const router = useRouter();
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
+  const [form] = Form.useForm<LoginValues>();
   const [mode, setMode] = useState<'login' | 'register'>('login');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
+  async function submit(values: LoginValues) {
     if (busy) return;
     setError('');
     setBusy(true);
     try {
-      if (mode === 'login') await login(email, password);
-      else await register(email, password);
+      if (mode === 'login') await login(values.email, values.password);
+      else await register(values.email, values.password);
       router.push('/');
     } catch (err) {
       setError(authErrorMessage(err));
     } finally {
       setBusy(false);
     }
+  }
+
+  function switchMode() {
+    setMode(mode === 'login' ? 'register' : 'login');
+    setError('');
   }
 
   return (
@@ -82,58 +91,63 @@ export default function LoginPage() {
             {mode === 'login' ? '登录后，把工作交给智能体' : '注册后即可开始你的第一个智能任务'}
           </p>
 
-          <form className="login-form" onSubmit={submit}>
-            <div className="field">
-              <label className="field-label" htmlFor="email">
-                邮箱
-              </label>
-              <input
-                id="email"
-                className="input"
+          <Form<LoginValues>
+            form={form}
+            layout="vertical"
+            requiredMark={false}
+            className="login-form"
+            disabled={busy}
+            onFinish={(values) => void submit(values)}
+          >
+            <Form.Item
+              label="邮箱"
+              name="email"
+              rules={[
+                { required: true, message: '请输入邮箱地址' },
+                { type: 'email', message: '邮箱格式不正确' },
+              ]}
+            >
+              <Input
                 type="email"
-                required
+                size="large"
                 autoComplete="email"
                 placeholder="请输入邮箱地址"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
               />
-            </div>
-            <div className="field">
-              <label className="field-label" htmlFor="password">
-                密码
-              </label>
-              <input
-                id="password"
-                className="input"
-                type="password"
-                required
+            </Form.Item>
+            <Form.Item
+              label="密码"
+              name="password"
+              rules={[{ required: true, message: '请输入密码' }]}
+            >
+              <Input.Password
+                size="large"
                 autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
                 placeholder="请输入密码"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
               />
-            </div>
-            {error && (
-              <div className="banner banner-error login-error" role="alert">
-                {error}
-              </div>
-            )}
-            <button type="submit" className="btn btn-mint" disabled={busy}>
+            </Form.Item>
+
+            {error ? (
+              <Form.Item>
+                <Alert type="error" showIcon message={error} />
+              </Form.Item>
+            ) : null}
+
+            <Button type="primary" htmlType="submit" size="large" block loading={busy}>
               {busy ? '请稍候…' : mode === 'login' ? '登录' : '注册'}
-            </button>
-          </form>
+            </Button>
+          </Form>
 
           <div className="login-switch">
             {mode === 'login' ? '还没有账号？' : '已有账号？'}
-            <button
-              type="button"
-              onClick={() => {
-                setMode(mode === 'login' ? 'register' : 'login');
-                setError('');
-              }}
+            <Button
+              type="link"
+              size="small"
+              disabled={busy}
+              onClick={switchMode}
+              style={{ paddingInline: 4 }}
             >
               {mode === 'login' ? '立即注册' : '去登录'}
-            </button>
+            </Button>
           </div>
 
           <p className="login-legal">

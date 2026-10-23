@@ -10,12 +10,24 @@ import type {
   ClientModelsDto,
   ConnectorDto,
   CreditLedgerPageDto,
+  KbBaseDto,
+  KbBaseInput,
+  KbBasePatch,
+  KbDeleteResultDto,
   KbDocDto,
   PlanDto,
   SessionSummary,
   UsageAggregateDto,
 } from '@ai-office/shared';
-import { BFF_URL, authFetch, clearToken, getToken, newRequestId, newTraceparent } from '@ai-office/web-core';
+import {
+  BFF_URL,
+  authFetch,
+  clearToken,
+  errorText,
+  getToken,
+  newRequestId,
+  newTraceparent,
+} from '@ai-office/web-core';
 
 // 认证与请求基础设施由 @ai-office/web-core 提供，这里 re-export 保持既有页面 import 不变。
 export {
@@ -172,14 +184,83 @@ export async function downloadArtifact(id: string, filename: string): Promise<vo
   setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
-export async function listKbDocs(): Promise<KbDocDto[]> {
-  const res = await authFetch('/api/kb/docs');
+// ------------------------------------------------------------------ 知识库
+// 服务端把业务码放在 error 字段（如 kb_base_exists），拼进错误消息供页面映射文案。
+
+async function failureCode(res: Response, prefix: string): Promise<Error> {
+  let code = '';
+  try {
+    const body = (await res.json()) as { error?: unknown; message?: unknown };
+    if (typeof body.error === 'string') code = body.error;
+    else if (typeof body.message === 'string') code = body.message;
+  } catch {
+    // 错误体不一定是 JSON。
+  }
+  return new Error(`${prefix}_${res.status}${code ? `_${code}` : ''}`);
+}
+
+/** 知识库相关的错误码映射；未知错误交回通用文案。 */
+export function kbErrorText(err: unknown, fallback: (e: unknown) => string): string {
+  const msg = err instanceof Error ? err.message : String(err);
+  const map: Record<string, string> = {
+    kb_base_not_found: '知识库不存在或已被删除',
+    kb_doc_not_found: '文档不存在或已被删除',
+    kb_base_exists: '已存在同名知识库，请换个名称',
+    invalid_kb_name: '知识库名称不能为空且不超过 60 字',
+    invalid_kb_base_patch: '没有需要保存的修改',
+    unsupported_type: '不支持的文件类型',
+    file_too_large: '文件过大，请压缩后重试',
+    missing_file: '请选择要上传的文件',
+  };
+  for (const [code, text] of Object.entries(map)) {
+    if (msg.endsWith(`_${code}`)) return text;
+  }
+  // 未知业务码：截掉业务码后缀，交给通用文案按 HTTP 状态归类，避免把内部 code 直接展示给用户。
+  const status = msg.match(/_(4\d\d|5\d\d)(?:_|$)/);
+  if (status?.index !== undefined) {
+    return errorText(new Error(msg.slice(0, status.index + status[1].length + 1)));
+  }
+  return fallback(err);
+}
+
+export async function listKbBases(): Promise<KbBaseDto[]> {
+  const res = await authFetch('/api/kb/bases');
   if (!res.ok) throw new Error(`kb_list_failed_${res.status}`);
+  return (await res.json()) as KbBaseDto[];
+}
+
+export async function createKbBase(input: KbBaseInput): Promise<KbBaseDto> {
+  const res = await authFetch('/api/kb/bases', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) throw await failureCode(res, 'kb_create_failed');
+  return (await res.json()) as KbBaseDto;
+}
+
+export async function updateKbBase(id: string, patch: KbBasePatch): Promise<KbBaseDto> {
+  const res = await authFetch(`/api/kb/bases/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) throw await failureCode(res, 'kb_update_failed');
+  return (await res.json()) as KbBaseDto;
+}
+
+export async function deleteKbBase(id: string): Promise<KbDeleteResultDto> {
+  const res = await authFetch(`/api/kb/bases/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  if (!res.ok) throw await failureCode(res, 'kb_delete_failed');
+  return (await res.json()) as KbDeleteResultDto;
+}
+
+export async function listKbBaseDocs(baseId: string): Promise<KbDocDto[]> {
+  const res = await authFetch(`/api/kb/bases/${encodeURIComponent(baseId)}/docs`);
+  if (!res.ok) throw await failureCode(res, 'kb_list_failed');
   return (await res.json()) as KbDocDto[];
 }
 
 /** 上传知识库文档。用 FormData：**不能**设 content-type，否则 boundary 丢失（故不走 authFetch 的默认头）。 */
-export async function uploadKbDoc(file: File): Promise<KbDocDto> {
+export async function uploadKbBaseDoc(baseId: string, file: File): Promise<KbDocDto> {
   const token = getToken();
   const form = new FormData();
   form.append('file', file);
@@ -188,7 +269,7 @@ export async function uploadKbDoc(file: File): Promise<KbDocDto> {
     'x-request-id': newRequestId(),
   };
   if (token) headers.authorization = `Bearer ${token}`;
-  const res = await fetch(`${BFF_URL}/api/kb/docs`, {
+  const res = await fetch(`${BFF_URL}/api/kb/bases/${encodeURIComponent(baseId)}/docs`, {
     method: 'POST',
     headers,
     body: form,
@@ -197,13 +278,20 @@ export async function uploadKbDoc(file: File): Promise<KbDocDto> {
     clearToken();
     throw new Error('unauthorized');
   }
-  if (!res.ok) throw new Error(`kb_upload_failed_${res.status}`);
+  if (!res.ok) throw await failureCode(res, 'kb_upload_failed');
   return (await res.json()) as KbDocDto;
 }
 
-export async function deleteKbDoc(id: string): Promise<void> {
-  const res = await authFetch(`/api/kb/docs/${id}`, { method: 'DELETE' });
-  if (!res.ok) throw new Error(`kb_delete_failed_${res.status}`);
+export async function deleteKbBaseDoc(
+  baseId: string,
+  docId: string,
+): Promise<KbDeleteResultDto> {
+  const res = await authFetch(
+    `/api/kb/bases/${encodeURIComponent(baseId)}/docs/${encodeURIComponent(docId)}`,
+    { method: 'DELETE' },
+  );
+  if (!res.ok) throw await failureCode(res, 'kb_delete_failed');
+  return (await res.json()) as KbDeleteResultDto;
 }
 
 export async function listConnectors(): Promise<ConnectorDto[]> {

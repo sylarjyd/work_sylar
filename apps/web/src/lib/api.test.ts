@@ -65,13 +65,14 @@ describe('authErrorMessage', () => {
   });
 });
 
-describe('uploadKbDoc', () => {
-  it('uploadKbDoc 用 FormData 且不覆盖 content-type', async () => {
+describe('知识库 api', () => {
+  it('uploadKbBaseDoc 用 FormData 且不覆盖 content-type', async () => {
     const fetchMock = vi.fn(
       async () =>
         new Response(
           JSON.stringify({
             id: 'd1',
+            knowledgeBaseId: 'b1',
             filename: 'a.txt',
             mime: 'text/plain',
             size: 1,
@@ -89,17 +90,57 @@ describe('uploadKbDoc', () => {
       localStorage: { getItem: () => 'tok', setItem: () => {}, removeItem: () => {} },
     });
 
-    const { uploadKbDoc } = await import('./api');
-    await uploadKbDoc(new File(['x'], 'a.txt', { type: 'text/plain' }));
+    const { uploadKbBaseDoc } = await import('./api');
+    const doc = await uploadKbBaseDoc('b1', new File(['x'], 'a.txt', { type: 'text/plain' }));
+    expect(doc.knowledgeBaseId).toBe('b1');
 
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-    expect(String(url)).toContain('/api/kb/docs');
+    expect(String(url)).toContain('/api/kb/bases/b1/docs');
     expect(init.body).toBeInstanceOf(FormData);
     const headers = (init.headers ?? {}) as Record<string, string>;
     expect(headers['content-type']).toBeUndefined();
     expect(headers.authorization).toBe('Bearer tok');
     expect(headers.traceparent).toMatch(/^00-[0-9a-f]{32}-[0-9a-f]{16}-01$/);
     expect(headers['x-request-id']).toMatch(/^[A-Za-z0-9-]{1,64}$/);
+  });
+
+  it('createKbBase 把服务端业务码拼进错误消息，供 kbErrorText 映射', async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ error: 'kb_base_exists' }), {
+          status: 409,
+          headers: { 'content-type': 'application/json' },
+        }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    vi.stubGlobal('window', {
+      localStorage: { getItem: () => 'tok', setItem: () => {}, removeItem: () => {} },
+    });
+
+    const { createKbBase, kbErrorText } = await import('./api');
+    const err = await createKbBase({ name: '重复库' }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toContain('kb_base_exists');
+    expect(kbErrorText(err, () => '兜底')).toBe('已存在同名知识库，请换个名称');
+  });
+
+  it('deleteKbBaseDoc 走基库作用域路由并返回清理计数', async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ deletedDocs: 0, cleanupFailed: 1 }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { deleteKbBaseDoc } = await import('./api');
+    const result = await deleteKbBaseDoc('b1', 'd1');
+    expect(result).toEqual({ deletedDocs: 0, cleanupFailed: 1 });
+
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(String(url)).toContain('/api/kb/bases/b1/docs/d1');
+    expect(init.method).toBe('DELETE');
   });
 });
 
