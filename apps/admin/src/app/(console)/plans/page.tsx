@@ -2,10 +2,16 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import type { AdminPlanDto, AdminPlanInput, AdminPlanPatch } from '@ai-office/shared';
+import type {
+  AdminModelDto,
+  AdminPlanDto,
+  AdminPlanInput,
+  AdminPlanPatch,
+} from '@ai-office/shared';
 import {
   adminErrorText,
   createAdminPlan,
+  getAdminModels,
   isForbidden,
   listAdminPlans,
   updateAdminPlan,
@@ -28,7 +34,8 @@ export default function AdminPlansPage() {
   const router = useRouter();
   const [plans, setPlans] = useState<AdminPlanDto[]>([]);
   const [form, setForm] = useState<AdminPlanInput>(EMPTY);
-  const [modelsText, setModelsText] = useState('');
+  const [catalog, setCatalog] = useState<AdminModelDto[]>([]);
+  const [catalogError, setCatalogError] = useState('');
   const [editing, setEditing] = useState<string | null>(null);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -80,6 +87,21 @@ export default function AdminPlansPage() {
     void load();
   }, [load]);
 
+  // 模型目录用于勾选允许模型；停用模型仍展示，避免历史套餐丢失引用。
+  useEffect(() => {
+    let cancelled = false;
+    getAdminModels()
+      .then((data) => {
+        if (!cancelled) setCatalog(data.models);
+      })
+      .catch((err) => {
+        if (!cancelled) setCatalogError(adminErrorText(err));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const inFlight = useRef(false);
   const [busy, setBusy] = useState(false);
 
@@ -96,13 +118,11 @@ export default function AdminPlansPage() {
       allowedModels: plan.allowedModels,
       active: plan.active,
     });
-    setModelsText(plan.allowedModels.join(','));
   }
 
   function resetForm() {
     setEditing(null);
     setForm(EMPTY);
-    setModelsText('');
   }
 
   async function save() {
@@ -111,10 +131,14 @@ export default function AdminPlansPage() {
     setNotice('');
     const payload: AdminPlanInput = {
       ...form,
-      allowedModels: modelsText.split(',').map((m) => m.trim()).filter(Boolean),
+      allowedModels: form.allowedModels,
     };
     if (!payload.name.trim()) {
       setError('套餐名称不能为空');
+      return;
+    }
+    if (payload.allowedModels.length === 0) {
+      setError('请至少选择一个允许模型');
       return;
     }
     const verb = editing ? '保存修改' : '创建套餐';
@@ -235,10 +259,46 @@ export default function AdminPlansPage() {
               RPM
               <input className="admin-input" type="number" min={0} step={1} value={form.rpm} disabled={busy} onChange={(e) => setForm({ ...form, rpm: Number(e.target.value) })} />
             </label>
-            <label className="admin-field">
-              允许模型（逗号分隔）
-              <input className="admin-input" value={modelsText} disabled={busy} onChange={(e) => setModelsText(e.target.value)} />
-            </label>
+            <div className="admin-field" style={{ minWidth: 280 }}>
+              允许模型
+              {catalogError && <span className="banner-error">{catalogError}</span>}
+              <div className="admin-checks">
+                {[
+                  ...catalog,
+                  ...form.allowedModels
+                    .filter((m) => !catalog.some((c) => c.model === m))
+                    .map((model) => ({
+                      model,
+                      displayName: model,
+                      enabled: false,
+                      providerName: null,
+                    })),
+                ].map((m) => {
+                  const checked = form.allowedModels.includes(m.model);
+                  return (
+                    <label className="admin-check" key={m.model}>
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        disabled={busy}
+                        onChange={(e) =>
+                          setForm({
+                            ...form,
+                            allowedModels: e.target.checked
+                              ? [...form.allowedModels, m.model]
+                              : form.allowedModels.filter((x) => x !== m.model),
+                          })
+                        }
+                      />
+                      <span>
+                        {m.displayName || m.model}
+                        {!m.enabled ? '（已停用）' : ''}
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
             <label className="admin-field">
               启用
               <input type="checkbox" checked={form.active} disabled={busy} onChange={(e) => setForm({ ...form, active: e.target.checked })} />

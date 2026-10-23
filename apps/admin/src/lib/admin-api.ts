@@ -9,10 +9,12 @@ import type {
   AdminMetricDimensionType,
   AdminMetricGranularity,
   AdminMetricTimeseriesDto,
+  AdminModelDto,
+  AdminModelProviderDto,
   AdminModelsDto,
+  AdminModelTestResultDto,
   AdminOverviewDto,
   AdminOverviewRange,
-  AdminModelPriceDto,
   AdminPlanDto,
   AdminPlanInput,
   AdminPlanPatch,
@@ -75,13 +77,33 @@ export function adminErrorText(err: unknown): string {
     'admin_failed_400_last_admin': '系统必须保留至少一个启用的管理员',
     'admin_failed_400_free_not_deactivatable': '免费套餐不可停用',
     'admin_failed_400_model_price_missing': '套餐中的模型必须先配置价格',
-    'admin_failed_400_model_in_use': '模型正被启用套餐引用，无法删除',
+    'admin_failed_400_provider_has_models': '该厂商下仍有模型，请先删除模型',
+    'admin_failed_400_default_model_in_use': '当前默认模型不能停用或删除，请先更换默认模型',
+    'admin_failed_400_model_in_use': '模型正被启用套餐或有效订阅引用，无法删除',
+    'admin_failed_400_provider_required': '必须选择厂商',
+    'admin_failed_400_invalid_default_model': '默认模型必须存在且已启用',
+    'admin_failed_400_invalid_model': '模型名不能为空',
+    'admin_failed_400_invalid_base_url': 'Base URL 必须是合法的 http/https 地址',
+    'admin_failed_400_invalid_api_key': 'API Key 不能为空',
+    'admin_failed_400_invalid_display_name': '展示名称不合法',
+    'admin_failed_400_invalid_sort_order': '排序必须是非负整数',
+    'admin_failed_400_invalid_price': '价格必须是非负整数',
+    'admin_failed_400_invalid_provider_id': '厂商 ID 不能为空',
+    'admin_failed_400_invalid_enabled': '启用状态必须是布尔值',
+    'admin_failed_400_invalid_provider_name': '厂商名称不能为空',
+    'admin_failed_400_invalid_provider_patch': '没有需要更新的厂商字段',
+    'admin_failed_400_invalid_model_patch': '没有需要更新的模型字段',
+    'admin_failed_400_no_models_available': '当前没有可用模型',
     'admin_failed_400_invalid_plan_id': '套餐标识不合法（仅支持小写字母、数字与连字符）',
     'admin_failed_400_invalid_name': '套餐名称不能为空',
     'admin_failed_400_invalid_allowedModels': '允许模型不能为空',
     'admin_failed_400_invalid_priceCents': '价格必须是非负整数',
     'admin_failed_409_plan_exists': '套餐标识已存在，请更换标识',
-    'admin_failed_409_model_exists': '该模型价格已存在',
+    'admin_failed_409_provider_exists': '该厂商名称已存在',
+    'admin_failed_409_model_exists': '该模型已存在',
+    'admin_failed_404_provider_not_found': '厂商不存在',
+    'admin_failed_404_model_not_found': '模型不存在',
+    'admin_failed_503_model_provider_unavailable': '厂商密钥无法解密，请联系运维检查 MODEL_ENC_KEY',
     'admin_failed_404_setting_not_found': '参数不存在',
     'admin_failed_400_invalid_kbChunkOverlap': '分块重叠必须小于分块大小',
     'admin_failed_400_invalid_kbChunkSize': '分块大小必须大于分块重叠',
@@ -218,26 +240,65 @@ export function getAdminModels(): Promise<AdminModelsDto> {
   return request('/api/admin/models');
 }
 
-export function createModelPrice(body: {
-  model: string;
-  inputMilliCreditsPer1k: number;
-  outputMilliCreditsPer1k: number;
-}): Promise<AdminModelPriceDto> {
-  return request('/api/admin/model-prices', { method: 'POST', body: JSON.stringify(body) });
+export function createModelProvider(input: {
+  name: string;
+  baseUrl: string;
+  apiKey: string;
+}): Promise<AdminModelProviderDto> {
+  return request('/api/admin/model-providers', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
 }
 
-export function updateModelPrice(
-  model: string,
-  patch: { inputMilliCreditsPer1k?: number; outputMilliCreditsPer1k?: number },
-): Promise<AdminModelPriceDto> {
-  return request(`/api/admin/model-prices/${encodeURIComponent(model)}`, {
+export function updateModelProvider(
+  id: string,
+  patch: { name?: string; baseUrl?: string; apiKey?: string },
+): Promise<AdminModelProviderDto> {
+  return request(`/api/admin/model-providers/${encodeURIComponent(id)}`, {
     method: 'PATCH',
     body: JSON.stringify(patch),
   });
 }
 
-export function deleteModelPrice(model: string): Promise<void> {
-  return request(`/api/admin/model-prices/${encodeURIComponent(model)}`, { method: 'DELETE' });
+export function deleteModelProvider(id: string): Promise<void> {
+  return request(`/api/admin/model-providers/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  });
+}
+
+export function createAdminModel(input: {
+  model: string;
+  displayName?: string;
+  providerId: string;
+  enabled?: boolean;
+  sortOrder?: number;
+  prices: { inputMilliCreditsPer1k: number; outputMilliCreditsPer1k: number };
+}): Promise<AdminModelDto> {
+  return request('/api/admin/models', { method: 'POST', body: JSON.stringify(input) });
+}
+
+export function updateAdminModel(input: {
+  model: string;
+  displayName?: string | null;
+  providerId?: string;
+  enabled?: boolean;
+  sortOrder?: number;
+  prices?: { inputMilliCreditsPer1k: number; outputMilliCreditsPer1k: number };
+}): Promise<AdminModelDto> {
+  return request('/api/admin/models', { method: 'PATCH', body: JSON.stringify(input) });
+}
+
+export function deleteAdminModel(model: string): Promise<void> {
+  return request(`/api/admin/models?model=${encodeURIComponent(model)}`, { method: 'DELETE' });
+}
+
+export function testAdminModel(model: string): Promise<AdminModelTestResultDto> {
+  return request('/api/admin/models/test', { method: 'POST', body: JSON.stringify({ model }) });
+}
+
+export function setDefaultModel(model: string): Promise<AdminModelsDto> {
+  return request('/api/admin/default-model', { method: 'PUT', body: JSON.stringify({ model }) });
 }
 
 // ------------------------------------------------------------------ 参数 / 审计

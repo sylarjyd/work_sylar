@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   adminErrorText,
-  createModelPrice,
+  createModelProvider,
   getAdminMetricTimeseries,
   getAdminOverview,
   getAdminRunTimeline,
@@ -12,7 +12,8 @@ import {
   resetAdminSetting,
   sendAdminAlertTest,
   updateAdminAlertRule,
-  updateModelPrice,
+  updateAdminModel,
+  updateModelProvider,
 } from './admin-api';
 
 afterEach(() => vi.unstubAllGlobals());
@@ -74,18 +75,18 @@ describe('admin-api', () => {
       vi.fn(
         async () =>
           new Response(
-            JSON.stringify({ statusCode: 409, message: 'model_exists', error: 'Conflict' }),
+            JSON.stringify({ statusCode: 409, message: 'provider_exists', error: 'Conflict' }),
             { status: 409, headers: { 'content-type': 'application/json' } },
           ),
       ),
     );
-    const err = await createModelPrice({
-      model: 'gpt-test',
-      inputMilliCreditsPer1k: 1,
-      outputMilliCreditsPer1k: 2,
+    const err = await createModelProvider({
+      name: '豆包',
+      baseUrl: 'https://x/v1',
+      apiKey: 'k',
     }).catch((e) => e);
-    expect(err.message).toBe('admin_failed_409_model_exists');
-    expect(adminErrorText(err)).toBe('该模型价格已存在');
+    expect(err.message).toBe('admin_failed_409_provider_exists');
+    expect(adminErrorText(err)).toBe('该厂商名称已存在');
   });
 
   it('204 无响应体时返回 undefined', async () => {
@@ -98,19 +99,22 @@ describe('admin-api', () => {
     expect(init.method).toBe('DELETE');
   });
 
-  it('路径参数做 URL 编码', async () => {
+  it('厂商路径参数做 URL 编码，模型名走请求体', async () => {
     stubWindow();
     const fetchMock = vi.fn(
       async () =>
-        new Response(JSON.stringify({ ok: true }), {
+        new Response(JSON.stringify({ model: 'm/s p' }), {
           status: 200,
           headers: { 'content-type': 'application/json' },
         }),
     );
     vi.stubGlobal('fetch', fetchMock);
-    await updateModelPrice('m/s p', { inputMilliCreditsPer1k: 1 });
-    const [url] = fetchMock.mock.calls[0] as unknown as [string];
-    expect(String(url)).toContain('/api/admin/model-prices/m%2Fs%20p');
+    await updateModelProvider('p/1', { name: 'x' });
+    await updateAdminModel({ model: 'm/s p', enabled: true });
+    const calls = fetchMock.mock.calls as unknown as Array<[string, RequestInit]>;
+    expect(String(calls[0][0])).toContain('/api/admin/model-providers/p%2F1');
+    expect(String(calls[1][0])).toContain('/api/admin/models');
+    expect(JSON.parse(String(calls[1][1].body))).toEqual({ model: 'm/s p', enabled: true });
   });
 
   it('错误码可读文案', () => {
