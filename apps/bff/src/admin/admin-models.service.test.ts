@@ -14,6 +14,7 @@ beforeEach(() => {
   process.env.MODEL_ENC_KEY = KEY;
   delete process.env.MODEL_PROVIDERS;
   delete process.env.DEEPSEEK_API_KEY;
+  delete process.env.MODEL_ALLOW_PRIVATE_BASE_URL;
 });
 
 afterEach(() => {
@@ -48,7 +49,14 @@ interface FakeModel {
   updatedAt: Date;
 }
 
-function makeService(opts: { planInUse?: boolean; subInUse?: boolean } = {}) {
+function makeService(
+  opts: {
+    planInUse?: boolean;
+    subInUse?: boolean;
+    allowPrivate?: boolean;
+    resolver?: (hostname: string) => Promise<string[]>;
+  } = {},
+) {
   const providers = new Map<string, FakeProvider>();
   providers.set('p1', {
     id: 'p1',
@@ -184,7 +192,21 @@ function makeService(opts: { planInUse?: boolean; subInUse?: boolean } = {}) {
       audits.push(entry);
     },
   } as unknown as AuditService;
-  return { svc: new AdminModelsService(db, audit), audits, providers, models, getDefault: () => defaultModel };
+  const urlOptions = {
+    env: {
+      ...process.env,
+      ...(opts.allowPrivate ? { MODEL_ALLOW_PRIVATE_BASE_URL: '1' } : {}),
+    },
+    // 默认把所有域名解析成公网地址，避免单测依赖真实 DNS。
+    resolveHosts: opts.resolver ?? (async () => ['93.184.216.34']),
+  };
+  return {
+    svc: new AdminModelsService(db, audit, urlOptions),
+    audits,
+    providers,
+    models,
+    getDefault: () => defaultModel,
+  };
 }
 
 describe('AdminModelsService', () => {
@@ -218,6 +240,59 @@ describe('AdminModelsService', () => {
     await expect(
       svc.createProvider({ name: '豆包', baseUrl: 'https://x/v1', apiKey: 'sk' }, actor),
     ).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it('默认拒绝回环、内网与链路本地厂商地址', async () => {
+    const { svc } = makeService();
+    for (const baseUrl of [
+      'http://127.0.0.1:11434/v1',
+      'http://localhost:11434/v1',
+      'https://10.1.2.3/v1',
+      'http://169.254.169.254/latest',
+      'http://[::1]:11434/v1',
+    ]) {
+      await expect(
+        svc.createProvider({ name: `p-${baseUrl}`, baseUrl, apiKey: 'sk-x-1234' }, actor),
+      ).rejects.toMatchObject({ message: 'provider_url_blocked' });
+    }
+  });
+
+  it('域名解析到内网地址同样拒绝，开启内网开关后才放行', async () => {
+    const { svc } = makeService({ resolver: async () => ['10.0.0.8'] });
+    await expect(
+      svc.createProvider(
+        { name: '内网域名', baseUrl: 'https://models.internal.example/v1', apiKey: 'sk-x-1234' },
+        actor,
+      ),
+    ).rejects.toMatchObject({ message: 'provider_url_blocked' });
+
+    const allowed = makeService({
+      allowPrivate: true,
+      resolver: async () => ['10.0.0.8'],
+    });
+    const created = await allowed.svc.createProvider(
+      { name: '内网域名', baseUrl: 'http://127.0.0.1:11434/v1', apiKey: 'sk-local-1234' },
+      actor,
+    );
+    expect(created.baseUrl).toBe('http://127.0.0.1:11434/v1');
+  });
+
+  it('即使开启内网开关也拒绝云元数据地址', async () => {
+    const { svc } = makeService({ allowPrivate: true });
+    await expect(
+      svc.createProvider(
+        { name: '元数据', baseUrl: 'http://169.254.169.254/latest', apiKey: 'sk-x-1234' },
+        actor,
+      ),
+    ).rejects.toMatchObject({ message: 'provider_url_blocked' });
+  });
+
+  it('连通性测试会复核库中地址，直接改库也绕不过策略', async () => {
+    const { svc, providers } = makeService();
+    providers.get('p1')!.baseUrl = 'http://127.0.0.1:9/v1';
+    await expect(svc.testModel({ model: 'm1' }, actor)).rejects.toMatchObject({
+      message: 'provider_url_blocked',
+    });
   });
 
   it('厂商仍有模型时拒绝删除', async () => {

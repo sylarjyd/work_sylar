@@ -5,6 +5,7 @@ import { BillingService } from '../billing/billing.service';
 import { decryptSecret } from '../secrets/secret-box';
 import { DEFAULT_MODEL_SETTING_KEY, MODEL_ENC_KEY } from './model.constants';
 import { resolveEnvModelProviders } from './env-providers';
+import { isStoredProviderUrlAllowed } from './provider-url';
 import {
   ModelPlanExpiredError,
   ModelProviderUnavailableError,
@@ -89,9 +90,11 @@ export class ModelCatalogService {
     const keyCache = new Map<string, string>();
     // 同一厂商的密钥只需失败一次：其余回退模型直接跳过，避免重复解密与日志噪声。
     const failedProviders = new Set<string>();
+    const blockedProviders = new Set<string>();
     for (const entry of ordered) {
       if (entry.source.kind === 'mock') continue;
       if (entry.source.kind === 'env') {
+        if (!this.ensureUrlAllowed(entry.model, entry.source.baseUrl, selected)) continue;
         routes.push({
           model: entry.model,
           baseUrl: entry.source.baseUrl,
@@ -100,6 +103,12 @@ export class ModelCatalogService {
         continue;
       }
       const { providerId } = entry.source;
+      if (blockedProviders.has(providerId)) continue;
+      // 运行期做同步复核：库里的地址本应在写入时通过校验，防止被直接改库后绕过。
+      if (!this.ensureUrlAllowed(entry.model, entry.source.baseUrl, selected)) {
+        blockedProviders.add(providerId);
+        continue;
+      }
       if (failedProviders.has(providerId)) continue;
       try {
         let apiKey = keyCache.get(providerId);
@@ -119,6 +128,14 @@ export class ModelCatalogService {
       }
     }
     return { selectedModel: selected, modelRoutes: routes };
+  }
+
+  /** 地址被安全策略拒绝时跳过该模型；选中的模型不可用则整体失败，避免静默换厂商。 */
+  private ensureUrlAllowed(model: string, baseUrl: string, selected: string): boolean {
+    if (isStoredProviderUrlAllowed(baseUrl)) return true;
+    this.logger.warn(`跳过模型 ${model}：厂商地址命中安全策略`);
+    if (model === selected) throw new ModelProviderUnavailableError();
+    return false;
   }
 
   private async loadDb(allowed: string[]): Promise<AvailableModel[]> {

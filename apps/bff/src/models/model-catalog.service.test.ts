@@ -22,6 +22,7 @@ beforeEach(() => {
   delete process.env.ENV_KEY;
   delete process.env.MODEL_NAME;
   delete process.env.MODEL_BASE_URL;
+  delete process.env.MODEL_ALLOW_PRIVATE_BASE_URL;
 });
 
 function makeService(opts: {
@@ -246,6 +247,28 @@ describe('ModelCatalogService', () => {
     });
     const out = await fallbackBroken.resolveForRun('t1', 'm2');
     expect(out.selectedModel).toBe('m2');
+    expect(out.modelRoutes).toEqual([
+      { model: 'm2', baseUrl: 'https://ark.example/v3', apiKey: 'sk-ark' },
+    ]);
+  });
+
+  it('库中厂商地址命中安全策略：选中模型失败，回退模型只跳过该路由', async () => {
+    const metadata = { ...dbProvider, baseUrl: 'http://169.254.169.254/latest' };
+    const selected = makeService({
+      providers: [metadata],
+      models: [dbModels[0]],
+      allowed: ['m2'],
+    });
+    await expect(selected.resolveForRun('t1', 'm2')).rejects.toBeInstanceOf(
+      ModelProviderUnavailableError,
+    );
+
+    const blockedFallback = makeService({
+      providers: [dbProvider, { ...metadata, id: 'p2' }],
+      models: [dbModels[0], { ...dbModels[2], providerId: 'p2' }],
+      allowed: ['m2', 'm3'],
+    });
+    const out = await blockedFallback.resolveForRun('t1', 'm2');
     expect(out.modelRoutes).toEqual([
       { model: 'm2', baseUrl: 'https://ark.example/v3', apiKey: 'sk-ark' },
     ]);

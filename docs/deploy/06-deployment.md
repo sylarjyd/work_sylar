@@ -107,6 +107,7 @@ flowchart LR
 | `KB_MAX_FILE_BYTES` | `10485760` | 按业务与存储配额调整 |
 | `CONNECTOR_ENC_KEY` | 空 | **必须设置**（32 字节 hex）；MCP Server 的 env 加解密密钥，缺失时 BFF 启动失败 |
 | `MODEL_ENC_KEY` | 空 | **必须设置**（32 字节 hex）；运营平台模型厂商 API Key 的加解密密钥，缺失时 BFF 启动失败；与 `CONNECTOR_ENC_KEY` 分开轮换 |
+| `MODEL_ALLOW_PRIVATE_BASE_URL` | 空 | 允许厂商 Base URL 指向回环/内网地址（默认禁止，防 SSRF）；内网部署 Ollama、vLLM 等模型服务时设为 `1`。链路本地与云元数据地址（如 `169.254.169.254`）始终拒绝 |
 | `MCP_HEARTBEAT_MS` | `30000` | MCP 子进程心跳间隔 |
 | `MCP_BACKOFF_BASE_MS` / `MCP_BACKOFF_MAX_MS` | `1000` / `30000` | MCP 子进程崩溃退避重拉 |
 | `MCP_INIT_TIMEOUT_MS` | `10000` | MCP `initialize` / 校验握手超时 |
@@ -453,6 +454,7 @@ curl -s http://localhost:4000/api/billing/summary -H "authorization: Bearer $TOK
 | `BILLING_SWEEP_MS` | 补偿扫描间隔（毫秒），默认 60000；`<=0` 或非数字会**完全禁用**补偿扫描（不会夹到下限）。禁用后 pending 用量不会自动结算、预占不会释放、过期批次不会清理；**生产禁止设为 0** |
 
 > 生产环境优先在运营平台「模型配置」里维护厂商与模型；`.env` 中的 `DEEPSEEK_API_KEY` / `MODEL_PROVIDERS` 仅作为未配置数据库厂商时的兜底。
+> 厂商 Base URL 默认不允许回环与内网地址；模型服务部署在内网时，需显式设置 `MODEL_ALLOW_PRIVATE_BASE_URL=1`。
 
 ### 13.4 运营操作（管理员 JWT）
 

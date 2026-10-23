@@ -4,6 +4,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
@@ -19,6 +20,10 @@ import type { AdminActor } from '../audit/audit.types';
 import { decryptSecret, encryptSecret } from '../secrets/secret-box';
 import { DEFAULT_MODEL_SETTING_KEY, MODEL_ENC_KEY } from '../models/model.constants';
 import { listEnvProviderGroups } from '../models/env-providers';
+import {
+  validateProviderBaseUrl,
+  type ProviderUrlOptions,
+} from '../models/provider-url';
 
 const MAX_INT32 = 2_147_483_647;
 const TEST_TIMEOUT_MS = 10_000;
@@ -57,18 +62,6 @@ function optionalText(raw: unknown, maxLength: number): string | null {
   const value = raw.trim();
   if (value === '') return null;
   if (value.length > maxLength) throw new BadRequestException('invalid_display_name');
-  return value;
-}
-
-function baseUrl(raw: unknown): string {
-  if (typeof raw !== 'string') throw new BadRequestException('invalid_base_url');
-  const value = raw.trim().replace(/\/+$/, '');
-  try {
-    const url = new URL(value);
-    if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('protocol');
-  } catch {
-    throw new BadRequestException('invalid_base_url');
-  }
   return value;
 }
 
@@ -157,6 +150,8 @@ export class AdminModelsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    // 测试可注入 DNS 解析器与环境变量；生产由 Nest 注入 undefined，走默认实现。
+    @Optional() private readonly urlOptions?: ProviderUrlOptions,
   ) {}
 
   async catalog(): Promise<AdminModelsDto> {
@@ -184,7 +179,7 @@ export class AdminModelsService {
     actor: AdminActor,
   ): Promise<AdminModelProviderDto> {
     const name = text(body?.name, 'invalid_provider_name', 64);
-    const url = baseUrl(body?.baseUrl);
+    const url = await validateProviderBaseUrl(body?.baseUrl, this.urlOptions);
     const plain = apiKey(body?.apiKey);
     try {
       const row = await this.prisma.$transaction(async (tx) => {
@@ -222,7 +217,9 @@ export class AdminModelsService {
     const providerId = text(id, 'invalid_provider_id', 64);
     const data: { name?: string; baseUrl?: string; apiKeyEnc?: string; apiKeyHint?: string } = {};
     if (body?.name !== undefined) data.name = text(body.name, 'invalid_provider_name', 64);
-    if (body?.baseUrl !== undefined) data.baseUrl = baseUrl(body.baseUrl);
+    if (body?.baseUrl !== undefined) {
+      data.baseUrl = await validateProviderBaseUrl(body.baseUrl, this.urlOptions);
+    }
     if (body?.apiKey !== undefined) {
       const plain = apiKey(body.apiKey);
       data.apiKeyEnc = encryptSecret(plain, MODEL_ENC_KEY);
@@ -476,6 +473,8 @@ export class AdminModelsService {
       throw new ServiceUnavailableException('model_provider_unavailable');
     }
 
+    // 写入时已校验，这里再复核一次：配置可能被直接改库，或安全策略后来收紧。
+    const baseUrl = await validateProviderBaseUrl(row.provider.baseUrl, this.urlOptions);
     const started = Date.now();
     let ok = false;
     let error: string | undefined;
@@ -483,7 +482,7 @@ export class AdminModelsService {
     const timer = setTimeout(() => controller.abort(), TEST_TIMEOUT_MS);
     timer.unref?.();
     try {
-      const res = await fetch(`${row.provider.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
+      const res = await fetch(`${baseUrl}/chat/completions`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
         body: JSON.stringify({

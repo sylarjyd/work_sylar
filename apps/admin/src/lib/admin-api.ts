@@ -84,6 +84,8 @@ export function adminErrorText(err: unknown): string {
     'admin_failed_400_invalid_default_model': '默认模型必须存在且已启用',
     'admin_failed_400_invalid_model': '模型名不能为空',
     'admin_failed_400_invalid_base_url': 'Base URL 必须是合法的 http/https 地址',
+    'admin_failed_400_provider_url_blocked':
+      '该地址指向本机或内网，当前部署不允许；确需接入内网模型服务请开启 MODEL_ALLOW_PRIVATE_BASE_URL',
     'admin_failed_400_invalid_api_key': 'API Key 不能为空',
     'admin_failed_400_invalid_display_name': '展示名称不合法',
     'admin_failed_400_invalid_sort_order': '排序必须是非负整数',
