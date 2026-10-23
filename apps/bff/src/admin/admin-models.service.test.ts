@@ -1,135 +1,341 @@
 import 'reflect-metadata';
-import { describe, it, expect } from 'vitest';
-import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
-import { AdminModelsService, listProviders } from './admin-models.service';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ConflictException, NotFoundException } from '@nestjs/common';
+import { AdminModelsService } from './admin-models.service';
+import { encryptSecret, decryptSecret } from '../secrets/secret-box';
 import type { AuditService } from '../audit/audit.service';
 import type { PrismaService } from '../db/prisma.service';
 import type { AdminActor } from '../audit/audit.types';
 
 const actor: AdminActor = { id: 'a1', email: 'admin@test.local' };
+const KEY = 'd'.repeat(64);
 
-function makeService(inUse = false, activeSubInUse = false) {
-  const prices = new Map([
-    ['m1', { model: 'm1', inputMilliCreditsPer1k: 100, outputMilliCreditsPer1k: 200, updatedAt: new Date('2026-10-01T00:00:00Z') }],
-  ]);
+beforeEach(() => {
+  process.env.MODEL_ENC_KEY = KEY;
+  delete process.env.MODEL_PROVIDERS;
+  delete process.env.DEEPSEEK_API_KEY;
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+function p2002() {
+  return Object.assign(new Error('unique'), { code: 'P2002' });
+}
+
+function p2003() {
+  return Object.assign(new Error('fk'), { code: 'P2003' });
+}
+
+interface FakeProvider {
+  id: string;
+  name: string;
+  baseUrl: string;
+  apiKeyEnc: string;
+  apiKeyHint: string | null;
+  createdAt: Date;
+}
+
+interface FakeModel {
+  model: string;
+  providerId: string | null;
+  displayName: string | null;
+  enabled: boolean;
+  sortOrder: number;
+  inputMilliCreditsPer1k: number;
+  outputMilliCreditsPer1k: number;
+  updatedAt: Date;
+}
+
+function makeService(opts: { planInUse?: boolean; subInUse?: boolean } = {}) {
+  const providers = new Map<string, FakeProvider>();
+  providers.set('p1', {
+    id: 'p1',
+    name: '豆包',
+    baseUrl: 'https://ark.example/v3',
+    apiKeyEnc: encryptSecret('sk-ark-1234', 'MODEL_ENC_KEY'),
+    apiKeyHint: '****1234',
+    createdAt: new Date('2026-10-01T00:00:00Z'),
+  });
+  const models = new Map<string, FakeModel>();
+  models.set('m1', {
+    model: 'm1',
+    providerId: 'p1',
+    displayName: null,
+    enabled: true,
+    sortOrder: 10,
+    inputMilliCreditsPer1k: 100,
+    outputMilliCreditsPer1k: 200,
+    updatedAt: new Date('2026-10-01T00:00:00Z'),
+  });
+  let defaultModel: string | null = 'm1';
   const audits: unknown[] = [];
+
+  const withProvider = (m: FakeModel) => ({
+    ...m,
+    provider: m.providerId ? (providers.get(m.providerId) ?? null) : null,
+  });
+
   const db = {
-    modelConfig: {
-      findMany: async () => [...prices.values()],
-      findUnique: async ({ where }: { where: { model: string } }) => prices.get(where.model) ?? null,
-      create: async ({ data }: { data: { model: string; inputMilliCreditsPer1k: number; outputMilliCreditsPer1k: number } }) => {
-        // 模拟唯一键冲突。
-        if (prices.has(data.model)) throw Object.assign(new Error('unique'), { code: 'P2002' });
-        const row = { ...data, updatedAt: new Date('2026-10-19T00:00:00Z') };
-        prices.set(data.model, row);
-        return row;
+    modelProvider: {
+      count: async () => providers.size,
+      findMany: async () =>
+        [...providers.values()].map((p) => ({
+          ...p,
+          _count: { models: [...models.values()].filter((m) => m.providerId === p.id).length },
+        })),
+      findUnique: async ({ where }: { where: { id: string } }) => providers.get(where.id) ?? null,
+      create: async ({ data }: { data: { name: string; baseUrl: string; apiKeyEnc: string; apiKeyHint: string } }) => {
+        if ([...providers.values()].some((p) => p.name === data.name)) throw p2002();
+        const row = {
+          id: `p${providers.size + 1}`,
+          createdAt: new Date('2026-10-20T00:00:00Z'),
+          ...data,
+        };
+        providers.set(row.id, row);
+        return { ...row, _count: { models: 0 } };
       },
-      update: async ({ where, data }: { where: { model: string }; data: Record<string, number> }) => {
-        const prev = prices.get(where.model);
-        // 模拟行不存在。
+      update: async ({ where, data }: { where: { id: string }; data: Partial<{ name: string; baseUrl: string; apiKeyEnc: string; apiKeyHint: string }> }) => {
+        const prev = providers.get(where.id);
         if (!prev) throw Object.assign(new Error('missing'), { code: 'P2025' });
-        const row = { ...prev, ...data, updatedAt: new Date('2026-10-19T00:00:00Z') };
-        prices.set(where.model, row);
-        return row;
+        const row = { ...prev, ...data };
+        providers.set(where.id, row);
+        return {
+          ...row,
+          _count: { models: [...models.values()].filter((m) => m.providerId === row.id).length },
+        };
+      },
+      delete: async ({ where }: { where: { id: string } }) => {
+        const prev = providers.get(where.id);
+        if (!prev) throw Object.assign(new Error('missing'), { code: 'P2025' });
+        providers.delete(where.id);
+        return prev;
+      },
+    },
+    modelConfig: {
+      count: async ({ where }: { where: { providerId: string } }) =>
+        [...models.values()].filter((m) => m.providerId === where.providerId).length,
+      findMany: async () =>
+        [...models.values()]
+          .sort((a, b) => a.sortOrder - b.sortOrder || a.model.localeCompare(b.model))
+          .map(withProvider),
+      findUnique: async ({ where }: { where: { model: string } }) => {
+        const row = models.get(where.model);
+        return row ? withProvider(row) : null;
+      },
+      create: async ({
+        data,
+      }: {
+        data: Omit<FakeModel, 'updatedAt'> & { providerId: string };
+      }) => {
+        if (models.has(data.model)) throw p2002();
+        if (!providers.has(data.providerId)) throw p2003();
+        const row: FakeModel = { ...data, updatedAt: new Date('2026-10-20T00:00:00Z') };
+        models.set(row.model, row);
+        return withProvider(row);
+      },
+      update: async ({
+        where,
+        data,
+      }: {
+        where: { model: string };
+        data: Partial<Omit<FakeModel, 'model' | 'updatedAt'>>;
+      }) => {
+        const prev = models.get(where.model);
+        if (!prev) throw Object.assign(new Error('missing'), { code: 'P2025' });
+        if (typeof data.providerId === 'string' && !providers.has(data.providerId)) throw p2003();
+        const row = { ...prev, ...data, updatedAt: new Date('2026-10-20T00:00:00Z') };
+        models.set(where.model, row);
+        return withProvider(row);
       },
       delete: async ({ where }: { where: { model: string } }) => {
-        const prev = prices.get(where.model);
+        const prev = models.get(where.model);
         if (!prev) throw Object.assign(new Error('missing'), { code: 'P2025' });
-        prices.delete(where.model);
+        models.delete(where.model);
         return prev;
       },
     },
     plan: {
-      findFirst: async () => (inUse ? { id: 'pro' } : null),
+      findFirst: async () => (opts.planInUse ? { id: 'pro' } : null),
     },
     subscription: {
-      findFirst: async () => (activeSubInUse ? { tenantId: 't1' } : null),
+      findFirst: async () => (opts.subInUse ? { tenantId: 't1' } : null),
     },
-    // 模拟 SELECT ... FOR UPDATE：价格行存在时返回它，否则返回空集。
-    $queryRaw: async (_strings: TemplateStringsArray, ...values: unknown[]) => {
-      const model = values[0] as string;
-      return prices.has(model) ? [{ model }] : [];
+    setting: {
+      findUnique: async ({ where }: { where: { key: string } }) =>
+        where.key === 'defaultModel' && defaultModel
+          ? { key: where.key, value: defaultModel, updatedBy: null, updatedAt: new Date() }
+          : null,
+      upsert: async ({ where, create }: { where: { key: string }; create: { value: string } }) => {
+        defaultModel = create.value;
+        return { key: where.key, ...create };
+      },
     },
+    $queryRaw: async (_strings: TemplateStringsArray, ...values: unknown[]) =>
+      models.has(values[0] as string) ? [{ model: values[0] }] : [],
     $transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn(db),
   } as unknown as PrismaService;
   const audit = {
     write: async (_tx: unknown, _actor: AdminActor, entry: unknown) => {
       audits.push(entry);
     },
+    bestEffort: async (_actor: AdminActor, entry: unknown) => {
+      audits.push(entry);
+    },
   } as unknown as AuditService;
-  return { svc: new AdminModelsService(db, audit), audits };
+  return { svc: new AdminModelsService(db, audit), audits, providers, models, getDefault: () => defaultModel };
 }
 
 describe('AdminModelsService', () => {
-  it('catalog 不返回任何密钥信息', () => {
-    const providers = listProviders({
-      MODEL_PROVIDERS: JSON.stringify([
-        { model: 'a', baseUrl: 'http://x', apiKeyEnv: 'KEY_A' },
-        { model: 'b', baseUrl: 'http://x', apiKeyEnv: 'KEY_A' },
-      ]),
-    });
-    expect(providers).toEqual([{ name: 'KEY_A', models: ['a', 'b'] }]);
-    expect(JSON.stringify(providers)).not.toContain('http://x');
+  it('catalog 不返回密钥，并标记默认模型与环境兜底', async () => {
+    const { svc } = makeService();
+    const out = await svc.catalog();
+    expect(out.providers[0]).toMatchObject({ id: 'p1', name: '豆包', apiKeyHint: '****1234', modelCount: 1 });
+    expect(out.models[0]).toMatchObject({ model: 'm1', providerName: '豆包', isDefault: true });
+    expect(out.defaultModel).toBe('m1');
+    expect(out.fallback.active).toBe(false);
+    expect(JSON.stringify(out)).not.toContain('sk-ark-1234');
   });
 
-  it('创建/更新/删除写审计', async () => {
-    const { svc, audits } = makeService();
-    await svc.create({ model: 'm2', inputMilliCreditsPer1k: 1, outputMilliCreditsPer1k: 2 }, actor);
-    await svc.update('m2', { inputMilliCreditsPer1k: 3 }, actor);
-    await svc.remove('m2', actor);
-    expect(audits.map((a) => (a as { action: string }).action)).toEqual([
-      'modelPrice.create',
-      'modelPrice.update',
-      'modelPrice.delete',
-    ]);
+  it('创建厂商时加密且只记录尾号，审计不含密钥', async () => {
+    const { svc, audits, providers } = makeService();
+    const created = await svc.createProvider(
+      { name: '千问', baseUrl: 'https://dash.example/v1/', apiKey: 'sk-qwen-9999' },
+      actor,
+    );
+    expect(created.baseUrl).toBe('https://dash.example/v1');
+    expect(created.apiKeyHint).toBe('****9999');
+    const row = [...providers.values()].find((p) => p.name === '千问')!;
+    expect(row.apiKeyEnc).not.toContain('sk-qwen-9999');
+    expect(decryptSecret(row.apiKeyEnc, 'MODEL_ENC_KEY')).toBe('sk-qwen-9999');
+    expect(audits[0]).toMatchObject({ action: 'modelProvider.create', targetType: 'modelProvider' });
+    expect(JSON.stringify(audits)).not.toContain('sk-qwen-9999');
   });
 
-  it('重复模型抛 409', async () => {
+  it('重复厂商返回 409', async () => {
     const { svc } = makeService();
     await expect(
-      svc.create({ model: 'm1', inputMilliCreditsPer1k: 1, outputMilliCreditsPer1k: 1 }, actor),
+      svc.createProvider({ name: '豆包', baseUrl: 'https://x/v1', apiKey: 'sk' }, actor),
     ).rejects.toBeInstanceOf(ConflictException);
   });
 
-  it('负价格抛 400', async () => {
+  it('厂商仍有模型时拒绝删除', async () => {
     const { svc } = makeService();
-    await expect(
-      svc.create({ model: 'm2', inputMilliCreditsPer1k: -1, outputMilliCreditsPer1k: 1 }, actor),
-    ).rejects.toBeInstanceOf(BadRequestException);
+    await expect(svc.removeProvider('p1', actor)).rejects.toMatchObject({
+      message: 'provider_has_models',
+    });
   });
 
-  it('超出 Int32 上限抛 400', async () => {
-    const { svc } = makeService();
+  it('创建模型校验价格并写审计', async () => {
+    const { svc, audits } = makeService();
+    const dto = await svc.createModel(
+      {
+        model: 'm2',
+        displayName: '模型二',
+        providerId: 'p1',
+        enabled: true,
+        sortOrder: 20,
+        prices: { inputMilliCreditsPer1k: 1, outputMilliCreditsPer1k: 2 },
+      },
+      actor,
+    );
+    expect(dto).toMatchObject({ model: 'm2', providerName: '豆包', enabled: true, sortOrder: 20 });
+    expect(audits.at(-1)).toMatchObject({ action: 'model.create', targetType: 'modelConfig' });
+
     await expect(
-      svc.create({ model: 'm2', inputMilliCreditsPer1k: 2_147_483_648, outputMilliCreditsPer1k: 1 }, actor),
+      svc.createModel(
+        {
+          model: 'm3',
+          providerId: 'p1',
+          prices: { inputMilliCreditsPer1k: -1, outputMilliCreditsPer1k: 2 },
+        },
+        actor,
+      ),
     ).rejects.toMatchObject({ message: 'invalid_price' });
   });
 
-  it('更新路径模型名会归一化', async () => {
-    const { svc } = makeService();
-    const row = await svc.update(' m1 ', { inputMilliCreditsPer1k: 1 }, actor);
-    expect(row.model).toBe('m1');
-    expect(row.inputMilliCreditsPer1k).toBe(1);
-  });
-
-  it('被启用套餐引用时拒绝删除', async () => {
-    const { svc } = makeService(true);
-    await expect(svc.remove('m1', actor)).rejects.toMatchObject({ message: 'model_in_use' });
-  });
-
-  it('停用套餐的有效订阅引用时拒绝删除', async () => {
-    // 停用套餐的订阅在 periodEnd 前仍生效，删除价格会让这些租户的运行失败。
-    const { svc } = makeService(false, true);
-    await expect(svc.remove('m1', actor)).rejects.toMatchObject({ message: 'model_in_use' });
-  });
-
-  it('不存在抛 404', async () => {
+  it('重复模型返回 409；厂商不存在返回 404', async () => {
     const { svc } = makeService();
     await expect(
-      svc.update('missing', { inputMilliCreditsPer1k: 1 }, actor),
+      svc.createModel(
+        { model: 'm1', providerId: 'p1', prices: { inputMilliCreditsPer1k: 1, outputMilliCreditsPer1k: 1 } },
+        actor,
+      ),
+    ).rejects.toBeInstanceOf(ConflictException);
+    await expect(
+      svc.createModel(
+        { model: 'm9', providerId: 'missing', prices: { inputMilliCreditsPer1k: 1, outputMilliCreditsPer1k: 1 } },
+        actor,
+      ),
     ).rejects.toBeInstanceOf(NotFoundException);
-    // 存在性优先于请求体校验，避免用 400/404 差异探测模型是否存在。
-    await expect(svc.update('missing', {}, actor)).rejects.toBeInstanceOf(NotFoundException);
-    await expect(svc.remove('missing', actor)).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('停用默认模型被拒绝', async () => {
+    const { svc } = makeService();
+    await expect(svc.updateModel({ model: 'm1', enabled: false }, actor)).rejects.toMatchObject({
+      message: 'default_model_in_use',
+    });
+  });
+
+  it('删除默认模型被拒绝', async () => {
+    const { svc } = makeService();
+    await expect(svc.removeModel('m1', actor)).rejects.toMatchObject({
+      message: 'default_model_in_use',
+    });
+  });
+
+  it('删除被套餐或有效订阅引用的非默认模型被拒绝', async () => {
+    for (const opts of [{ planInUse: true }, { subInUse: true }]) {
+      const { svc } = makeService(opts);
+      await svc.createModel(
+        {
+          model: 'm2',
+          providerId: 'p1',
+          prices: { inputMilliCreditsPer1k: 1, outputMilliCreditsPer1k: 1 },
+        },
+        actor,
+      );
+      await expect(svc.removeModel('m2', actor)).rejects.toMatchObject({
+        message: 'model_in_use',
+      });
+    }
+  });
+
+  it('设置默认模型要求模型存在且启用', async () => {
+    const { svc, getDefault, audits } = makeService();
+    await expect(svc.setDefault({ model: 'missing' }, actor)).rejects.toMatchObject({
+      message: 'invalid_default_model',
+    });
+    await svc.updateModel({ model: 'm1', enabled: true }, actor);
+    await svc.setDefault({ model: 'm1' }, actor);
+    expect(getDefault()).toBe('m1');
+    expect(audits.some((a) => (a as { action: string }).action === 'model.default')).toBe(true);
+  });
+
+  it('测试连接成功/失败均返回结果，且错误中的密钥被脱敏', async () => {
+    const { svc } = makeService();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(JSON.stringify({ choices: [] }), { status: 200 })),
+    );
+    await expect(svc.testModel({ model: 'm1' }, actor)).resolves.toMatchObject({ ok: true });
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response('bad sk-ark-1234', { status: 401 })),
+    );
+    const failed = await svc.testModel({ model: 'm1' }, actor);
+    expect(failed.ok).toBe(false);
+    expect(failed.error).toContain('[REDACTED]');
+    expect(failed.error).not.toContain('sk-ark-1234');
+  });
+
+  it('不存在的模型抛 404', async () => {
+    const { svc } = makeService();
+    await expect(svc.updateModel({ model: 'missing', enabled: true }, actor)).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
+    await expect(svc.testModel({ model: 'missing' }, actor)).rejects.toBeInstanceOf(NotFoundException);
   });
 });

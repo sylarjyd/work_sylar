@@ -401,26 +401,48 @@ export interface AdminRunDetailDto {
   } | null;
 }
 
+/** 运营端厂商（永不返回 apiKey 明文）。 */
 export interface AdminModelProviderDto {
-  /** provider 标识（取 apiKeyEnv 名；单模型配置为 default）；不含任何密钥。 */
+  id: string;
   name: string;
-  models: string[];
+  baseUrl: string;
+  apiKeyHint: string | null;
+  modelCount: number;
+  createdAt: string;
 }
 
-/** 环境变量兜底 provider（仅管理端展示，不含 baseUrl/密钥）。 */
+/** 运营端模型目录项。 */
+export interface AdminModelDto {
+  model: string;
+  displayName: string;
+  providerId: string | null;
+  providerName: string | null;
+  enabled: boolean;
+  sortOrder: number;
+  inputMilliCreditsPer1k: number;
+  outputMilliCreditsPer1k: number;
+  isDefault: boolean;
+  updatedAt: string;
+}
+
+/** 环境变量兜底 provider（仅展示分组名与模型名）。 */
 export interface AdminLegacyProviderDto {
   name: string;
   models: string[];
 }
 
-export interface AdminModelPriceDto extends ModelPriceDto {
-  model: string;
-  updatedAt: string;
-}
-
 export interface AdminModelsDto {
   providers: AdminModelProviderDto[];
-  prices: AdminModelPriceDto[];
+  models: AdminModelDto[];
+  defaultModel: string | null;
+  /** active=true 表示数据库没有厂商，运行时使用环境变量兜底。 */
+  fallback: { active: boolean; providers: AdminLegacyProviderDto[] };
+}
+
+export interface AdminModelTestResultDto {
+  ok: boolean;
+  latencyMs: number;
+  error?: string;
 }
 
 export type SettingSource = 'db' | 'env' | 'default';
