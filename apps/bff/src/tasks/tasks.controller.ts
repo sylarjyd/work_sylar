@@ -128,7 +128,7 @@ export class TasksController {
           systemPrompt: assistant.systemPrompt.trim() || undefined,
           enabledTools: toolsForSkills(assistant.skills),
           permissionMode: assistant.permissionMode,
-          kbDocIds: assistant.kbDocIds.length > 0 ? assistant.kbDocIds : undefined,
+          kbIds: assistant.kbIds.length > 0 ? assistant.kbIds : undefined,
         }
       : null;
 
@@ -301,7 +301,7 @@ export class TasksController {
                     : {}),
                   enabledTools: runAssistant.enabledTools,
                   permissionMode: runAssistant.permissionMode,
-                  ...(runAssistant.kbDocIds ? { kbDocIds: runAssistant.kbDocIds } : {}),
+                  ...(runAssistant.kbIds ? { kbIds: runAssistant.kbIds } : {}),
                 }
               : {}),
           }),

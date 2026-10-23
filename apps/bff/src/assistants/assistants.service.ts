@@ -19,7 +19,7 @@ import { PrismaService } from '../db/prisma.service';
 const MAX_NAME = 40;
 const MAX_DESCRIPTION = 200;
 const MAX_SYSTEM_PROMPT = 8000;
-const MAX_KB_DOCS = 100;
+const MAX_KB_BASES = 100;
 
 interface AssistantRow {
   id: string;
@@ -29,7 +29,7 @@ interface AssistantRow {
   permissionMode: string;
   model: string | null;
   skills: string[];
-  kbDocIds: string[];
+  kbIds: string[];
   createdAt: Date;
   updatedAt: Date;
 }
@@ -58,7 +58,7 @@ export class AssistantsService {
     const permissionMode = parsePermissionMode(input?.permissionMode ?? 'standard');
     const model = parseModel(input?.model === undefined ? null : input.model);
     const skills = parseSkills(input?.skills ?? []);
-    const kbDocIds = await this.parseKbDocIds(input?.kbDocIds ?? [], tenantId, userId);
+    const kbIds = await this.parseKbIds(input?.kbIds ?? [], tenantId, userId);
 
     try {
       const row = await this.prisma.assistant.create({
@@ -71,7 +71,7 @@ export class AssistantsService {
           permissionMode,
           model,
           skills,
-          kbDocIds,
+          kbIds,
         },
       });
       return toDto(row);
@@ -94,7 +94,7 @@ export class AssistantsService {
       permissionMode?: AssistantPermissionMode;
       model?: string | null;
       skills?: AssistantSkillKey[];
-      kbDocIds?: string[];
+      kbIds?: string[];
     } = {};
     if (patch && Object.hasOwn(patch, 'name')) data.name = parseName(patch.name);
     if (patch && Object.hasOwn(patch, 'description')) {
@@ -108,8 +108,8 @@ export class AssistantsService {
     }
     if (patch && Object.hasOwn(patch, 'model')) data.model = parseModel(patch.model ?? null);
     if (patch && Object.hasOwn(patch, 'skills')) data.skills = parseSkills(patch.skills ?? []);
-    if (patch && Object.hasOwn(patch, 'kbDocIds')) {
-      data.kbDocIds = await this.parseKbDocIds(patch.kbDocIds ?? [], tenantId, userId);
+    if (patch && Object.hasOwn(patch, 'kbIds')) {
+      data.kbIds = await this.parseKbIds(patch.kbIds ?? [], tenantId, userId);
     }
     if (Object.keys(data).length === 0) throw new BadRequestException('invalid_assistant_patch');
 
@@ -135,28 +135,24 @@ export class AssistantsService {
     if (!row) throw new NotFoundException('assistant_not_found');
   }
 
-  /** 绑定文档必须属于当前用户；允许 pending 文档，摄取完成后自动参与检索。 */
-  private async parseKbDocIds(
-    raw: unknown,
-    tenantId: string,
-    userId: string,
-  ): Promise<string[]> {
-    if (!Array.isArray(raw) || raw.length > MAX_KB_DOCS) {
-      throw new BadRequestException('invalid_kb_doc_ids');
+  /** 绑定的知识库必须属于当前用户；空数组表示检索全部知识库。 */
+  private async parseKbIds(raw: unknown, tenantId: string, userId: string): Promise<string[]> {
+    if (!Array.isArray(raw) || raw.length > MAX_KB_BASES) {
+      throw new BadRequestException('invalid_kb_ids');
     }
     const ids: string[] = [];
     for (const item of raw) {
       if (typeof item !== 'string' || item.trim() === '') {
-        throw new BadRequestException('invalid_kb_doc_ids');
+        throw new BadRequestException('invalid_kb_ids');
       }
       const id = item.trim();
       if (!ids.includes(id)) ids.push(id);
     }
     if (ids.length === 0) return [];
-    const count = await this.prisma.kbDoc.count({
+    const count = await this.prisma.knowledgeBase.count({
       where: { id: { in: ids }, tenantId, userId },
     });
-    if (count !== ids.length) throw new BadRequestException('invalid_kb_doc_ids');
+    if (count !== ids.length) throw new BadRequestException('invalid_kb_ids');
     return ids;
   }
 }
@@ -227,7 +223,7 @@ function toDto(row: AssistantRow): AssistantDto {
       : 'standard',
     model: row.model ?? null,
     skills: normalizeSkills(row.skills),
-    kbDocIds: row.kbDocIds ?? [],
+    kbIds: row.kbIds ?? [],
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };

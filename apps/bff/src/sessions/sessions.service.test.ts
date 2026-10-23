@@ -15,7 +15,7 @@ interface AssistantFixture {
   permissionMode: string;
   model: string | null;
   skills: string[];
-  kbDocIds: string[];
+  kbIds: string[];
 }
 
 const ASSISTANT: AssistantFixture = {
@@ -27,7 +27,7 @@ const ASSISTANT: AssistantFixture = {
   permissionMode: 'readonly',
   model: 'm2',
   skills: ['kb', 'web'],
-  kbDocIds: ['d1'],
+  kbIds: ['b1'],
 };
 
 const all = [
@@ -235,7 +235,7 @@ describe('SessionsService 选模', () => {
         systemPrompt: '你是合同审阅助手',
         permissionMode: 'readonly',
         skills: ['web', 'kb'],
-        kbDocIds: ['d1'],
+        kbIds: ['b1'],
       },
     });
   });

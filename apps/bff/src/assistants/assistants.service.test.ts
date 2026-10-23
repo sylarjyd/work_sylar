@@ -14,17 +14,17 @@ interface Row {
   permissionMode: string;
   model: string | null;
   skills: string[];
-  kbDocIds: string[];
+  kbIds: string[];
   createdAt: Date;
   updatedAt: Date;
 }
 
 function makeService() {
   const rows: Row[] = [];
-  const docs = [
-    { id: 'd1', tenantId: 't1', userId: 'u1' },
-    { id: 'd2', tenantId: 't1', userId: 'u1' },
-    { id: 'dx', tenantId: 't2', userId: 'u2' },
+  const bases = [
+    { id: 'b1', tenantId: 't1', userId: 'u1' },
+    { id: 'b2', tenantId: 't1', userId: 'u1' },
+    { id: 'bx', tenantId: 't2', userId: 'u2' },
   ];
   let seq = 0;
   const prisma = {
@@ -68,7 +68,7 @@ function makeService() {
         rows.splice(i, 1);
       },
     },
-    kbDoc: {
+    knowledgeBase: {
       count: async ({
         where,
       }: {
@@ -78,11 +78,11 @@ function makeService() {
           userId: string;
         };
       }) =>
-        docs.filter(
-          (d) =>
-            where.id.in.includes(d.id) &&
-            d.tenantId === where.tenantId &&
-            d.userId === where.userId,
+        bases.filter(
+          (b) =>
+            where.id.in.includes(b.id) &&
+            b.tenantId === where.tenantId &&
+            b.userId === where.userId,
         ).length,
     },
   } as unknown as PrismaService;
@@ -95,13 +95,13 @@ describe('AssistantsService 创建', () => {
     const a = await svc.create('t1', 'u1', {
       name: '  合同助手 ',
       skills: ['kb', 'web', 'kb'],
-      kbDocIds: ['d1', 'd1', 'd2'],
+      kbIds: ['b1', 'b1', 'b2'],
     });
     expect(a.name).toBe('合同助手');
     expect(a.permissionMode).toBe('standard');
     expect(a.model).toBeNull();
     expect(a.skills).toEqual(['web', 'kb']);
-    expect(a.kbDocIds).toEqual(['d1', 'd2']);
+    expect(a.kbIds).toEqual(['b1', 'b2']);
   });
 
   it('未知技能被拒绝', async () => {
@@ -111,10 +111,10 @@ describe('AssistantsService 创建', () => {
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
-  it('绑定非本人文档被拒绝', async () => {
+  it('绑定非本人知识库被拒绝', async () => {
     const { svc } = makeService();
     await expect(
-      svc.create('t1', 'u1', { name: 'x', kbDocIds: ['dx'] }),
+      svc.create('t1', 'u1', { name: 'x', kbIds: ['bx'] }),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
@@ -139,6 +139,13 @@ describe('AssistantsService 更新与删除', () => {
     expect(updated.name).toBe('新名称');
     expect(updated.systemPrompt).toBe('原提示词');
     expect(updated.permissionMode).toBe('readonly');
+  });
+
+  it('可以更新与清空知识库绑定', async () => {
+    const { svc } = makeService();
+    const a = await svc.create('t1', 'u1', { name: 'a', kbIds: ['b1'] });
+    expect((await svc.update(a.id, 't1', 'u1', { kbIds: ['b2'] })).kbIds).toEqual(['b2']);
+    expect((await svc.update(a.id, 't1', 'u1', { kbIds: [] })).kbIds).toEqual([]);
   });
 
   it('空补丁被拒绝', async () => {

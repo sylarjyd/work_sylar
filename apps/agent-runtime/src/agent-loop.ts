@@ -61,7 +61,7 @@ export async function* runAgent(req: RunRequest, deps: RunDeps): AsyncGenerator<
     sessionId: req.sessionId,
     runId: req.runId,
     codeExecTimeoutMs: deps.codeExecTimeoutMs,
-    kbDocIds: req.kbDocIds,
+    kbIds: req.kbIds,
   };
   let seq = 0;
   const usageByModel = new Map<string, { input: number; output: number }>();

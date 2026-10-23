@@ -21,7 +21,7 @@ export interface SessionAssistantRef {
   systemPrompt: string;
   permissionMode: AssistantPermissionMode;
   skills: AssistantSkillKey[];
-  kbDocIds: string[];
+  kbIds: string[];
 }
 
 export interface SessionRef {
@@ -40,7 +40,7 @@ interface AssistantRow {
   /** 仅建会话选模时读取；运行时配置不需要。 */
   model?: string | null;
   skills: string[];
-  kbDocIds: string[];
+  kbIds: string[];
 }
 
 @Injectable()
@@ -81,7 +81,7 @@ export class SessionsService {
           permissionMode: true,
           model: true,
           skills: true,
-          kbDocIds: true,
+          kbIds: true,
         },
       });
       if (!assistant) throw new NotFoundException('assistant_not_found');
@@ -129,7 +129,7 @@ export class SessionsService {
             systemPrompt: true,
             permissionMode: true,
             skills: true,
-            kbDocIds: true,
+            kbIds: true,
           },
         },
       },
@@ -190,7 +190,7 @@ function toAssistantRef(row: AssistantRow): SessionAssistantRef {
       ? row.permissionMode
       : 'standard',
     skills: normalizeSkills(row.skills),
-    kbDocIds: row.kbDocIds ?? [],
+    kbIds: row.kbIds ?? [],
   };
 }
 

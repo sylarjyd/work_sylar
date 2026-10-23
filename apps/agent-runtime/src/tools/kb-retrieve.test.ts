@@ -47,24 +47,24 @@ describe('kb.retrieve', () => {
     });
   });
 
-  it('助手限定文档时把 docIds 透传给 BFF 检索', async () => {
+  it('助手限定知识库时把 kbIds 透传给 BFF 检索', async () => {
     let body: Record<string, unknown> = {};
     const fetchImpl = (async (_u: string, init: RequestInit) => {
       body = JSON.parse(String(init.body));
       return new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } });
     }) as unknown as typeof fetch;
-    await toolWith(fetchImpl).execute({ query: 'x' }, { ...ctx, kbDocIds: ['d1', 'd2'] });
-    expect(body.docIds).toEqual(['d1', 'd2']);
+    await toolWith(fetchImpl).execute({ query: 'x' }, { ...ctx, kbIds: ['b1', 'b2'] });
+    expect(body.kbIds).toEqual(['b1', 'b2']);
   });
 
-  it('未限定文档时不发送 docIds（检索全部）', async () => {
+  it('未限定知识库时不发送 kbIds（检索全部）', async () => {
     let body: Record<string, unknown> = {};
     const fetchImpl = (async (_u: string, init: RequestInit) => {
       body = JSON.parse(String(init.body));
       return new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } });
     }) as unknown as typeof fetch;
     await toolWith(fetchImpl).execute({ query: 'x' }, ctx);
-    expect(body).not.toHaveProperty('docIds');
+    expect(body).not.toHaveProperty('kbIds');
   });
 
   it('topK clamp 到 [1,20]', async () => {
