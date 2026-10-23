@@ -493,6 +493,8 @@ export class AdminModelsService {
           stream: false,
         }),
         signal: controller.signal,
+        // 厂商地址由管理员配置（可能指向内网部署），但不允许再被上游重定向到其他主机。
+        redirect: 'error',
       });
       if (!res.ok) {
         const text = await res.text().catch(() => '');

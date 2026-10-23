@@ -315,11 +315,11 @@ describe('AdminModelsService', () => {
 
   it('测试连接成功/失败均返回结果，且错误中的密钥被脱敏', async () => {
     const { svc } = makeService();
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () => new Response(JSON.stringify({ choices: [] }), { status: 200 })),
-    );
+    const okFetch = vi.fn(async () => new Response(JSON.stringify({ choices: [] }), { status: 200 }));
+    vi.stubGlobal('fetch', okFetch);
     await expect(svc.testModel({ model: 'm1' }, actor)).resolves.toMatchObject({ ok: true });
+    // 上游厂商可被管理员配置为内网地址，但不允许重定向到其他主机，缩小 SSRF 面。
+    expect((okFetch.mock.calls[0] as unknown as [string, RequestInit])[1].redirect).toBe('error');
 
     vi.stubGlobal(
       'fetch',
