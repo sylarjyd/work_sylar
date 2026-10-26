@@ -1,4 +1,5 @@
 import 'reflect-metadata';
+import { Logger } from '@nestjs/common';
 import { describe, it, expect, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import type { FastifyReply } from 'fastify';
@@ -26,6 +27,13 @@ interface FakeRun {
   id: string;
   status: string;
   lastError: string | null;
+  taskId: string;
+  tenantId: string;
+}
+
+/** 默认字段贴合 findRun 的真实返回，个别用例只覆盖关心的字段。 */
+function fakeRun(overrides: Partial<FakeRun> = {}): FakeRun {
+  return { id: 'r1', status: 'running', lastError: null, taskId: 'task1', tenantId: 't1', ...overrides };
 }
 
 interface FakeRaw extends EventEmitter {
@@ -68,12 +76,15 @@ interface RelayOptions {
   listSteps?: (runId: string, afterSeq: number) => Promise<AgentEvent[]>;
   /** 覆盖 run 读取，用于制造「首次快照与订阅后状态不一致」的竞态。 */
   findRun?: (runId: string) => Promise<FakeRun>;
+  /** countQueued 的返回值；也给成 Error 模拟统计失败。 */
+  queuedPosition?: number | Error;
 }
 
 interface RelayDeps {
   subscribe: ReturnType<typeof vi.fn>;
   unsubscribe: ReturnType<typeof vi.fn>;
   listSteps: ReturnType<typeof vi.fn>;
+  countQueued: ReturnType<typeof vi.fn>;
   emit: (msg: SseMessage) => void;
 }
 
@@ -96,16 +107,18 @@ function makeRelay(options: RelayOptions = {}): { relay: RunRelayService; deps: 
       (async (_runId: string, afterSeq: number): Promise<AgentEvent[]> =>
         steps.filter((s) => s.seq > afterSeq)),
   );
+  const countQueued = vi.fn(async () => {
+    if (options.queuedPosition instanceof Error) throw options.queuedPosition;
+    return options.queuedPosition ?? 0;
+  });
   const tasks = {
     findRun: vi.fn(
       options.findRun ??
-        (async (): Promise<FakeRun> => ({
-          id: 'r1',
-          status: options.status ?? 'running',
-          lastError: options.lastError ?? null,
-        })),
+        (async (): Promise<FakeRun> =>
+          fakeRun({ status: options.status ?? 'running', lastError: options.lastError ?? null })),
     ),
     listSteps,
+    countQueued,
   };
   const events = { publish: vi.fn().mockResolvedValue(undefined), subscribe };
   const relay = new RunRelayService(
@@ -118,6 +131,7 @@ function makeRelay(options: RelayOptions = {}): { relay: RunRelayService; deps: 
       subscribe,
       unsubscribe,
       listSteps,
+      countQueued,
       emit: (msg) => handler?.(msg),
     },
   };
@@ -267,6 +281,70 @@ describe('RunRelayService', () => {
     ]);
   });
 
+  it('queued 状态附带同租户前方等待数', async () => {
+    const { relay, deps } = makeRelay({ status: 'queued', queuedPosition: 3 });
+    const { reply, chunks } = fakeReply();
+    const done = relay.attach('r1', reply);
+    await untilEvent(chunks, 'status');
+
+    // 统计入口排除运行自身所属任务，前端看到的就是「前方」而非含自己的位次。
+    expect(deps.countQueued).toHaveBeenCalledWith('t1', 'task1');
+    expect(messages(chunks)).toEqual([
+      { event: 'status', data: { runId: 'r1', status: 'queued', position: 3 } },
+    ]);
+
+    reply.raw.emit('close');
+    await done;
+  });
+
+  it('排队位次统计失败时省略 position 字段', async () => {
+    const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    const { relay } = makeRelay({ status: 'queued', queuedPosition: new Error('db down') });
+    const { reply, chunks } = fakeReply();
+    const done = relay.attach('r1', reply);
+    await untilEvent(chunks, 'status');
+
+    const status = messages(chunks).find((m) => m.event === 'status');
+    expect(status).toEqual({ event: 'status', data: { runId: 'r1', status: 'queued' } });
+    // 必须完全没有 position 键：显式 undefined 也会被 JSON.stringify 丢掉，但键存在时语义不同。
+    expect(status?.data).not.toHaveProperty('position');
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+
+    reply.raw.emit('close');
+    await done;
+  });
+
+  it('排队位次统计期间运行终结：不启动心跳也不补发状态帧', async () => {
+    const setIntervalSpy = vi.spyOn(globalThis, 'setInterval');
+    const { relay, deps } = makeRelay({ status: 'queued', queuedPosition: 0 });
+    let release!: (n: number) => void;
+    deps.countQueued.mockImplementation(
+      () =>
+        new Promise<number>((resolve) => {
+          release = resolve;
+        }),
+    );
+    const { reply, chunks } = fakeReply();
+    const done = relay.attach('r1', reply);
+    await vi.waitFor(() => expect(deps.countQueued).toHaveBeenCalled());
+
+    // 统计尚未返回时取消事件先到：forward 已收尾，await 返回后必须立即退出。
+    // 少了 finalized 复查虽然写帧会被 write 拦下，但会在已 settle 的流上留下没人清理的心跳。
+    deps.emit({ event: 'status', data: { runId: 'r1', status: 'canceled' } });
+    release(2);
+    await done;
+
+    expect(setIntervalSpy).not.toHaveBeenCalled();
+    setIntervalSpy.mockRestore();
+    expect(messages(chunks)).toEqual([
+      { event: 'status', data: { runId: 'r1', status: 'canceled' } },
+      { event: 'done', data: { runId: 'r1' } },
+    ]);
+    expect(deps.unsubscribe).toHaveBeenCalledTimes(1);
+    expect(reply.raw.end).toHaveBeenCalledTimes(1);
+  });
+
   it('checkpoint 事件被过滤，不下发浏览器', async () => {
     const { relay, deps } = makeRelay({ steps: [stepRow(0)], status: 'running' });
     const { reply, chunks } = fakeReply();
@@ -353,8 +431,8 @@ describe('RunRelayService', () => {
     const findRun = vi.fn(async (): Promise<FakeRun> => {
       calls += 1;
       return calls === 1
-        ? { id: 'r1', status: 'running', lastError: null }
-        : { id: 'r1', status: 'done', lastError: null };
+        ? fakeRun({ status: 'running' })
+        : fakeRun({ status: 'done' });
     });
     const { relay, deps } = makeRelay({ findRun });
     const { reply, chunks } = fakeReply();
@@ -374,8 +452,8 @@ describe('RunRelayService', () => {
     const findRun = vi.fn(async (): Promise<FakeRun> => {
       calls += 1;
       return calls === 1
-        ? { id: 'r1', status: 'running', lastError: null }
-        : { id: 'r1', status: 'failed', lastError: 'insufficient_credits' };
+        ? fakeRun({ status: 'running' })
+        : fakeRun({ status: 'failed', lastError: 'insufficient_credits' });
     });
     const { relay, deps } = makeRelay({ findRun });
     const { reply, chunks } = fakeReply();
@@ -393,7 +471,7 @@ describe('RunRelayService', () => {
     let calls = 0;
     const findRun = vi.fn(async (): Promise<FakeRun> => {
       calls += 1;
-      if (calls === 1) return { id: 'r1', status: 'done', lastError: null };
+      if (calls === 1) return fakeRun({ status: 'done' });
       throw new Error('db blip');
     });
     const { relay, deps } = makeRelay({ findRun });

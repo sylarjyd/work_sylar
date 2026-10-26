@@ -293,8 +293,25 @@ export class RunRelayService {
       write({ event: 'status', data: { runId, status: 'canceled' } }, true);
       forward({ event: 'done', data: { runId } });
     } else {
+      // queued 时补上「同租户前方等待数」，前端排队文案才有数据；统计失败则省略该字段，
+      // 前端会退化为不带位次的「排队中…」，比整条状态帧丢失更友好。
+      let position: number | undefined;
+      if (status === 'queued') {
+        try {
+          position = await this.tasks.countQueued(run.tenantId, run.taskId);
+        } catch (err) {
+          this.logger.warn(
+            `run ${runId} 计算排队位置失败，省略 position: ${(err as Error).message}`,
+          );
+        }
+        // 统计期间实时终态事件可能已经收尾。
+        if (finalized) return settled;
+      }
       // queued/running：先告知当前状态，再靠心跳与实时事件维持长连接。
-      write({ event: 'status', data: { runId, status } });
+      write({
+        event: 'status',
+        data: { runId, status, ...(position !== undefined ? { position } : {}) },
+      });
       heartbeat = setInterval(() => {
         // socket 已饱和时跳过心跳：继续写只会让缓冲继续膨胀。
         if (finalized || paused) return;

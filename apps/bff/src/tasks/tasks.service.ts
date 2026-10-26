@@ -276,6 +276,8 @@ export class TasksService {
     status: string;
     lastError: string | null;
     cancelRequestedAt: Date | null;
+    taskId: string;
+    tenantId: string;
   }> {
     const run = await this.prisma.run.findUnique({
       where: { id: runId },
@@ -283,7 +285,9 @@ export class TasksService {
         id: true,
         status: true,
         cancelRequestedAt: true,
-        task: { select: { lastError: true } },
+        taskId: true,
+        // 排队位次按租户统计，这里一并取出，避免转发器再查一次归属。
+        task: { select: { lastError: true, session: { select: { tenantId: true } } } },
       },
     });
     if (!run) throw new NotFoundException('run_not_found');
@@ -292,6 +296,8 @@ export class TasksService {
       status: run.status,
       lastError: run.task.lastError ?? null,
       cancelRequestedAt: run.cancelRequestedAt ?? null,
+      taskId: run.taskId,
+      tenantId: run.task.session.tenantId,
     };
   }
 
