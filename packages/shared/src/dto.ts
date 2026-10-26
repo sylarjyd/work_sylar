@@ -225,6 +225,13 @@ export interface CreateSessionRequest {
   mode?: SessionMode;
 }
 
+export interface UpdateSessionRequest {
+  /** 新标题；改名后自动命名不再覆盖。 */
+  title?: string;
+  /** 置顶开关。 */
+  pinned?: boolean;
+}
+
 export interface SessionSummary {
   id: string;
   title: string;
@@ -236,6 +243,8 @@ export interface SessionSummary {
   assistantName: string | null;
   /** 任务分类；存量会话创建时没有该字段，读取时归一为对话。 */
   mode: SessionMode;
+  /** 用户置顶；列表按置顶优先排序。 */
+  pinned: boolean;
 }
 
 /** 历史会话列表默认每页条数；侧栏首屏与下滑翻页共用同一口径。 */

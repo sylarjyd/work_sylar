@@ -20,6 +20,7 @@ import {
   type RunStatus,
   type SessionMode,
   type SessionSummary,
+  type UpdateSessionRequest,
 } from '@ai-office/shared';
 import { AppShell } from '../components/app-shell';
 import { ArtifactDrawer } from '../components/artifact-drawer';
@@ -45,6 +46,7 @@ import {
   confirmRun,
   createSession,
   deleteAttachment,
+  deleteSession,
   downloadArtifact,
   getSession,
   getToken,
@@ -56,6 +58,7 @@ import {
   listSessions,
   streamRun,
   streamTask,
+  updateSession,
   uploadAttachment,
 } from '../lib/api';
 import {
@@ -67,6 +70,7 @@ import {
 } from '../lib/attachments';
 import { currentConfirmCard } from '../lib/pending-confirm';
 import { renderStep } from '../lib/render-step';
+import { sortSessions } from '../lib/session-filter';
 
 /** 尚未发送的附件：先本地展示，上传完成后再拿服务端 id。 */
 interface PendingAttachment {
@@ -196,6 +200,8 @@ function EventRow({
 export default function Home() {
   const router = useRouter();
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  // 异步回调（删除后切换、自动命名补拉）需要最新列表，避免闭包里拿到旧值。
+  const sessionsRef = useRef<SessionSummary[]>([]);
   // 侧栏分页：首屏 20 条，滚动到底用游标续拉；新建会话只前插，不动游标。
   const [sessionsCursor, setSessionsCursor] = useState<string | null>(null);
   const [sessionsLoadingMore, setSessionsLoadingMore] = useState(false);
@@ -245,6 +251,10 @@ export default function Home() {
   // 重连游标：seq 从 0 开始，未收到任何 step 时用 -1 从头回放。
   const lastSeqRef = useRef(-1);
   pendingRef.current = pendingAttachments;
+
+  useEffect(() => {
+    sessionsRef.current = sessions;
+  }, [sessions]);
 
   useEffect(() => {
     if (!getToken()) {
@@ -505,6 +515,47 @@ export default function Home() {
     composerRef.current?.focus();
   }
 
+  /** 改名/置顶由后端校验并返回新摘要，这里就地更新后按同一规则重排。 */
+  async function handleUpdateSession(id: string, patch: UpdateSessionRequest): Promise<void> {
+    const updated = await updateSession(id, patch);
+    setSessions((prev) => sortSessions(prev.map((s) => (s.id === id ? updated : s))));
+  }
+
+  async function handleDeleteSession(id: string): Promise<void> {
+    await deleteSession(id);
+    const remaining = sessionsRef.current.filter((s) => s.id !== id);
+    setSessions((prev) => prev.filter((s) => s.id !== id));
+    if (id !== sessionId) return;
+    // 删掉的是当前会话：优先落到列表第一条，否则回到空白草稿。
+    const next = remaining[0];
+    if (next) {
+      handleSelect(next.id);
+      return;
+    }
+    window.history.replaceState(null, '', '/');
+    setSessionId('');
+    resetConversation();
+  }
+
+  /** 自动命名在后台进行：终态后补拉一次，仍在生成时稍后重试；失败不影响使用。 */
+  async function syncSessionTitle(sid: string): Promise<void> {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 1200));
+      try {
+        const summary = await getSession(sid);
+        setSessions((prev) =>
+          prev.some((s) => s.id === sid)
+            ? sortSessions(prev.map((s) => (s.id === sid ? summary : s)))
+            : prev,
+        );
+        if (summary.title !== '新会话') return;
+      } catch {
+        // 标题只是锦上添花，拉取失败保持原样。
+        return;
+      }
+    }
+  }
+
   function handleAssistantChange(id: string) {
     setSelectedAssistantId(id);
     const assistant = assistants.find((a) => a.id === id);
@@ -708,6 +759,8 @@ export default function Home() {
       // 未收到终态时也要解除「正在停止…」，否则按钮会一直卡在禁用态。
       setRunning(false);
       setStopping(false);
+      // 首条消息才自动命名；这里补拉生成结果，失败静默。
+      if (sid) void syncSessionTitle(sid);
     }
   }
 
@@ -1006,6 +1059,8 @@ export default function Home() {
       onSelectSession={handleSelect}
       onNewSession={() => void handleNewSession()}
       sessionDisabled={running}
+      onUpdateSession={handleUpdateSession}
+      onDeleteSession={handleDeleteSession}
     >
       <div className="wb-topbar">
         <span className="wb-topbar-title">

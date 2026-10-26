@@ -8,6 +8,7 @@ import {
   createConnector,
   createSession,
   deleteAttachment,
+  deleteSession,
   getBillingSummary,
   getSession,
   getUsage,
@@ -15,6 +16,7 @@ import {
   listSessions,
   streamRun,
   streamTask,
+  updateSession,
   uploadAttachment,
 } from './api';
 
@@ -42,6 +44,57 @@ describe('confirmRun', () => {
     const headers = (init.headers ?? {}) as Record<string, string>;
     expect(headers.traceparent).toMatch(/^00-[0-9a-f]{32}-[0-9a-f]{16}-01$/);
     expect(headers['x-request-id']).toMatch(/^[A-Za-z0-9-]{1,64}$/);
+  });
+});
+
+describe('会话改名/置顶/删除', () => {
+  it('updateSession 用 PATCH 提交变更并返回新摘要', async () => {
+    const summary = {
+      id: 's1',
+      title: '周报草稿',
+      createdAt: '2026-10-20T00:00:00.000Z',
+      model: null,
+      assistantId: null,
+      assistantName: null,
+      mode: 'chat',
+      pinned: true,
+    };
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify(summary), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const out = await updateSession('s1', { title: '周报草稿', pinned: true });
+    expect(out).toEqual(summary);
+
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(String(url)).toContain('/api/sessions/s1');
+    expect(init.method).toBe('PATCH');
+    expect(JSON.parse(init.body as string)).toEqual({ title: '周报草稿', pinned: true });
+  });
+
+  it('updateSession 失败时抛出带状态码的错误', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 400 })));
+    await expect(updateSession('s1', { title: '' })).rejects.toThrow('update_session_failed_400');
+  });
+
+  it('deleteSession 用 DELETE 调用会话端点', async () => {
+    const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await deleteSession('s1');
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(String(url)).toContain('/api/sessions/s1');
+    expect(init.method).toBe('DELETE');
+  });
+
+  it('deleteSession 失败时抛出带状态码的错误', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 409 })));
+    await expect(deleteSession('s1')).rejects.toThrow('delete_session_failed_409');
   });
 });
 

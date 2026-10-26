@@ -38,7 +38,11 @@ model Session {
   tenantId  String
   userId    String
   title     String   @default("新会话")
-  status    String   @default("active")
+  // 标题来源：auto 待自动生成 | generated 自动生成 | manual 用户改名，自动生成不再覆盖。
+  titleSource String @default("auto")
+  status    String   @default("active") // active | archived（运营端）| deleted（用户删除，软删除）
+  // 用户置顶：列表排序优先展示，不改变 createdAt。
+  pinned    Boolean  @default(false)
   // 创建任务时选定的模型；历史会话为空，首次成功预占后回填。
   model     String?
   // 会话创建时选定的自定义助手；助手被删除后置空，会话退化为默认助手。
@@ -54,7 +58,7 @@ model Session {
   artifacts Artifact[]
   attachments Attachment[]
 
-  @@index([tenantId, userId])
+  @@index([tenantId, userId, status, pinned, createdAt])
   @@index([assistantId])
 }
 

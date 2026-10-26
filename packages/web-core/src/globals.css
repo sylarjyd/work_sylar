@@ -2670,11 +2670,26 @@ a {
   overflow-y: auto;
 }
 
-.wb-session {
+.wb-session-row {
   display: flex;
   align-items: center;
+  border-radius: 9px;
+}
+
+.wb-session-row:hover {
+  background: var(--wb-hover);
+}
+
+.wb-session-row.active {
+  background: var(--wb-active);
+}
+
+.wb-session {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
   gap: 8px;
-  width: 100%;
+  min-width: 0;
   padding: 7px 10px;
   font-size: 13px;
   color: var(--wb-ink-2);
@@ -2685,20 +2700,57 @@ a {
   cursor: pointer;
 }
 
-.wb-session:hover:not(:disabled) {
+.wb-session-row:hover .wb-session,
+.wb-session-row.active .wb-session {
   color: var(--wb-ink);
-  background: var(--wb-hover);
 }
 
-.wb-session.active {
+.wb-session-row.active .wb-session {
   font-weight: 600;
-  color: var(--wb-ink);
-  background: var(--wb-active);
 }
 
 .wb-session:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* 操作入口只在悬停/聚焦当前行时出现，避免每行常驻图标干扰阅读。 */
+.wb-session-action {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin-right: 6px;
+  padding: 0;
+  font-size: 13px;
+  color: var(--wb-ink-2);
+  background: none;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease, background 0.12s ease;
+}
+
+.wb-session-row:hover .wb-session-action,
+.wb-session-row:focus-within .wb-session-action {
+  opacity: 1;
+}
+
+.wb-session-action:hover,
+.wb-session-action:focus-visible {
+  color: var(--wb-ink);
+  background: var(--wb-active);
+  opacity: 1;
+}
+
+.wb-session-pin {
+  display: inline-flex;
+  flex: 0 0 auto;
+  font-size: 10px;
+  color: var(--mint-strong);
 }
 
 .wb-session-title {
@@ -2720,6 +2772,19 @@ a {
   padding: 8px 10px;
   font-size: 12px;
   color: var(--wb-ink-2);
+}
+
+.wb-modal-text {
+  font-size: 13.5px;
+  color: var(--wb-ink-2);
+  line-height: 1.6;
+  word-break: break-word;
+}
+
+.wb-modal-error {
+  margin-top: 8px;
+  font-size: 12.5px;
+  color: var(--danger);
 }
 
 .wb-session-more {

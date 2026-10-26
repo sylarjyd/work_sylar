@@ -34,6 +34,7 @@ import type { JwtPayload } from '../auth/jwt';
 import { QueueFullError, RunQueueService } from '../queue/run-queue.service';
 import { RunRelayService } from '../queue/run-relay.service';
 import type { RunSnapshot } from '../queue/run-job';
+import { SessionTitleService } from '../sessions/session-title.service';
 
 @Controller('api/sessions')
 @UseGuards(JwtGuard)
@@ -48,6 +49,7 @@ export class TasksController {
     private readonly catalog: ModelCatalogService,
     private readonly queue: RunQueueService,
     private readonly relay: RunRelayService,
+    private readonly titles: SessionTitleService,
   ) {}
 
   @Post(':id/tasks')
@@ -190,7 +192,7 @@ export class TasksController {
       throw err;
     }
 
-    const { taskId, tenantId, userId } = await this.tasks.prepare(
+    const { taskId, tenantId, userId, firstMessage } = await this.tasks.prepare(
       sessionId,
       user.tenantId,
       user.sub,
@@ -211,6 +213,20 @@ export class TasksController {
         return;
       }
       throw err;
+    }
+
+    // 首条消息才命名：后续轮次的主题可能偏离首条，改标题交给用户手动操作。
+    // 放在入队成功之后：没提交的任务没必要花一次模型调用。
+    if (firstMessage) {
+      this.titles.schedule({
+        sessionId,
+        tenantId: user.tenantId,
+        userId: user.sub,
+        goal,
+        attachmentName: pending[0]?.filename,
+        // 此时 routes 仍是明文；快照里的版本已加密，不能拿来调用。
+        routes: resolution.modelRoutes,
+      });
     }
 
     try {

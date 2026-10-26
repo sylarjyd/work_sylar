@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { SessionSummary } from '@ai-office/shared';
-import { filterSessions } from './session-filter';
+import { filterSessions, sortSessions } from './session-filter';
 
 const SESSIONS: SessionSummary[] = [
   {
@@ -11,6 +11,7 @@ const SESSIONS: SessionSummary[] = [
     assistantId: null,
     assistantName: null,
     mode: 'chat',
+    pinned: false,
   },
   {
     id: '2',
@@ -20,6 +21,7 @@ const SESSIONS: SessionSummary[] = [
     assistantId: null,
     assistantName: null,
     mode: 'chat',
+    pinned: false,
   },
   {
     id: '3',
@@ -29,6 +31,7 @@ const SESSIONS: SessionSummary[] = [
     assistantId: null,
     assistantName: null,
     mode: 'chat',
+    pinned: false,
   },
 ];
 
@@ -49,5 +52,19 @@ describe('filterSessions', () => {
 
   it('无匹配返回空数组', () => {
     expect(filterSessions(SESSIONS, '不存在的标题')).toEqual([]);
+  });
+});
+
+describe('sortSessions', () => {
+  it('置顶优先，其余按创建时间倒序', () => {
+    const pinnedOld: SessionSummary = { ...SESSIONS[2], id: 'pin', pinned: true };
+    const out = sortSessions([...SESSIONS, pinnedOld]);
+    expect(out.map((s) => s.id)).toEqual(['pin', '1', '2', '3']);
+  });
+
+  it('不修改原数组', () => {
+    const input = [...SESSIONS];
+    sortSessions(input);
+    expect(input.map((s) => s.id)).toEqual(['1', '2', '3']);
   });
 });

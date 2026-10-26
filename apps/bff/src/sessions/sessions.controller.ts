@@ -1,4 +1,15 @@
-import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  Param,
+  Patch,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { SessionsService } from './sessions.service';
 import { JwtGuard } from '../auth/jwt.guard';
 import { CurrentUser } from '../auth/current-user';
@@ -8,6 +19,7 @@ import type {
   MessageDto,
   SessionPage,
   SessionSummary,
+  UpdateSessionRequest,
 } from '@ai-office/shared';
 
 /** 会话入口：所有读写都带 tenantId + userId 过滤，跨用户访问由 service 层按 404 处理。 */
@@ -40,6 +52,21 @@ export class SessionsController {
     @Body() body: CreateSessionRequest,
   ): Promise<SessionSummary> {
     return this.sessions.create(user.tenantId, user.sub, body ?? {});
+  }
+
+  @Patch(':id')
+  update(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() body: UpdateSessionRequest,
+  ): Promise<SessionSummary> {
+    return this.sessions.update(id, user.tenantId, user.sub, body ?? {});
+  }
+
+  @Delete(':id')
+  @HttpCode(204)
+  remove(@CurrentUser() user: JwtPayload, @Param('id') id: string): Promise<void> {
+    return this.sessions.remove(id, user.tenantId, user.sub);
   }
 
   @Get(':id/messages')

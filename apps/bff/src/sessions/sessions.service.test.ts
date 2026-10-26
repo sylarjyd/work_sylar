@@ -1,6 +1,6 @@
 import 'reflect-metadata';
 import { describe, it, expect } from 'vitest';
-import { NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { SessionsService } from './sessions.service';
 import { ModelUnavailableError } from '../models/model.errors';
 import type { ModelCatalogService } from '../models/model-catalog.service';
@@ -36,7 +36,9 @@ const all = [
     tenantId: 't1',
     userId: 'u1',
     title: 'active',
+    titleSource: 'auto',
     status: 'active',
+    pinned: false,
     model: 'm1',
     assistantId: 'a1',
     mode: 'task',
@@ -48,7 +50,9 @@ const all = [
     tenantId: 't1',
     userId: 'u1',
     title: 'archived',
+    titleSource: 'auto',
     status: 'archived',
+    pinned: false,
     model: null,
     assistantId: null,
     mode: 'chat',
@@ -59,13 +63,23 @@ const all = [
     tenantId: 't1',
     userId: 'u1',
     title: 'default',
+    titleSource: 'auto',
     status: 'active',
+    pinned: false,
     model: 'm1',
     assistantId: null,
     mode: 'chat',
     createdAt: new Date('2026-01-01T00:00:00Z'),
   },
 ];
+
+/** 模拟 where.status：字符串等值或 { not } 排除。 */
+function matchesStatus(row: { status: string }, cond: unknown): boolean {
+  if (cond === undefined) return true;
+  if (typeof cond === 'string') return row.status === cond;
+  const not = (cond as { not?: string }).not;
+  return not === undefined || row.status !== not;
+}
 
 function withAssistant<T extends { assistantId: string | null }>(s: T) {
   return {
@@ -79,7 +93,10 @@ function makeService(
   defaultModel: string | null = 'm1',
   assistants: AssistantFixture[] = [ASSISTANT],
   rows = all,
+  busyTasks: { sessionId: string; status: string }[] = [],
 ) {
+  // 每份用例独立可变数据：改名/置顶/删除会写回，不能污染共享的 all。
+  const data = rows.map((s) => ({ ...s }));
   const created: { model?: string; assistantId?: string | null; mode?: string }[] = [];
   const prisma = {
     session: {
@@ -89,21 +106,22 @@ function makeService(
         cursor,
         skip,
       }: {
-        where: { tenantId: string; userId: string; status?: { not: string } };
+        where: { tenantId: string; userId: string; status?: unknown };
         take?: number;
         cursor?: { id: string };
         skip?: number;
       }) => {
-        let list = rows
+        let list = data
           .filter(
             (s) =>
               s.tenantId === where.tenantId &&
               s.userId === where.userId &&
-              (!where.status?.not || s.status !== where.status.not),
+              matchesStatus(s, where.status),
           )
-          // 与真实查询同序：createdAt 降序，id 兜底，游标翻页依赖这个顺序。
+          // 与真实查询同序：置顶优先，createdAt 降序，id 兜底，游标翻页依赖这个顺序。
           .sort(
             (a, b) =>
+              Number(b.pinned) - Number(a.pinned) ||
               b.createdAt.getTime() - a.createdAt.getTime() ||
               (a.id < b.id ? 1 : a.id > b.id ? -1 : 0),
           );
@@ -117,15 +135,15 @@ function makeService(
       findFirst: async ({
         where,
       }: {
-        where: { id: string; tenantId: string; userId: string; status?: { not: string } };
+        where: { id: string; tenantId: string; userId: string; status?: unknown };
       }) => {
         const row =
-          all.find(
+          data.find(
             (s) =>
               s.id === where.id &&
               s.tenantId === where.tenantId &&
               s.userId === where.userId &&
-              (!where.status?.not || s.status !== where.status.not),
+              matchesStatus(s, where.status),
           ) ?? null;
         if (!row) return null;
         return {
@@ -135,6 +153,24 @@ function makeService(
               ? assistants.find((a) => a.id === ASSISTANT.id) ?? null
               : null,
         };
+      },
+      updateMany: async ({
+        where,
+        data: patch,
+      }: {
+        where: { id: string; tenantId: string; userId: string; status?: unknown };
+        data: Record<string, unknown>;
+      }) => {
+        const row = data.find(
+          (s) =>
+            s.id === where.id &&
+            s.tenantId === where.tenantId &&
+            s.userId === where.userId &&
+            matchesStatus(s, where.status),
+        );
+        if (!row) return { count: 0 };
+        Object.assign(row, patch);
+        return { count: 1 };
       },
       create: async ({
         data,
@@ -169,6 +205,16 @@ function makeService(
             a.id === where.id && a.tenantId === where.tenantId && a.userId === where.userId,
         ) ?? null,
     },
+    task: {
+      findFirst: async ({
+        where,
+      }: {
+        where: { sessionId: string; status: { in: string[] } };
+      }) =>
+        busyTasks.find(
+          (t) => t.sessionId === where.sessionId && where.status.in.includes(t.status),
+        ) ?? null,
+    },
   } as unknown as PrismaService;
   const catalog = {
     available: async () => ({
@@ -182,7 +228,7 @@ function makeService(
       defaultModel,
     }),
   } as unknown as ModelCatalogService;
-  return { svc: new SessionsService(prisma, catalog), created };
+  return { svc: new SessionsService(prisma, catalog), created, rows: data };
 }
 
 describe('SessionsService 归档语义', () => {
@@ -211,7 +257,9 @@ function makeSessions(count: number) {
     tenantId: 't1',
     userId: 'u1',
     title: `会话 ${i}`,
+    titleSource: 'auto',
     status: 'active',
+    pinned: false,
     model: 'm1',
     assistantId: null as string | null,
     mode: 'chat',
@@ -347,5 +395,78 @@ describe('SessionsService 选模', () => {
         kbIds: ['b1'],
       },
     });
+  });
+});
+
+describe('SessionsService 改名与置顶', () => {
+  it('改名去除首尾空格，并把标题来源标记为 manual', async () => {
+    const { svc, rows } = makeService();
+    const s = await svc.update('s1', 't1', 'u1', { title: '  周报草稿  ' });
+    expect(s.title).toBe('周报草稿');
+    expect(rows.find((r) => r.id === 's1')).toMatchObject({
+      title: '周报草稿',
+      titleSource: 'manual',
+    });
+  });
+
+  it('标题为空或超过 40 字时拒绝，且不落库', async () => {
+    const { svc, rows } = makeService();
+    await expect(svc.update('s1', 't1', 'u1', { title: '   ' })).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+    await expect(
+      svc.update('s1', 't1', 'u1', { title: '字'.repeat(41) }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(rows.find((r) => r.id === 's1')?.title).toBe('active');
+  });
+
+  it('置顶后列表排到最前，取消置顶恢复原序', async () => {
+    const { svc } = makeService();
+    await svc.update('s3', 't1', 'u1', { pinned: true });
+    expect((await svc.list('t1', 'u1')).items.map((s) => s.id)).toEqual(['s3', 's1']);
+    await svc.update('s3', 't1', 'u1', { pinned: false });
+    expect((await svc.list('t1', 'u1')).items.map((s) => s.id)).toEqual(['s1', 's3']);
+  });
+
+  it('pinned 非布尔或没有任何字段时拒绝', async () => {
+    const { svc } = makeService();
+    await expect(
+      svc.update('s1', 't1', 'u1', { pinned: 'yes' as never }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    await expect(svc.update('s1', 't1', 'u1', {})).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('他人或已归档会话一律 404', async () => {
+    const { svc } = makeService();
+    await expect(svc.update('s1', 't2', 'u2', { title: 'x' })).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
+    await expect(svc.update('s2', 't1', 'u1', { title: 'x' })).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
+  });
+});
+
+describe('SessionsService 软删除', () => {
+  it('删除后状态变为 deleted，列表与详情都不再可见', async () => {
+    const { svc, rows } = makeService();
+    await svc.remove('s1', 't1', 'u1');
+    expect(rows.find((r) => r.id === 's1')?.status).toBe('deleted');
+    expect((await svc.list('t1', 'u1')).items.map((s) => s.id)).toEqual(['s3']);
+    await expect(svc.detail('s1', 't1', 'u1')).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('有排队/运行中任务时返回 409，会话保持可用', async () => {
+    const { svc, rows } = makeService(['m1'], 'm1', [ASSISTANT], all, [
+      { sessionId: 's1', status: 'running' },
+    ]);
+    await expect(svc.remove('s1', 't1', 'u1')).rejects.toBeInstanceOf(ConflictException);
+    expect(rows.find((r) => r.id === 's1')?.status).toBe('active');
+  });
+
+  it('他人、已归档或已删除会话一律 404', async () => {
+    const { svc } = makeService();
+    await expect(svc.remove('s1', 't2', 'u2')).rejects.toBeInstanceOf(NotFoundException);
+    await expect(svc.remove('s2', 't1', 'u1')).rejects.toBeInstanceOf(NotFoundException);
   });
 });

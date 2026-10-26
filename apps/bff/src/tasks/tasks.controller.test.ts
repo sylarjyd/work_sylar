@@ -12,6 +12,7 @@ import { TasksService } from './tasks.service';
 import { AttachmentsService } from '../attachments/attachments.service';
 import { SessionsController } from '../sessions/sessions.controller';
 import { SessionsService } from '../sessions/sessions.service';
+import { SessionTitleService, type TitleRequest } from '../sessions/session-title.service';
 import { PrismaService } from '../db/prisma.service';
 import { signToken } from '../auth/jwt';
 import { BillingService } from '../billing/billing.service';
@@ -45,6 +46,8 @@ const assertCapacityCalls: string[] = [];
 const callOrder: string[] = [];
 // 落库故障注入：验证入队失败后的清理再失败也不会掩盖响应。
 let runUpdateError: unknown = null;
+// 已有历史消息：用于验证只有首条消息才触发自动命名。
+let priorMessages: unknown[] = [];
 
 const stored: {
   messages: unknown[];
@@ -156,6 +159,14 @@ const fakeQueue = {
   },
 } as unknown as RunQueueService;
 
+// 自动命名：只观察是否/何时被调度，真正的标题生成由 session-title.service 用例覆盖。
+const titleCalls: TitleRequest[] = [];
+const fakeTitles = {
+  schedule: (req: TitleRequest) => {
+    titleCalls.push(req);
+  },
+} as unknown as SessionTitleService;
+
 const relayCalls: string[] = [];
 let attachError: unknown = null;
 const fakeRelay = {
@@ -194,7 +205,7 @@ const fakePrisma = {
     },
   },
   message: {
-    findMany: async () => [],
+    findMany: async () => priorMessages,
     findFirst: async () => null,
     create: async ({ data }: { data: unknown }) => {
       stored.messages.push(data);
@@ -260,6 +271,7 @@ beforeAll(async () => {
       { provide: AttachmentsService, useValue: fakeAttachments },
       { provide: RunQueueService, useValue: fakeQueue },
       { provide: RunRelayService, useValue: fakeRelay },
+      { provide: SessionTitleService, useValue: fakeTitles },
       { provide: BFF_METRICS, useValue: createBffMetrics({ defaultMetrics: false }) },
     ],
   }).compile();
@@ -295,6 +307,8 @@ beforeEach(() => {
   submitError = null;
   relayCalls.length = 0;
   attachError = null;
+  titleCalls.length = 0;
+  priorMessages = [];
   modelRoutes = [];
   assertCapacityError = null;
   assertCapacityCalls.length = 0;
@@ -528,6 +542,40 @@ describe('TasksController', () => {
     expect(stored.sessionModelUpdates).toHaveLength(0);
   });
 
+  it('首条消息入队后触发一次自动命名', async () => {
+    modelRoutes = [{ model: 'm1', baseUrl: 'https://ark.example/v3', apiKey: 'sk-plain' }];
+    const token = signToken({ sub: 'u1', tenantId: 't1' });
+    const res = await fetch(`${baseUrl}/api/sessions/s1/tasks`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+      body: JSON.stringify({ goal: '查竞品' }),
+    });
+    expect(res.status).toBe(200);
+    await res.text();
+
+    expect(titleCalls).toHaveLength(1);
+    expect(titleCalls[0]).toMatchObject({
+      sessionId: 's1',
+      tenantId: 't1',
+      userId: 'u1',
+      goal: '查竞品',
+      routes: modelRoutes,
+    });
+  });
+
+  it('会话已有历史消息时不再触发自动命名', async () => {
+    priorMessages = [{ role: 'user', content: '旧消息', seq: 0, attachments: [] }];
+    const token = signToken({ sub: 'u1', tenantId: 't1' });
+    const res = await fetch(`${baseUrl}/api/sessions/s1/tasks`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+      body: JSON.stringify({ goal: '继续追问' }),
+    });
+    expect(res.status).toBe(200);
+    await res.text();
+    expect(titleCalls).toHaveLength(0);
+  });
+
   it('会话无模型时快照记录 null，由执行器在运行时回填', async () => {
     session.model = null;
     const token = signToken({ sub: 'u1', tenantId: 't1' });
@@ -712,5 +760,7 @@ describe('TasksController', () => {
     expect(messages.at(-1)?.attachments).toHaveLength(1);
     // 创建路径不读取附件字节。
     expect(attachmentCalls.some((c) => c[0] === 'hydrate')).toBe(false);
+    // 纯附件消息也用首个附件名兜底命名。
+    expect(titleCalls[0]).toMatchObject({ goal: '', attachmentName: 'p.png' });
   });
 });

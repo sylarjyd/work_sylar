@@ -13,7 +13,18 @@ const userId = 'u1';
 let token: string;
 
 // 内存假库：会话归属用 tenantId/userId 过滤，模拟行级隔离。
-const sessions: { id: string; tenantId: string; userId: string; title: string; createdAt: Date }[] = [];
+const sessions: {
+  id: string;
+  tenantId: string;
+  userId: string;
+  title: string;
+  createdAt: Date;
+  status?: string;
+  titleSource?: string;
+  pinned?: boolean;
+}[] = [];
+const tasks: { id: string; sessionId: string; status: string }[] = [];
+const isActive = (s: { status?: string }) => (s.status ?? 'active') === 'active';
 const messages: {
   id: string;
   sessionId: string;
@@ -56,9 +67,12 @@ const fakePrisma = {
       skip?: number;
     }) => {
       let list = sessions
-        .filter((s) => s.tenantId === where.tenantId && s.userId === where.userId)
+        .filter(
+          (s) => s.tenantId === where.tenantId && s.userId === where.userId && isActive(s),
+        )
         .sort(
           (a, b) =>
+            Number(b.pinned ?? false) - Number(a.pinned ?? false) ||
             b.createdAt.getTime() - a.createdAt.getTime() ||
             (a.id < b.id ? 1 : a.id > b.id ? -1 : 0),
         );
@@ -71,13 +85,48 @@ const fakePrisma = {
     },
     findFirst: async ({ where }: { where: { id: string; tenantId: string; userId: string } }) =>
       sessions.find(
-        (s) => s.id === where.id && s.tenantId === where.tenantId && s.userId === where.userId,
+        (s) =>
+          s.id === where.id &&
+          s.tenantId === where.tenantId &&
+          s.userId === where.userId &&
+          isActive(s),
       ) ?? null,
+    updateMany: async ({
+      where,
+      data,
+    }: {
+      where: { id: string; tenantId: string; userId: string };
+      data: Record<string, unknown>;
+    }) => {
+      const row = sessions.find(
+        (s) =>
+          s.id === where.id &&
+          s.tenantId === where.tenantId &&
+          s.userId === where.userId &&
+          isActive(s),
+      );
+      if (!row) return { count: 0 };
+      Object.assign(row, data);
+      return { count: 1 };
+    },
     create: async ({ data }: { data: { tenantId: string; userId: string; title: string } }) => {
-      const row = { id: `s${++seq}`, createdAt: new Date(), ...data };
+      const row = {
+        id: `s${++seq}`,
+        createdAt: new Date(),
+        status: 'active',
+        titleSource: 'auto',
+        pinned: false,
+        ...data,
+      };
       sessions.push(row);
       return row;
     },
+  },
+  task: {
+    findFirst: async ({ where }: { where: { sessionId: string; status: { in: string[] } } }) =>
+      tasks.find(
+        (t) => t.sessionId === where.sessionId && where.status.in.includes(t.status),
+      ) ?? null,
   },
   message: {
     findMany: async ({ where }: { where: { sessionId: string } }) =>
@@ -129,6 +178,7 @@ afterAll(async () => {
 beforeEach(() => {
   sessions.length = 0;
   messages.length = 0;
+  tasks.length = 0;
 });
 
 // token 在 beforeAll 才签发，故用函数惰性取值，避免模块求值时捕获到 undefined。
@@ -225,6 +275,91 @@ describe('SessionsController', () => {
     });
     expect(res.statusCode).toBe(201);
     expect(JSON.parse(res.payload).title).toBe('新会话');
+  });
+
+  it('可重命名会话，标题来源转为 manual', async () => {
+    sessions.push({ id: 's-rename', tenantId, userId, title: '旧标题', createdAt: new Date() });
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/api/sessions/s-rename',
+      headers: auth(),
+      payload: { title: '  新标题  ' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.payload).title).toBe('新标题');
+    expect(sessions[0]).toMatchObject({ title: '新标题', titleSource: 'manual' });
+  });
+
+  it('置顶后列表把会话排在最前', async () => {
+    sessions.push(
+      { id: 's-new', tenantId, userId, title: '新', createdAt: new Date('2026-01-02T00:00:00Z') },
+      { id: 's-old', tenantId, userId, title: '旧', createdAt: new Date('2026-01-01T00:00:00Z') },
+    );
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/api/sessions/s-old',
+      headers: auth(),
+      payload: { pinned: true },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.payload).pinned).toBe(true);
+    const list = JSON.parse(
+      (await app.inject({ method: 'GET', url: '/api/sessions', headers: auth() })).payload,
+    );
+    expect(list.items.map((s: { id: string }) => s.id)).toEqual(['s-old', 's-new']);
+  });
+
+  it('标题为空返回 400，他人会话返回 404', async () => {
+    sessions.push({ id: 's-bad', tenantId, userId, title: 'x', createdAt: new Date() });
+    const bad = await app.inject({
+      method: 'PATCH',
+      url: '/api/sessions/s-bad',
+      headers: auth(),
+      payload: { title: '   ' },
+    });
+    expect(bad.statusCode).toBe(400);
+
+    const other = signToken({ sub: 'u2', tenantId: 't2' });
+    const denied = await app.inject({
+      method: 'PATCH',
+      url: '/api/sessions/s-bad',
+      headers: { authorization: `Bearer ${other}` },
+      payload: { title: '偷改' },
+    });
+    expect(denied.statusCode).toBe(404);
+  });
+
+  it('删除返回 204，之后列表与详情都不可见', async () => {
+    sessions.push({ id: 's-del', tenantId, userId, title: '待删', createdAt: new Date() });
+    const res = await app.inject({
+      method: 'DELETE',
+      url: '/api/sessions/s-del',
+      headers: auth(),
+    });
+    expect(res.statusCode).toBe(204);
+    expect(sessions[0].status).toBe('deleted');
+    const list = JSON.parse(
+      (await app.inject({ method: 'GET', url: '/api/sessions', headers: auth() })).payload,
+    );
+    expect(list.items).toEqual([]);
+    const detail = await app.inject({
+      method: 'GET',
+      url: '/api/sessions/s-del',
+      headers: auth(),
+    });
+    expect(detail.statusCode).toBe(404);
+  });
+
+  it('会话有运行中任务时删除返回 409', async () => {
+    sessions.push({ id: 's-busy', tenantId, userId, title: '忙', createdAt: new Date() });
+    tasks.push({ id: 'task-1', sessionId: 's-busy', status: 'running' });
+    const res = await app.inject({
+      method: 'DELETE',
+      url: '/api/sessions/s-busy',
+      headers: auth(),
+    });
+    expect(res.statusCode).toBe(409);
+    expect(isActive(sessions[0])).toBe(true);
   });
 
   it('跨租户访问他人会话返回 404', async () => {

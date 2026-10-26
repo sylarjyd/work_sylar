@@ -72,7 +72,14 @@ export class TasksService {
     traceId: string | null,
     attachmentIds: string[],
     snapshot: RunSnapshot,
-  ): Promise<{ taskId: string; runId: string; tenantId: string; userId: string }> {
+  ): Promise<{
+    taskId: string;
+    runId: string;
+    tenantId: string;
+    userId: string;
+    /** 会话尚无任何消息：控制器据此触发一次性的自动命名。 */
+    firstMessage: boolean;
+  }> {
     await this.sessions.assertOwned(sessionId, tenantId, userId);
     const ids = [...new Set(attachmentIds)];
 
@@ -120,6 +127,7 @@ export class TasksService {
               traceId: traceId ?? null,
             },
           });
+          const firstMessage = prior.length === 0;
           // 用当前最大 seq + 1 而不是长度：历史消息删除后 seq 会有空洞。
           const nextSeq = prior.length > 0 ? prior[prior.length - 1].seq + 1 : 0;
           const message = await tx.message.create({
@@ -169,7 +177,7 @@ export class TasksService {
             where: { id: task.id },
             data: { input: { ...snapshot, messages } as unknown as Prisma.InputJsonValue },
           });
-          return { taskId: task.id, runId: run.id, tenantId, userId };
+          return { taskId: task.id, runId: run.id, tenantId, userId, firstMessage };
         });
       } catch (err) {
         // 非 seq 唯一键冲突（如 runId 主键冲突）重试也不会成功，立即抛出。

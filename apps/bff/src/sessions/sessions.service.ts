@@ -1,4 +1,9 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import {
   attachmentKindFor,
   isAssistantPermissionMode,
@@ -13,6 +18,7 @@ import {
   type SessionMode,
   type SessionPage,
   type SessionSummary,
+  type UpdateSessionRequest,
 } from '@ai-office/shared';
 import { PrismaService } from '../db/prisma.service';
 import { ModelCatalogService } from '../models/model-catalog.service';
@@ -63,11 +69,11 @@ export class SessionsService {
   ): Promise<SessionPage> {
     const limit = clampLimit(opts.limit);
     const cursor = opts.cursor?.trim() || undefined;
-    // 归档会话对普通用户不可见。多取一条用于判断是否还有下一页，省掉额外 count。
-    // createdAt 可能重复，排序追加 id 兜底，游标翻页才不重不漏。
+    // 归档/删除的会话对普通用户不可见。多取一条用于判断是否还有下一页，省掉额外 count。
+    // 置顶优先，其余按创建时间倒序；createdAt 可能重复，追加 id 兜底，游标翻页才不重不漏。
     const rows = await this.prisma.session.findMany({
-      where: { tenantId, userId, status: { not: 'archived' } },
-      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      where: { tenantId, userId, status: 'active' },
+      orderBy: [{ pinned: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
       take: limit + 1,
       ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
       include: { assistant: { select: { name: true } } },
@@ -82,11 +88,70 @@ export class SessionsService {
   /** 单个会话摘要：深链到首屏之外的旧会话时，前端用它补齐侧栏与选模信息。 */
   async detail(sessionId: string, tenantId: string, userId: string): Promise<SessionSummary> {
     const s = await this.prisma.session.findFirst({
-      where: { id: sessionId, tenantId, userId, status: { not: 'archived' } },
+      where: { id: sessionId, tenantId, userId, status: 'active' },
       include: { assistant: { select: { name: true } } },
     });
     if (!s) throw new NotFoundException('session_not_found');
     return toSummary(s);
+  }
+
+  /**
+   * 改名或置顶：两者都是一次行级更新，合并在同一方法里避免控制器拼装两次写。
+   * 改名同时把标题来源标为 manual，之后的首条消息自动命名不再覆盖用户的选择。
+   */
+  async update(
+    sessionId: string,
+    tenantId: string,
+    userId: string,
+    req: UpdateSessionRequest,
+  ): Promise<SessionSummary> {
+    const data: { title?: string; titleSource?: string; pinned?: boolean } = {};
+    if (req.title !== undefined) {
+      const title = typeof req.title === 'string' ? req.title.trim() : '';
+      // 标题会直接进侧栏与顶栏，限制长度避免布局被超长输入撑坏。
+      if ([...title].length < 1 || [...title].length > MAX_TITLE_LENGTH) {
+        throw new BadRequestException('invalid_title');
+      }
+      data.title = title;
+      data.titleSource = 'manual';
+    }
+    if (req.pinned !== undefined) {
+      if (typeof req.pinned !== 'boolean') throw new BadRequestException('invalid_pinned');
+      data.pinned = req.pinned;
+    }
+    if (Object.keys(data).length === 0) throw new BadRequestException('empty_update');
+
+    const { count } = await this.prisma.session.updateMany({
+      where: { id: sessionId, tenantId, userId, status: 'active' },
+      data,
+    });
+    if (count === 0) throw new NotFoundException('session_not_found');
+    return this.detail(sessionId, tenantId, userId);
+  }
+
+  /**
+   * 软删除：只把状态推进到 deleted，消息/任务/产物保留，运营端仍可审计追溯。
+   * 运行中的会话先拒绝删除，避免任务继续消耗额度却从界面上消失。
+   */
+  async remove(sessionId: string, tenantId: string, userId: string): Promise<void> {
+    const session = await this.prisma.session.findFirst({
+      where: { id: sessionId, tenantId, userId, status: 'active' },
+      select: { id: true },
+    });
+    if (!session) throw new NotFoundException('session_not_found');
+
+    const busy = await this.prisma.task.findFirst({
+      where: { sessionId, status: { in: ['queued', 'running'] } },
+      select: { id: true },
+    });
+    if (busy) throw new ConflictException('session_busy');
+
+    // 条件更新兜住并发删除：先查到、再删之间会话可能已不存在或被删除。
+    const { count } = await this.prisma.session.updateMany({
+      where: { id: sessionId, tenantId, userId, status: 'active' },
+      data: { status: 'deleted' },
+    });
+    if (count === 0) throw new NotFoundException('session_not_found');
   }
 
   async create(
@@ -146,12 +211,12 @@ export class SessionsService {
   }
 
   /**
-   * 校验会话归属（tenant 强制行级隔离）：非本租户/用户或已归档一律 404，不泄露存在性。
+   * 校验会话归属（tenant 强制行级隔离）：非本租户/用户、已归档或已删除一律 404，不泄露存在性。
    * 返回创建时选定的模型与助手配置，供任务控制器解析运行路由与运行参数。
    */
   async assertOwned(sessionId: string, tenantId: string, userId: string): Promise<SessionRef> {
     const s = await this.prisma.session.findFirst({
-      where: { id: sessionId, tenantId, userId, status: { not: 'archived' } },
+      where: { id: sessionId, tenantId, userId, status: 'active' },
       include: {
         assistant: {
           select: {
@@ -234,6 +299,7 @@ function toSummary(s: {
   mode: string;
   assistantId?: string | null;
   assistant?: { name: string } | null;
+  pinned?: boolean;
 }): SessionSummary {
   return {
     id: s.id,
@@ -243,11 +309,15 @@ function toSummary(s: {
     assistantId: s.assistantId ?? null,
     assistantName: s.assistant?.name ?? null,
     mode: isSessionMode(s.mode) ? s.mode : 'chat',
+    pinned: s.pinned === true,
   };
 }
 
 /** 每页上限：前端只需要首屏 20 条，放大上限仅用于运维手工排查。 */
 const MAX_PAGE_SIZE = 100;
+
+/** 会话标题上限：侧栏会截断展示，过长标题只会在编辑框里妨碍输入。 */
+const MAX_TITLE_LENGTH = 40;
 
 function clampLimit(value: number | undefined): number {
   if (value === undefined || !Number.isInteger(value) || value < 1) return SESSION_PAGE_SIZE;

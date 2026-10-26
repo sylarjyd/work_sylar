@@ -304,12 +304,13 @@ describe('TasksService', () => {
     });
     // startedAt 由执行器在真正开始执行时写入，创建路径不能提前写。
     expect(ctx.db.runs[0].startedAt).toBeUndefined();
-    // 返回值只带标识，消息历史已经随快照落库。
+    // 返回值只带标识，消息历史已经随快照落库；已有历史时首轮标记为 false。
     expect(result).toEqual({
       taskId: ctx.db.tasks[0].id,
       runId: 'r1',
       tenantId: 't1',
       userId: 'u1',
+      firstMessage: false,
     });
   });
 
@@ -400,11 +401,22 @@ describe('TasksService', () => {
     expect(ctx.db.taskUpdates[0].where).toEqual({ id: 'task1' });
   });
 
-  it('prepare 持久化 traceId，未提供时写 null', async () => {
-    await svc.prepare('s1', 't1', 'u1', '目标', 'run1', 'trace-1', [], snapshot({ traceId: 'trace-1' }));
+  it('prepare 持久化 traceId，未提供时写 null；首条消息标记只出现一次', async () => {
+    const first = await svc.prepare(
+      's1',
+      't1',
+      'u1',
+      '目标',
+      'run1',
+      'trace-1',
+      [],
+      snapshot({ traceId: 'trace-1' }),
+    );
+    expect(first.firstMessage).toBe(true);
     expect(ctx.db.runs[0]).toMatchObject({ id: 'run1', traceId: 'trace-1' });
 
-    await svc.prepare('s1', 't1', 'u1', '目标', 'run2', null, [], snapshot());
+    const second = await svc.prepare('s1', 't1', 'u1', '目标', 'run2', null, [], snapshot());
+    expect(second.firstMessage).toBe(false);
     expect(ctx.db.runs[1].traceId).toBeNull();
   });
 

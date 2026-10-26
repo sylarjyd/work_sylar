@@ -20,6 +20,7 @@ import type {
   SessionMode,
   SessionPage,
   SessionSummary,
+  UpdateSessionRequest,
   UsageAggregateDto,
 } from '@ai-office/shared';
 import {
@@ -65,6 +66,27 @@ export async function getSession(sessionId: string): Promise<SessionSummary> {
   const res = await authFetch(`/api/sessions/${encodeURIComponent(sessionId)}`);
   if (!res.ok) throw new Error(`session_failed_${res.status}`);
   return (await res.json()) as SessionSummary;
+}
+
+/** 改名或置顶，返回更新后的摘要（置顶排序由后端保证）。 */
+export async function updateSession(
+  sessionId: string,
+  patch: UpdateSessionRequest,
+): Promise<SessionSummary> {
+  const res = await authFetch(`/api/sessions/${encodeURIComponent(sessionId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) throw new Error(`update_session_failed_${res.status}`);
+  return (await res.json()) as SessionSummary;
+}
+
+/** 软删除会话；有排队/运行中任务时后端返回 409。 */
+export async function deleteSession(sessionId: string): Promise<void> {
+  const res = await authFetch(`/api/sessions/${encodeURIComponent(sessionId)}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) throw new Error(`delete_session_failed_${res.status}`);
 }
 
 /** 历史消息（user / assistant 两角色），用于回看会话。 */

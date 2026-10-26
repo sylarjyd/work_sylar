@@ -11,31 +11,42 @@ import {
   type ReactNode,
   type UIEvent,
 } from 'react';
-import { Layout, Menu } from 'antd';
+import { Dropdown, Input, Layout, Menu, message, Modal } from 'antd';
 import {
   ApiOutlined,
   AppstoreOutlined,
   BookOutlined,
+  DeleteOutlined,
+  EditOutlined,
   LogoutOutlined,
   MenuFoldOutlined,
   MessageOutlined,
+  MoreOutlined,
   PlusOutlined,
+  PushpinFilled,
+  PushpinOutlined,
   RobotOutlined,
   SearchOutlined,
   WalletOutlined,
 } from '@ant-design/icons';
-import { SESSION_PAGE_SIZE, type SessionSummary } from '@ai-office/shared';
+import {
+  SESSION_PAGE_SIZE,
+  type SessionSummary,
+  type UpdateSessionRequest,
+} from '@ai-office/shared';
 import {
   clearToken,
+  deleteSession,
   fetchMe,
   getEmail,
   getRole,
   getToken,
   isUnauthorized,
   listSessions,
+  updateSession,
 } from '../lib/api';
 import { relativeTime } from '../lib/format';
-import { filterSessions } from '../lib/session-filter';
+import { filterSessions, sortSessions } from '../lib/session-filter';
 import { IconSpark } from './icons';
 
 type ActiveNav = 'workbench' | 'assistants' | 'kb' | 'connectors' | 'billing';
@@ -57,6 +68,17 @@ interface AppShellProps {
   onSelectSession?: (id: string) => void;
   onNewSession?: () => void;
   sessionDisabled?: boolean;
+  /** 工作台自行维护会话列表，改名/置顶与删除交给它更新状态；其它页面由外壳兜底。 */
+  onUpdateSession?: (id: string, patch: UpdateSessionRequest) => Promise<void>;
+  onDeleteSession?: (id: string) => Promise<void>;
+}
+
+/** 会话操作失败的提示：后端用状态码表达「运行中」与「已不存在」，这里翻译成用户能懂的话。 */
+function actionErrorText(err: unknown, fallback: string): string {
+  const msg = err instanceof Error ? err.message : '';
+  if (msg.includes('409')) return '会话还有任务在运行，请先停止后再删除';
+  if (msg.includes('404')) return '会话不存在或已被删除';
+  return fallback;
 }
 
 const NAV: { key: ActiveNav; href: string; label: string; icon: ReactNode }[] = [
@@ -78,6 +100,8 @@ export function AppShell({
   onSelectSession,
   onNewSession,
   sessionDisabled,
+  onUpdateSession,
+  onDeleteSession,
 }: AppShellProps) {
   const router = useRouter();
   // 角色与邮箱只在挂载后读取：SSR 阶段没有 localStorage，渲染期读取会触发 hydration 不一致。
@@ -94,6 +118,13 @@ export function AppShell({
   const [query, setQuery] = useState('');
   const searchRef = useRef<HTMLInputElement>(null);
   const searchButtonRef = useRef<HTMLButtonElement>(null);
+  const [renameTarget, setRenameTarget] = useState<SessionSummary | null>(null);
+  const [renameValue, setRenameValue] = useState('');
+  const [renaming, setRenaming] = useState(false);
+  const [renameError, setRenameError] = useState('');
+  const [deleteTarget, setDeleteTarget] = useState<SessionSummary | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
 
   useEffect(() => {
     const cachedRole = getRole() ?? '';
@@ -238,6 +269,114 @@ export function AppShell({
     router.push(`/?session=${encodeURIComponent(id)}`);
   }
 
+  /** 工作台传入处理器时由它更新列表；其它页面就地更新外壳自己拉取的会话。 */
+  async function applyUpdate(id: string, patch: UpdateSessionRequest): Promise<void> {
+    if (onUpdateSession) {
+      await onUpdateSession(id, patch);
+      return;
+    }
+    const updated = await updateSession(id, patch);
+    setRemoteSessions((prev) =>
+      prev ? sortSessions(prev.map((s) => (s.id === id ? updated : s))) : prev,
+    );
+  }
+
+  async function applyDelete(id: string): Promise<void> {
+    if (onDeleteSession) {
+      await onDeleteSession(id);
+      return;
+    }
+    await deleteSession(id);
+    setRemoteSessions((prev) => prev?.filter((s) => s.id !== id));
+    if (id === sessionId) router.push('/');
+  }
+
+  async function togglePin(s: SessionSummary) {
+    try {
+      await applyUpdate(s.id, { pinned: !s.pinned });
+    } catch (err) {
+      if (isUnauthorized(err)) {
+        router.replace('/login');
+        return;
+      }
+      message.error(actionErrorText(err, '置顶失败，请稍后重试'));
+    }
+  }
+
+  function onSessionAction(key: string, s: SessionSummary) {
+    if (key === 'pin') {
+      void togglePin(s);
+      return;
+    }
+    if (key === 'rename') {
+      setRenameValue(s.title);
+      setRenameError('');
+      setRenameTarget(s);
+      return;
+    }
+    if (key === 'delete') {
+      setDeleteError('');
+      setDeleteTarget(s);
+    }
+  }
+
+  async function submitRename() {
+    const target = renameTarget;
+    if (!target || renaming) return;
+    const title = renameValue.trim();
+    if (!title) {
+      setRenameError('标题不能为空');
+      return;
+    }
+    setRenaming(true);
+    setRenameError('');
+    try {
+      await applyUpdate(target.id, { title });
+      setRenameTarget(null);
+    } catch (err) {
+      if (isUnauthorized(err)) {
+        router.replace('/login');
+        return;
+      }
+      setRenameError(actionErrorText(err, '重命名失败，请稍后重试'));
+    } finally {
+      setRenaming(false);
+      // 成功时目标已清空；失败时保留弹窗让用户修改后重试。
+    }
+  }
+
+  async function submitDelete() {
+    const target = deleteTarget;
+    if (!target || deleting) return;
+    setDeleting(true);
+    setDeleteError('');
+    try {
+      await applyDelete(target.id);
+      setDeleteTarget(null);
+    } catch (err) {
+      if (isUnauthorized(err)) {
+        router.replace('/login');
+        return;
+      }
+      setDeleteError(actionErrorText(err, '删除失败，请稍后重试'));
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  function sessionMenuItems(s: SessionSummary) {
+    return [
+      {
+        key: 'pin',
+        icon: s.pinned ? <PushpinFilled /> : <PushpinOutlined />,
+        label: s.pinned ? '取消置顶' : '置顶',
+      },
+      { key: 'rename', icon: <EditOutlined />, label: '重命名' },
+      { type: 'divider' as const },
+      { key: 'delete', icon: <DeleteOutlined />, label: '删除', danger: true },
+    ];
+  }
+
   const menuItems = [
     ...NAV.map(({ key, label, icon }) => ({ key, label, icon })),
     ...(role === 'admin' && ADMIN_URL
@@ -364,18 +503,44 @@ export function AppShell({
                 </div>
               ) : (
                 visibleSessions.map((s) => (
-                  <button
+                  <div
                     key={s.id}
-                    type="button"
-                    className={`wb-session${s.id === sessionId ? ' active' : ''}`}
-                    aria-current={s.id === sessionId ? 'true' : undefined}
-                    onClick={() => selectSession(s.id)}
-                    disabled={sessionDisabled}
-                    title={s.title}
+                    className={`wb-session-row${s.id === sessionId ? ' active' : ''}`}
                   >
-                    <span className="wb-session-title">{s.title}</span>
-                    <span className="wb-session-time">{relativeTime(s.createdAt)}</span>
-                  </button>
+                    <button
+                      type="button"
+                      className="wb-session"
+                      aria-current={s.id === sessionId ? 'true' : undefined}
+                      onClick={() => selectSession(s.id)}
+                      disabled={sessionDisabled}
+                      title={s.title}
+                    >
+                      {s.pinned && (
+                        <span className="wb-session-pin" title="已置顶" aria-label="已置顶">
+                          <PushpinFilled />
+                        </span>
+                      )}
+                      <span className="wb-session-title">{s.title}</span>
+                      <span className="wb-session-time">{relativeTime(s.createdAt)}</span>
+                    </button>
+                    <Dropdown
+                      trigger={['click']}
+                      placement="bottomRight"
+                      menu={{
+                        items: sessionMenuItems(s),
+                        onClick: ({ key }) => onSessionAction(key, s),
+                      }}
+                    >
+                      <button
+                        type="button"
+                        className="wb-session-action"
+                        aria-label={`会话操作：${s.title}`}
+                        title="会话操作"
+                      >
+                        <MoreOutlined />
+                      </button>
+                    </Dropdown>
+                  </div>
                 ))
               )}
               {loadingMoreSessions && (
@@ -412,6 +577,53 @@ export function AppShell({
         </div>
       </Layout.Sider>
       <Layout.Content className="main wb-main">{children}</Layout.Content>
+      <Modal
+        open={renameTarget !== null}
+        title="重命名会话"
+        okText="保存"
+        cancelText="取消"
+        confirmLoading={renaming}
+        onOk={submitRename}
+        onCancel={() => {
+          if (!renaming) setRenameTarget(null);
+        }}
+        destroyOnHidden
+        maskClosable={!renaming}
+      >
+        <Input
+          value={renameValue}
+          onChange={(e) => {
+            setRenameValue(e.target.value);
+            if (renameError) setRenameError('');
+          }}
+          onPressEnter={submitRename}
+          maxLength={40}
+          showCount
+          autoFocus
+          aria-label="会话标题"
+          disabled={renaming}
+        />
+        {renameError && <div className="wb-modal-error">{renameError}</div>}
+      </Modal>
+      <Modal
+        open={deleteTarget !== null}
+        title="删除会话"
+        okText="删除"
+        cancelText="取消"
+        okButtonProps={{ danger: true }}
+        confirmLoading={deleting}
+        onOk={submitDelete}
+        onCancel={() => {
+          if (!deleting) setDeleteTarget(null);
+        }}
+        destroyOnHidden
+        maskClosable={!deleting}
+      >
+        <div className="wb-modal-text">
+          确定删除「{deleteTarget?.title}」吗？删除后不再显示，相关记录会保留。
+        </div>
+        {deleteError && <div className="wb-modal-error">{deleteError}</div>}
+      </Modal>
     </Layout>
   );
 }
