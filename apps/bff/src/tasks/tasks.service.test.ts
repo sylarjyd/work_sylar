@@ -59,8 +59,30 @@ function makeDb() {
         if (row) Object.assign(row, data);
         return row ?? { id: where.id, ...data };
       },
+      // 条件更新：status/runId 等过滤条件按内存行逐项匹配。
+      updateMany: async ({ where, data }: any) => {
+        const rows = db.tasks.filter((t) =>
+          Object.entries(where).every(([k, v]) => k === 'id' || t[k] === v),
+        );
+        for (const row of rows) Object.assign(row, data);
+        return { count: rows.length };
+      },
     },
     run: {
+      findFirst: async ({ where }: any) => {
+        const row = db.runs.find((r) => r.id === where.id);
+        const session = where.task?.session;
+        if (!row) return null;
+        if (session && (row.tenantId !== session.tenantId || row.userId !== session.userId)) {
+          return null;
+        }
+        return {
+          id: row.id,
+          taskId: row.taskId,
+          status: row.status,
+          cancelRequestedAt: row.cancelRequestedAt ?? null,
+        };
+      },
       create: async ({ data }: any) => {
         const row = { id: `run${db.runs.length + 1}`, ...data };
         db.runs.push(row);
@@ -71,6 +93,13 @@ function makeDb() {
         const row = db.runs.find((r) => r.id === where.id);
         if (row) Object.assign(row, data);
         return row ?? { id: where.id, ...data };
+      },
+      updateMany: async ({ where, data }: any) => {
+        const rows = db.runs.filter((r) =>
+          Object.entries(where).every(([k, v]) => k === 'id' || r[k] === v),
+        );
+        for (const row of rows) Object.assign(row, data);
+        return { count: rows.length };
       },
     },
     attachment: {
@@ -94,8 +123,9 @@ function makeDb() {
     $transaction: async (fn: any) => {
       const snapshot = {
         messages: [...db.messages],
-        tasks: [...db.tasks],
-        runs: [...db.runs],
+        // 深度克隆：updateMany 会就地改写行对象，浅拷贝无法还原回滚。
+        tasks: db.tasks.map((t) => ({ ...t })),
+        runs: db.runs.map((r) => ({ ...r })),
         attachments: db.attachments.map((a) => ({ ...a })),
       };
       try {
@@ -381,5 +411,90 @@ describe('TasksService', () => {
 
     ctx.db.tasks.push({ id: 'task2', input: null });
     await expect(svc.loadSnapshot('task2')).rejects.toThrow('task_snapshot_missing');
+  });
+
+  it('findOwnedRun 返回本人的 run，缺失或他人一律 404', async () => {
+    const at = new Date();
+    ctx.db.runs.push({
+      id: 'r1',
+      taskId: 'task1',
+      status: 'running',
+      tenantId: 't1',
+      userId: 'u1',
+      cancelRequestedAt: at,
+    });
+
+    await expect(svc.findOwnedRun('r1', 't1', 'u1')).resolves.toEqual({
+      id: 'r1',
+      taskId: 'task1',
+      status: 'running',
+      cancelRequestedAt: at,
+    });
+    await expect(svc.findOwnedRun('missing', 't1', 'u1')).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
+    // 他人 / 他租户一律 404，不泄露存在性。
+    await expect(svc.findOwnedRun('r1', 't1', 'u2')).rejects.toBeInstanceOf(NotFoundException);
+    await expect(svc.findOwnedRun('r1', 't2', 'u1')).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('markCanceled 同时把 run/task 原子置为 canceled', async () => {
+    ctx.db.runs.push({ id: 'r1', taskId: 'task1', status: 'queued' });
+    ctx.db.tasks.push({ id: 'task1', status: 'queued' });
+
+    await expect(svc.markCanceled('r1', 'task1')).resolves.toBe(true);
+
+    expect(ctx.db.runs[0]).toMatchObject({ status: 'canceled' });
+    expect(ctx.db.runs[0].endedAt).toBeInstanceOf(Date);
+    expect(ctx.db.tasks[0]).toMatchObject({ status: 'canceled' });
+    expect(ctx.db.tasks[0].endedAt).toBeInstanceOf(Date);
+  });
+
+  it('markCanceled 在 run 已非 queued 时返回 false 且不动 task', async () => {
+    ctx.db.runs.push({ id: 'r1', taskId: 'task1', status: 'running' });
+    ctx.db.tasks.push({ id: 'task1', status: 'queued' });
+
+    await expect(svc.markCanceled('r1', 'task1')).resolves.toBe(false);
+    expect(ctx.db.runs[0].status).toBe('running');
+    expect(ctx.db.tasks[0].status).toBe('queued');
+  });
+
+  it('markCanceled 在 task 已非 queued 时回滚 run 更新', async () => {
+    ctx.db.runs.push({ id: 'r1', taskId: 'task1', status: 'queued' });
+    ctx.db.tasks.push({ id: 'task1', status: 'running' });
+
+    await expect(svc.markCanceled('r1', 'task1')).resolves.toBe(false);
+    // task 未能同步取消时必须回滚 run，避免出现 run canceled / task running 的撕裂状态。
+    expect(ctx.db.runs[0]).toMatchObject({ status: 'queued' });
+    expect(ctx.db.runs[0].endedAt).toBeUndefined();
+    expect(ctx.db.tasks[0].status).toBe('running');
+  });
+
+  it('markCancelRequested 只标记仍在 running 的 run，0 行不抛错', async () => {
+    const updateMany = vi.fn().mockResolvedValue({ count: 0 });
+    const conditional = new TasksService({ run: { updateMany } } as any, sessions as any);
+
+    await expect(conditional.markCancelRequested('r1')).resolves.toBeUndefined();
+    expect(updateMany).toHaveBeenCalledWith({
+      where: { id: 'r1', status: 'running' },
+      data: { cancelRequestedAt: expect.any(Date) },
+    });
+  });
+
+  it('finish 支持 canceled：run/task 均落 canceled 且不写 assistant 消息', async () => {
+    ctx.db.runs.push({ id: 'run1', taskId: 'task1', status: 'running' });
+    ctx.db.tasks.push({ id: 'task1', status: 'running' });
+
+    await svc.finish('run1', 'task1', 'canceled', '', 's1');
+
+    expect(ctx.db.runUpdates[0]).toMatchObject({
+      where: { id: 'run1' },
+      data: { status: 'canceled' },
+    });
+    expect(ctx.db.taskUpdates[0]).toMatchObject({
+      where: { id: 'task1' },
+      data: { status: 'canceled' },
+    });
+    expect(ctx.db.messages).toHaveLength(0);
   });
 });

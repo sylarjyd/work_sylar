@@ -69,7 +69,7 @@ export class RunTelemetry {
   }
 
   finish(
-    status: 'done' | 'failed',
+    status: 'done' | 'failed' | 'canceled',
     usage: UsageEvent | null,
     billing: RunBilling,
     durationSeconds: number,

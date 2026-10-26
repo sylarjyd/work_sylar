@@ -649,6 +649,40 @@ describe('runAgent', () => {
     );
     expect(seen[0]).toMatchObject({ status: 'denied', codeExecTimeout: false });
   });
+
+  it('signal 中止后不再发起下一轮模型调用，已产生的用量仍上报', async () => {
+    const ctrl = new AbortController();
+    let calls = 0;
+    const gateway: ModelGateway = {
+      async chat() {
+        calls++;
+        // 模拟用户在模型思考期间点击取消：本轮返回后必须立即刹车。
+        ctrl.abort();
+        return {
+          content: '第一轮',
+          toolCalls: [{ id: 'c1', name: 'web.search', args: { query: 'x' } }],
+          usage: { input: 1, output: 1 },
+          model: 'mock',
+        };
+      },
+    };
+    const usages: UsageEvent[] = [];
+    const events = await collect(
+      runAgent(req, {
+        gateway,
+        tools: [echoTool],
+        signal: ctrl.signal,
+        onUsage: (u) => usages.push(u),
+      }),
+    );
+
+    expect(calls).toBe(1);
+    expect(usages).toEqual([
+      { input: 1, output: 1, models: [{ model: 'mock', input: 1, output: 1 }] },
+    ]);
+    // 中止后不执行工具、不产出 tool_call/tool_result。
+    expect(events.some((e) => e.type === 'tool_call' || e.type === 'tool_result')).toBe(false);
+  });
 });
 
 /** 第一轮发起一次工具调用、第二轮收尾的桩网关。 */

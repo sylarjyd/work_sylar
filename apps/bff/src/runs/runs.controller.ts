@@ -13,6 +13,7 @@ import {
 import type { FastifyReply } from 'fastify';
 import type { ConfirmDecision } from '@ai-office/shared';
 import { TasksService } from '../tasks/tasks.service';
+import { RunsService } from './runs.service';
 import { RunRelayService } from '../queue/run-relay.service';
 import { JwtGuard } from '../auth/jwt.guard';
 import { CurrentUser } from '../auth/current-user';
@@ -35,6 +36,7 @@ function parseCursor(raw: string | undefined): number {
 export class RunsController {
   constructor(
     private readonly tasks: TasksService,
+    private readonly runs: RunsService,
     private readonly relay: RunRelayService,
   ) {}
 
@@ -64,6 +66,27 @@ export class RunsController {
     // 非法 header 直接回退 -1，不能悄悄改用 query，否则会重放用户已看过的步骤尾部。
     const afterSeq = parseCursor(lastEventId ?? afterSeqQuery);
     await this.relay.attach(runId, reply, { afterSeq });
+  }
+
+  /**
+   * 取消运行：排队中的直接撤销，执行中的走控制消息。
+   * 归属校验在 RunsService 内先于任何副作用完成；非本人 run 统一 404，不泄露存在性。
+   */
+  @Post(':id/cancel')
+  async cancel(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') runId: string,
+    @Res() reply: FastifyReply,
+  ): Promise<void> {
+    try {
+      reply.status(200).send(await this.runs.cancel(runId, user.tenantId, user.sub));
+    } catch (err) {
+      if (err instanceof NotFoundException) {
+        reply.status(404).send({ error: 'run_not_found' });
+        return;
+      }
+      throw err;
+    }
   }
 
   @Post(':id/confirm')

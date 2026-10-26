@@ -201,13 +201,28 @@ export class TasksService {
   }
 
   /** 流式挂接需要的运行元信息；不存在时 404。 */
-  async findRun(runId: string): Promise<{ id: string; status: string; lastError: string | null }> {
+  async findRun(runId: string): Promise<{
+    id: string;
+    status: string;
+    lastError: string | null;
+    cancelRequestedAt: Date | null;
+  }> {
     const run = await this.prisma.run.findUnique({
       where: { id: runId },
-      select: { id: true, status: true, task: { select: { lastError: true } } },
+      select: {
+        id: true,
+        status: true,
+        cancelRequestedAt: true,
+        task: { select: { lastError: true } },
+      },
     });
     if (!run) throw new NotFoundException('run_not_found');
-    return { id: run.id, status: run.status, lastError: run.task.lastError ?? null };
+    return {
+      id: run.id,
+      status: run.status,
+      lastError: run.task.lastError ?? null,
+      cancelRequestedAt: run.cancelRequestedAt ?? null,
+    };
   }
 
   /** 按 seq 回放已落库步骤；payload 原样还原为 AgentEvent。 */
@@ -257,7 +272,7 @@ export class TasksService {
   async finish(
     runId: string,
     taskId: string,
-    status: 'done' | 'failed',
+    status: 'done' | 'failed' | 'canceled',
     assistantText: string,
     sessionId: string,
   ): Promise<void> {
@@ -302,5 +317,60 @@ export class TasksService {
       select: { id: true },
     });
     if (!run) throw new NotFoundException('run_not_found');
+  }
+
+  /** 取消路径的归属查询：同时带回 taskId/status/取消请求，避免二次查询。 */
+  async findOwnedRun(
+    runId: string,
+    tenantId: string,
+    userId: string,
+  ): Promise<{ id: string; taskId: string; status: string; cancelRequestedAt: Date | null }> {
+    const run = await this.prisma.run.findFirst({
+      where: { id: runId, task: { session: { tenantId, userId } } },
+      select: { id: true, taskId: true, status: true, cancelRequestedAt: true },
+    });
+    if (!run) throw new NotFoundException('run_not_found');
+    return {
+      id: run.id,
+      taskId: run.taskId,
+      status: run.status,
+      cancelRequestedAt: run.cancelRequestedAt ?? null,
+    };
+  }
+
+  /**
+   * 取消仍在排队的运行：run 与 task 必须一起落到 canceled。
+   * run 与 task 分属两行，只改其一会让前端/后台看到「run 已取消、task 仍在排队」的撕裂状态，
+   * 因此用同一事务条件更新：run 未抢到（已开始执行）直接返回 false；
+   * task 条件更新失败则抛错回滚 run，把整次取消交给控制消息路径。
+   */
+  async markCanceled(runId: string, taskId: string): Promise<boolean> {
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        const endedAt = new Date();
+        const run = await tx.run.updateMany({
+          where: { id: runId, status: 'queued' },
+          data: { status: 'canceled', endedAt },
+        });
+        if (run.count === 0) return false;
+        const task = await tx.task.updateMany({
+          where: { id: taskId, status: 'queued' },
+          data: { status: 'canceled', endedAt },
+        });
+        if (task.count === 0) throw new Error('task_not_queued');
+        return true;
+      });
+    } catch {
+      // 条件更新落空说明执行器已抢占；DB 故障同样降级为「取消未完成」，由控制消息兜底。
+      return false;
+    }
+  }
+
+  /** 请求取消执行中的运行；只标记仍处于 running 的 run，竞态下 0 行不报错。 */
+  async markCancelRequested(runId: string): Promise<void> {
+    await this.prisma.run.updateMany({
+      where: { id: runId, status: 'running' },
+      data: { cancelRequestedAt: new Date() },
+    });
   }
 }

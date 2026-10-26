@@ -329,6 +329,69 @@ describe('runtime server', () => {
       await new Promise<void>((r) => srv.close(() => r()));
     }
   });
+
+  it('客户端断开后中止控制器，不再发起下一轮模型调用', async () => {
+    // 注：网关接口不接收 signal，无法中断已在途的模型调用；这里验证的是
+    // 调用返回后运行因 signal 已置位而停止后续轮次，且注册表不残留。
+    const metrics = createRuntimeMetrics({ defaultMetrics: false });
+    let calls = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const gateway: ModelGateway = {
+      async chat() {
+        calls++;
+        if (calls === 1) {
+          await gate;
+          return {
+            content: '第一轮',
+            toolCalls: [{ id: 'c1', name: 'web.search', args: { query: 'x' } }],
+            usage: { input: 1, output: 1 },
+            model: 'mock',
+          };
+        }
+        return { content: '第二轮', toolCalls: [], usage: { input: 1, output: 1 }, model: 'mock' };
+      },
+    };
+    const srv = createRuntimeServer({ gateway, tools: [echo], metrics });
+    await new Promise<void>((r) => srv.listen(0, '127.0.0.1', () => r()));
+    const addr = srv.address();
+    if (!addr || typeof addr === 'string') throw new Error('no port');
+    const abort = new AbortController();
+    const waitFor = async (text: string): Promise<void> => {
+      for (let i = 0; i < 100; i++) {
+        if ((await metrics.registry.metrics()).includes(text)) return;
+        await new Promise((r) => setTimeout(r, 20));
+      }
+      throw new Error(`timeout waiting for ${text}`);
+    };
+    try {
+      const res = await fetch(`http://127.0.0.1:${addr.port}/runs`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          runId: 'r-close',
+          sessionId: 's1',
+          tenantId: 't1',
+          userId: 'u1',
+          goal: 'g',
+          messages: [{ role: 'user', content: 'g' }],
+        }),
+        signal: abort.signal,
+      });
+      expect(res.status).toBe(200);
+      await waitFor('ai_office_active_runs 1');
+      abort.abort();
+      // close 处理器收尾后活跃数归零，说明 abort 已生效。
+      await waitFor('ai_office_active_runs 0');
+      release();
+      await new Promise((r) => setTimeout(r, 100));
+      expect(calls).toBe(1);
+    } finally {
+      release();
+      abort.abort();
+      await new Promise<void>((r) => srv.close(() => r()));
+    }
+  });
 });
 
 describe('runtime 确认端点', () => {

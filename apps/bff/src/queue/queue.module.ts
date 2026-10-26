@@ -100,6 +100,9 @@ export class QueueModule implements OnApplicationShutdown {
 
     return {
       module: QueueModule,
+      // 全局导出：其他领域模块（如 RunsModule）可在不导入本模块的前提下注入
+      // RUN_CONTROL_BUS/RUN_EVENT_BUS/RunQueueService，避免二次 forRoot 造成重复连接。
+      global: true,
       imports: [
         PrismaModule,
         ObservabilityModule,

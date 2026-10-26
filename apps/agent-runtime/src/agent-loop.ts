@@ -30,6 +30,11 @@ export interface RunDeps {
   codeExecTimeoutMs?: number;
   /** 预占额度、允许模型与价格；缺省时不限预算。 */
   billing?: RunBilling;
+  /**
+   * 取消信号：客户端断开或 BFF 取消时置位。
+   * 网关接口不接收 signal（无法中断在途模型调用），因此在轮次边界与每次工具执行前刹车。
+   */
+  signal?: AbortSignal;
 }
 
 const DEFAULT_MAX_ROUNDS = 8;
@@ -77,6 +82,8 @@ export async function* runAgent(req: RunRequest, deps: RunDeps): AsyncGenerator<
   // “轮次耗尽”这一信号留待后续里程碑；此处不新增事件、不改变输出契约。
   try {
     for (let round = 0; round < maxRounds; round++) {
+      // 已取消：不再发起新一轮模型调用；已产生的用量仍由 finally 上报。
+      if (deps.signal?.aborted) return;
       // 预算在发起下一轮之前判断：超限立即刹车，不再浪费一次模型调用。
       // 首轮不做判断——预占额度已保证至少可跑一轮。
       if (round > 0 && deps.billing) {
@@ -124,6 +131,8 @@ export async function* runAgent(req: RunRequest, deps: RunDeps): AsyncGenerator<
       // 否则真实 provider（DeepSeek/OpenAI 兼容）的多轮 function-calling 会被拒。
       messages.push({ role: 'assistant', content: resp.content, toolCalls: resp.toolCalls });
       for (const call of resp.toolCalls) {
+        // 取消可能发生在模型返回之后：不再执行工具，也不产出 tool_call/tool_result。
+        if (deps.signal?.aborted) return;
         yield step('tool_call', { tool: call.name, args: call.args });
         const tool = deps.tools.find((t) => t.name === call.name);
         let ok = true;

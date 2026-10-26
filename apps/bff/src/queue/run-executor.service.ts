@@ -11,8 +11,9 @@ import type {
 import { createSseParser } from '@ai-office/shared';
 import { endSpan, injectTraceparent, startSpan } from '@ai-office/telemetry';
 import { parseSnapshot, type RunJob, type RunSnapshot } from './run-job';
-import { RUN_EVENT_BUS } from './queue.tokens';
+import { RUN_CONTROL_BUS, RUN_EVENT_BUS } from './queue.tokens';
 import type { RunEventBus } from './run-event-bus';
+import type { RunControlBus } from './run-control-bus';
 import { TasksService } from '../tasks/tasks.service';
 import { AttachmentsService } from '../attachments/attachments.service';
 import { ArtifactService } from '../artifacts/artifacts.service';
@@ -62,13 +63,58 @@ export class RunExecutor {
     private readonly artifacts: ArtifactService,
     private readonly billing: BillingService,
     @Inject(RUN_EVENT_BUS) private readonly events: RunEventBus,
+    @Inject(RUN_CONTROL_BUS) private readonly control: RunControlBus,
     @Inject(BFF_METRICS) private readonly metrics: BffMetrics,
   ) {}
 
   async execute(job: RunJob): Promise<void> {
+    const { runId } = job;
+    // 取消意图可能在执行器接管后的任意阶段到达：先订阅再开跑，
+    // 所有中止路径共用一个 AbortController；退订放在最外层 finally，任何退出都只执行一次。
+    let canceled = false;
+    const abort = new AbortController();
+    let unsubscribe: (() => void) | undefined;
+    try {
+      try {
+        unsubscribe = await this.control.subscribe(runId, (msg) => {
+          if (msg.type === 'cancel') {
+            canceled = true;
+            abort.abort();
+          }
+        });
+      } catch (err) {
+        // 订阅失败不能阻断运行：执行前的 DB 兜底检查仍能发现取消请求。
+        this.logger.warn(`run ${runId} 订阅取消消息失败，继续执行: ${(err as Error).message}`);
+      }
+      await this.executeRun(job, {
+        runtimeUrl: process.env.AGENT_RUNTIME_URL ?? 'http://localhost:4001',
+        runtimeToken: process.env.AGENT_RUNTIME_TOKEN,
+        isCanceled: () => canceled,
+        abort,
+      });
+    } finally {
+      if (unsubscribe) {
+        try {
+          await unsubscribe();
+        } catch (err) {
+          this.logger.warn(`run ${runId} 退订取消消息失败: ${(err as Error).message}`);
+        }
+      }
+    }
+  }
+
+  /** 执行主体；取消状态由 execute 注入，保证各退出点共享同一个信号与退订时机。 */
+  private async executeRun(
+    job: RunJob,
+    opts: {
+      runtimeUrl: string;
+      runtimeToken: string | undefined;
+      isCanceled: () => boolean;
+      abort: AbortController;
+    },
+  ): Promise<void> {
     const { runId, taskId, sessionId, tenantId, userId } = job;
-    const runtimeUrl = process.env.AGENT_RUNTIME_URL ?? 'http://localhost:4001';
-    const runtimeToken = process.env.AGENT_RUNTIME_TOKEN;
+    const { runtimeUrl, runtimeToken, abort } = opts;
 
     // 出队执行前预占：入队时只做准入，额度在这里才真正锁定。
     let billing: RunBilling;
@@ -113,6 +159,14 @@ export class RunExecutor {
       return;
     }
 
+    // 排队期间提交的取消可能早于订阅建立；以 DB 里的取消请求兜底，避免白跑一次模型调用。
+    if (opts.isCanceled() || (await this.isCancelRequested(runId))) {
+      await this.releaseHold(runId);
+      await this.safeFinish(runId, taskId, 'canceled', '', sessionId);
+      await this.publishCanceled(runId);
+      return;
+    }
+
     // 历史会话在首次成功预占后固化模型；失败只记日志，不影响本次运行。
     if (snapshot.model == null) {
       try {
@@ -136,13 +190,13 @@ export class RunExecutor {
 
     const runTelemetry = new RunTelemetry(this.metrics);
     const runStarted = Date.now();
-    let status: 'done' | 'failed' = 'done';
+    let status: 'done' | 'failed' | 'canceled' = 'done';
     let latestUsage: UsageEvent | null = null;
 
     try {
       let upstream: Response;
-      const connectController = new AbortController();
-      const connectTimer = setTimeout(() => connectController.abort(), UPSTREAM_CONNECT_TIMEOUT_MS);
+      // 建连超时与用户取消复用同一信号：超时按失败收尾，取消则按 canceled 收尾。
+      const connectTimer = setTimeout(() => abort.abort(), UPSTREAM_CONNECT_TIMEOUT_MS);
       connectTimer.unref?.();
       // traceId 只作为关联属性，避免伪造父上下文；缺省时不下发该字段。
       const runtimeSpan = startSpan('runtime.run', {
@@ -180,11 +234,20 @@ export class RunExecutor {
                 }
               : {}),
           }),
-          signal: connectController.signal,
+          signal: abort.signal,
         });
         endSpan(runtimeSpan, upstream.ok);
       } catch (err) {
         endSpan(runtimeSpan, false, err);
+        // abort 同时来自建连超时与用户取消：必须先区分，否则取消会被误报成上游故障。
+        if (opts.isCanceled() || (await this.isCancelRequested(runId))) {
+          status = 'canceled';
+          this.logger.log(`run ${runId} 已按取消请求中止（建连阶段）`);
+          await this.releaseHold(runId);
+          await this.safeFinish(runId, taskId, 'canceled', '', sessionId);
+          await this.publishCanceled(runId);
+          return;
+        }
         // 传输层失败（含建连超时）：上游不可达，归还预占并失败收尾。
         runTelemetry.forceFail();
         this.logger.error(`run ${runId} 上游不可达: ${(err as Error).message}`);
@@ -256,10 +319,16 @@ export class RunExecutor {
           }
         }
       } catch (err) {
-        // 读上游 / 解析 / 落库任何一环抛错，都必须把这次 run 记为 failed。
-        status = 'failed';
-        this.logger.error(`run ${runId} 处理失败，标记为 failed: ${(err as Error).message}`);
-        // 超时/出错时主动终止上游，避免连接继续悬挂、资源泄漏。
+        // 读取阶段的 abort 同样可能来自用户取消：取消不是故障，不发 error 帧。
+        if (opts.isCanceled() || (await this.isCancelRequested(runId))) {
+          status = 'canceled';
+          this.logger.log(`run ${runId} 已按取消请求中止（流式阶段）`);
+        } else {
+          // 读上游 / 解析 / 落库任何一环抛错，都必须把这次 run 记为 failed。
+          status = 'failed';
+          this.logger.error(`run ${runId} 处理失败，标记为 failed: ${(err as Error).message}`);
+        }
+        // 超时/取消/出错时主动终止上游，避免连接继续悬挂、资源泄漏。
         await reader.cancel().catch(() => undefined);
       } finally {
         // 结算优先于 finish：即使 finish 失败，用量也已落账。
@@ -288,13 +357,23 @@ export class RunExecutor {
         } else {
           await this.releaseHold(runId);
         }
-        await this.safeFinish(runId, taskId, status, thinkTexts.join('\n'), sessionId);
+        // 取消不保留半截回答：用户已明确放弃这次运行。
+        await this.safeFinish(
+          runId,
+          taskId,
+          status,
+          status === 'canceled' ? '' : thinkTexts.join('\n'),
+          sessionId,
+        );
         // 终止事件在结算与 finish 之后发布，订阅方收到即可结束本轮流。
+        // canceled 用状态帧而不是 error：取消是用户主动行为，不是故障。
         await this.publish(
           runId,
           status === 'done'
             ? { event: 'done', data: { runId } }
-            : { event: 'error', data: errorPayload('run_failed') },
+            : status === 'canceled'
+              ? { event: 'status', data: { runId, status: 'canceled' } }
+              : { event: 'error', data: errorPayload('run_failed') },
         );
       }
     } catch (err) {
@@ -344,11 +423,30 @@ export class RunExecutor {
     throw lastErr;
   }
 
+  /**
+   * 执行器可能错过取消控制消息（发布早于订阅建立）：以 DB 的 cancelRequestedAt 兜底。
+   * 查询失败按未取消处理，避免一次读故障把正常运行掐断（后续仍受控制消息约束）。
+   */
+  private async isCancelRequested(runId: string): Promise<boolean> {
+    try {
+      const run = await this.tasks.findRun(runId);
+      return run.cancelRequestedAt != null;
+    } catch (err) {
+      this.logger.warn(`run ${runId} 查询取消请求失败，继续执行: ${(err as Error).message}`);
+      return false;
+    }
+  }
+
+  /** 取消终态：与排队取消共用同一条 status 事件，客户端无需区分取消路径。 */
+  private async publishCanceled(runId: string): Promise<void> {
+    await this.publish(runId, { event: 'status', data: { runId, status: 'canceled' } });
+  }
+
   /** 落库收尾；失败只记日志，绝不向 worker 抛出。 */
   private async safeFinish(
     runId: string,
     taskId: string,
-    status: 'done' | 'failed',
+    status: 'done' | 'failed' | 'canceled',
     assistantText: string,
     sessionId: string,
   ): Promise<void> {

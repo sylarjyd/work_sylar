@@ -2,9 +2,11 @@ import 'reflect-metadata';
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import { Test } from '@nestjs/testing';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
+import { NotFoundException } from '@nestjs/common';
 import type { FastifyReply } from 'fastify';
 import { createServer, type Server } from 'node:http';
 import { RunsController } from './runs.controller';
+import { RunsService } from './runs.service';
 import { TasksService } from '../tasks/tasks.service';
 import { SessionsService } from '../sessions/sessions.service';
 import { ModelCatalogService } from '../models/model-catalog.service';
@@ -24,6 +26,13 @@ const ownedRun = { id: 'r1' };
 /** 流式挂接以桩替代：本文件只验证路由、鉴权与游标解析。 */
 const attach = vi.fn(async (_runId: string, reply: FastifyReply) => {
   reply.status(200).header('content-type', 'text/plain').send('ok');
+});
+/** 取消服务桩：按用例切换返回值或异常；所有权校验由 RunsService 单元测试覆盖。 */
+let cancelResult: { status: string } = { status: 'canceled' };
+let cancelError: unknown;
+const cancel = vi.fn(async () => {
+  if (cancelError) throw cancelError;
+  return cancelResult;
 });
 const fakePrisma = {
   user: {
@@ -72,6 +81,7 @@ beforeAll(async () => {
       // SessionsService 依赖模型目录；本文件只验证 run 归属，给一个不会被调用的桩。
       { provide: ModelCatalogService, useValue: { available: async () => ({ models: [], defaultModel: null }) } },
       { provide: RunRelayService, useValue: { attach } },
+      { provide: RunsService, useValue: { cancel } },
     ],
   }).compile();
   app = moduleRef.createNestApplication<NestFastifyApplication>(new FastifyAdapter());
@@ -83,6 +93,9 @@ beforeEach(() => {
   upstreamStatus = 200;
   upstreamBody = JSON.stringify({ ok: true, matched: true });
   prismaFail = false;
+  cancelResult = { status: 'canceled' };
+  cancelError = undefined;
+  cancel.mockClear();
   attach.mockClear();
   delete process.env.AGENT_RUNTIME_TOKEN;
   process.env.AGENT_RUNTIME_URL = runtimeUrl;
@@ -262,5 +275,30 @@ describe('RunsController', () => {
     });
     expect(res.statusCode).toBe(502);
     expect(res.json()).toEqual({ error: 'upstream_unreachable' });
+  });
+
+  it('cancel：调用服务并回 200 JSON 结果', async () => {
+    cancelResult = { status: 'running' };
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/runs/r1/cancel',
+      headers: auth(),
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ status: 'running' });
+    expect(cancel).toHaveBeenCalledWith('r1', 't1', 'u1');
+  });
+
+  it('cancel：run 不存在或非本人时映射为 404 run_not_found', async () => {
+    cancelError = new NotFoundException('run_not_found');
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/runs/r1/cancel',
+      headers: auth(),
+    });
+
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toEqual({ error: 'run_not_found' });
   });
 });

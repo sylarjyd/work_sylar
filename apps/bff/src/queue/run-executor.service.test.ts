@@ -8,6 +8,7 @@ import type { AttachmentsService } from '../attachments/attachments.service';
 import type { ArtifactService } from '../artifacts/artifacts.service';
 import type { BillingService } from '../billing/billing.service';
 import type { RunEventBus } from './run-event-bus';
+import type { RunControlBus, RunControlMessage } from './run-control-bus';
 import { InsufficientCreditsError, PlanExpiredError } from '../billing/billing.errors';
 import { createBffMetrics } from '../observability/observability.metrics';
 import { encryptSecret } from '../secrets/secret-box';
@@ -24,6 +25,7 @@ interface ExecutorDeps {
     recordStep: ReturnType<typeof vi.fn>;
     bindModel: ReturnType<typeof vi.fn>;
     finish: ReturnType<typeof vi.fn>;
+    findRun: ReturnType<typeof vi.fn>;
   };
   attachments: { hydrateForRun: ReturnType<typeof vi.fn> };
   artifacts: { record: ReturnType<typeof vi.fn> };
@@ -34,6 +36,9 @@ interface ExecutorDeps {
     releaseHold: ReturnType<typeof vi.fn>;
   };
   events: { publish: ReturnType<typeof vi.fn> };
+  control: { subscribe: ReturnType<typeof vi.fn> };
+  /** 控制总线退订函数，用于断言所有退出路径都只退订一次。 */
+  off: ReturnType<typeof vi.fn>;
 }
 
 function snapshot(): RunSnapshot {
@@ -67,6 +72,7 @@ function sseResponse(events: Array<{ event: string; data: unknown }>): Response 
 
 /** 直接 new 执行器并注入 mock 依赖；fetch 用 stubGlobal 接管。 */
 function makeExecutor(): { executor: RunExecutor; deps: ExecutorDeps } {
+  const off = vi.fn();
   const deps: ExecutorDeps = {
     fetch: vi.fn(),
     tasks: {
@@ -74,6 +80,9 @@ function makeExecutor(): { executor: RunExecutor; deps: ExecutorDeps } {
       recordStep: vi.fn().mockResolvedValue(undefined),
       bindModel: vi.fn().mockResolvedValue(undefined),
       finish: vi.fn().mockResolvedValue(undefined),
+      findRun: vi
+        .fn()
+        .mockResolvedValue({ id: 'r1', status: 'running', lastError: null, cancelRequestedAt: null }),
     },
     attachments: {
       hydrateForRun: vi.fn().mockImplementation(async (messages: unknown) => messages),
@@ -90,6 +99,8 @@ function makeExecutor(): { executor: RunExecutor; deps: ExecutorDeps } {
       releaseHold: vi.fn().mockResolvedValue(undefined),
     },
     events: { publish: vi.fn().mockResolvedValue(undefined) },
+    control: { subscribe: vi.fn().mockResolvedValue(off) },
+    off,
   };
   vi.stubGlobal('fetch', deps.fetch);
   const executor = new RunExecutor(
@@ -98,6 +109,7 @@ function makeExecutor(): { executor: RunExecutor; deps: ExecutorDeps } {
     deps.artifacts as unknown as ArtifactService,
     deps.billing as unknown as BillingService,
     deps.events as unknown as RunEventBus,
+    deps.control as unknown as RunControlBus,
     createBffMetrics({ defaultMetrics: false }),
   );
   return { executor, deps };
@@ -421,5 +433,85 @@ describe('RunExecutor', () => {
 
     expect(deps.billing.settle).toHaveBeenCalledWith('r1');
     expect(deps.tasks.finish).toHaveBeenCalledWith('r1', 't1', 'done', 'hi', 's1');
+  });
+
+  it('收到 cancel 控制消息后中止上游，标记 canceled 并发布终止状态', async () => {
+    const { executor, deps } = makeExecutor();
+    let handler: ((msg: RunControlMessage) => void) | undefined;
+    deps.control.subscribe.mockImplementation(async (_runId: string, h: typeof handler) => {
+      handler = h;
+      return deps.off;
+    });
+
+    let fetchStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      fetchStarted = resolve;
+    });
+    const abortErr = Object.assign(new Error('aborted'), { name: 'AbortError' });
+    deps.fetch.mockImplementation((_url: unknown, init: { signal: AbortSignal }) => {
+      fetchStarted();
+      return new Promise((_resolve, reject) => {
+        init.signal.addEventListener('abort', () => reject(abortErr));
+      });
+    });
+
+    const running = executor.execute(job());
+    await started;
+    expect(handler).toBeTypeOf('function');
+    handler!({ type: 'cancel' });
+    await expect(running).resolves.toBeUndefined();
+
+    expect(deps.fetch).toHaveBeenCalledTimes(1);
+    expect(deps.billing.releaseHold).toHaveBeenCalledWith('r1');
+    expect(deps.tasks.finish).toHaveBeenCalledWith('r1', 't1', 'canceled', '', 's1');
+    expect(deps.billing.recordUsage).not.toHaveBeenCalled();
+    expect(deps.billing.settle).not.toHaveBeenCalled();
+    expect(publishedEvents(deps)).toEqual(['status']);
+    expect(deps.events.publish).toHaveBeenCalledWith('r1', {
+      event: 'status',
+      data: { runId: 'r1', status: 'canceled' },
+    });
+    expect(deps.off).toHaveBeenCalledTimes(1);
+  });
+
+  it('执行前已有 cancelRequestedAt 时跳过上游并释放预占', async () => {
+    const { executor, deps } = makeExecutor();
+    deps.tasks.findRun.mockResolvedValue({
+      id: 'r1',
+      status: 'running',
+      lastError: null,
+      cancelRequestedAt: new Date(),
+    });
+
+    await executor.execute(job());
+
+    expect(deps.fetch).not.toHaveBeenCalled();
+    expect(deps.billing.releaseHold).toHaveBeenCalledWith('r1');
+    expect(deps.tasks.finish).toHaveBeenCalledWith('r1', 't1', 'canceled', '', 's1');
+    expect(publishedEvents(deps)).toEqual(['status']);
+    expect(deps.off).toHaveBeenCalledTimes(1);
+  });
+
+  it('成功与失败路径都只退订一次取消订阅', async () => {
+    const ok = makeExecutor();
+    ok.deps.fetch.mockResolvedValue(sseResponse([{ event: 'done', data: { runId: 'r1' } }]));
+    await ok.executor.execute(job());
+    expect(ok.deps.off).toHaveBeenCalledTimes(1);
+
+    const failed = makeExecutor();
+    failed.deps.billing.beginRun.mockRejectedValue(new InsufficientCreditsError());
+    await failed.executor.execute(job());
+    expect(failed.deps.off).toHaveBeenCalledTimes(1);
+  });
+
+  it('取消订阅失败只记日志，运行继续', async () => {
+    const { executor, deps } = makeExecutor();
+    deps.control.subscribe.mockRejectedValue(new Error('redis down'));
+    deps.fetch.mockResolvedValue(sseResponse([{ event: 'done', data: { runId: 'r1' } }]));
+
+    await expect(executor.execute(job())).resolves.toBeUndefined();
+
+    expect(deps.fetch).toHaveBeenCalledTimes(1);
+    expect(deps.tasks.finish).toHaveBeenCalledWith('r1', 't1', 'done', '', 's1');
   });
 });

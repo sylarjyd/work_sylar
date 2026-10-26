@@ -87,6 +87,8 @@ export function createRuntimeServer(deps: RuntimeDeps = {}): Server {
   const validateConn = deps.validateConnector ?? defaultValidateConnector;
   // runtime 单实例持有一份确认闸门；连接 close 时按 runId 取消挂起。
   const confirm = new ConfirmBroker();
+  // 在途运行的中止控制器：客户端断开时置位，runAgent 在下个轮次/工具前停止。
+  const controllers = new Map<string, AbortController>();
 
   // BFF→runtime 共享密钥：设置 AGENT_RUNTIME_TOKEN 后强制校验；
   // 未设置时失败关闭，仅放行回环来源——即使误绑 0.0.0.0，远程也无法触发
@@ -181,6 +183,11 @@ export function createRuntimeServer(deps: RuntimeDeps = {}): Server {
         // 不 flush 会让「等待首 token」被误判为上游不可达并中断整个运行。
         res.flushHeaders();
 
+        // 每个运行一个中止控制器。同一 runId 被复用/重试时新控制器覆盖旧条目，
+        // 旧运行退出前会比对身份，不会误删新运行的控制器。
+        const controller = new AbortController();
+        controllers.set(runReq.runId, controller);
+
         // 只放稳定 ID；prompt、消息与工具参数不进 span。
         const runAttributes: Record<string, string> = { 'run.id': runReq.runId };
         if (runReq.sessionId) runAttributes['session.id'] = runReq.sessionId;
@@ -220,8 +227,10 @@ export function createRuntimeServer(deps: RuntimeDeps = {}): Server {
         metrics.runStarted();
         logger.info({ msg: 'run_start', runId: runReq.runId });
 
-        // 客户端断开：把该 run 的挂起闸门按拒绝兑现，避免悬停到超时。
+        // 客户端断开：先中止执行循环（不再发起模型/工具调用），
+        // 再把该 run 的挂起闸门按拒绝兑现，避免悬停到超时。
         res.on('close', () => {
+          controller.abort();
           confirm.cancel(runReq.runId);
           finalizeRun(false);
         });
@@ -254,6 +263,7 @@ export function createRuntimeServer(deps: RuntimeDeps = {}): Server {
                     confirmTimeoutMs: config.confirmTimeoutMs,
                     codeExecTimeoutMs: config.codeExecTimeoutMs,
                     billing: runReq.billing,
+                    signal: controller.signal,
                     onToolCall: (obs) => recordToolObservation(metrics, logger, obs),
                     onUsage: (u) => res.write(encodeSse({ event: 'usage', data: u })),
                   })) {
@@ -268,6 +278,10 @@ export function createRuntimeServer(deps: RuntimeDeps = {}): Server {
                   }
                   finalizeRun(false, err);
                 } finally {
+                  // 只在仍是自己时删条目，避免覆盖同 runId 的新运行。
+                  if (controllers.get(runReq.runId) === controller) {
+                    controllers.delete(runReq.runId);
+                  }
                   res.end();
                 }
               })();
