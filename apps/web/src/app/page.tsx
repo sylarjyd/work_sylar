@@ -5,7 +5,8 @@ import { useRouter } from 'next/navigation';
 import {
   ATTACHMENT_ACCEPT,
   ATTACHMENT_MAX_PER_MESSAGE,
-  MODEL_MODALITY_LABELS,
+  SESSION_MODES,
+  SESSION_MODE_LABELS,
   attachmentKindLabel,
   type AgentEvent,
   type ArtifactDto,
@@ -16,6 +17,7 @@ import {
   type ClientModelDto,
   type MessageDto,
   type RunStatus,
+  type SessionMode,
   type SessionSummary,
 } from '@ai-office/shared';
 import { AppShell } from '../components/app-shell';
@@ -215,6 +217,8 @@ export default function Home() {
   // 自定义助手：仅新建任务（草稿态）可选择，会话创建后助手固定。
   const [assistants, setAssistants] = useState<AssistantDto[]>([]);
   const [selectedAssistantId, setSelectedAssistantId] = useState('');
+  // 任务分类：随会话创建固定，运行期由 BFF 追加对应取向的提示词。
+  const [selectedMode, setSelectedMode] = useState<SessionMode>('chat');
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
   const [submittedAttachments, setSubmittedAttachments] = useState<SubmittedAttachment[]>([]);
   const [dragOver, setDragOver] = useState(false);
@@ -606,9 +610,11 @@ export default function Home() {
         const created = await createSession(
           selectedModel || undefined,
           selectedAssistantId || undefined,
+          selectedMode,
         );
         setSessions((prev) => [created, ...prev]);
         if (created.model) setSelectedModel(created.model);
+        setSelectedMode(created.mode);
         setSessionId(created.id);
         sid = created.id;
       }
@@ -779,6 +785,22 @@ export default function Home() {
       />
       <div className="wb-composer">
         <div className="wb-composer-model">
+          {!sessionId && (
+            <select
+              className="wb-model-select"
+              value={selectedMode}
+              onChange={(e) => setSelectedMode(e.target.value as SessionMode)}
+              disabled={running}
+              aria-label="任务分类"
+              title="选择任务分类，创建后不可更改"
+            >
+              {SESSION_MODES.map((mode) => (
+                <option key={mode} value={mode}>
+                  {SESSION_MODE_LABELS[mode]}
+                </option>
+              ))}
+            </select>
+          )}
           {!sessionId && assistants.length > 0 && (
             <select
               className="wb-model-select"
@@ -807,17 +829,13 @@ export default function Home() {
             {!modelAvailable && modelValue && (
               <option value={modelValue}>{modelValue}（已停用）</option>
             )}
-            {models.map((m) => {
-              const tags = m.modalities.map((x) => MODEL_MODALITY_LABELS[x]).join('、');
-              return (
-                <option key={m.model} value={m.model}>
-                  {m.displayName && m.displayName !== m.model
-                    ? `${m.displayName} · ${m.model} · ${m.providerName}`
-                    : `${m.model} · ${m.providerName}`}
-                  {tags ? `［${tags}］` : ''}
-                </option>
-              );
-            })}
+            {models.map((m) => (
+              <option key={m.model} value={m.model}>
+                {m.displayName && m.displayName !== m.model
+                  ? `${m.displayName} · ${m.model} · ${m.providerName}`
+                  : `${m.model} · ${m.providerName}`}
+              </option>
+            ))}
           </select>
           {sessionId && <span className="wb-model-lock">切换模型请新建任务</span>}
         </div>

@@ -43,6 +43,8 @@ model Session {
   model     String?
   // 会话创建时选定的自定义助手；助手被删除后置空，会话退化为默认助手。
   assistantId String?
+  // 任务分类：chat 对话 | task 任务 | code 编码；会话创建后固定，运行期影响提示词取向。
+  mode      String   @default("chat")
   createdAt DateTime @default(now())
   tenant    Tenant    @relation(fields: [tenantId], references: [id])
   user      User      @relation(fields: [userId], references: [id])

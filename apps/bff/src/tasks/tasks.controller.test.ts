@@ -69,6 +69,7 @@ const session = {
   title: 'x',
   model: 'mock' as string | null,
   assistantId: null as string | null,
+  mode: 'task' as string,
   assistant: null as null | {
     id: string;
     name: string;
@@ -496,6 +497,7 @@ describe('TasksController', () => {
       resolution: { selectedModel: 'mock', modelRoutes: [] },
       config: { maxRounds: 3, confirmTimeoutMs: 1000, codeExecTimeoutMs: 1234 },
       traceId,
+      mode: 'task',
       assistant: {
         systemPrompt: '你是写作助手',
         enabledTools: toolsForSkills(['web']),

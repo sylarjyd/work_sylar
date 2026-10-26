@@ -39,6 +39,7 @@ const all = [
     status: 'active',
     model: 'm1',
     assistantId: 'a1',
+    mode: 'task',
     createdAt: new Date(),
   },
   {
@@ -49,6 +50,7 @@ const all = [
     status: 'archived',
     model: null,
     assistantId: null,
+    mode: 'chat',
     createdAt: new Date(),
   },
   {
@@ -59,6 +61,7 @@ const all = [
     status: 'active',
     model: 'm1',
     assistantId: null,
+    mode: 'chat',
     createdAt: new Date(),
   },
 ];
@@ -75,7 +78,7 @@ function makeService(
   defaultModel: string | null = 'm1',
   assistants: AssistantFixture[] = [ASSISTANT],
 ) {
-  const created: { model?: string; assistantId?: string | null }[] = [];
+  const created: { model?: string; assistantId?: string | null; mode?: string }[] = [];
   const prisma = {
     session: {
       findMany: async ({
@@ -122,9 +125,10 @@ function makeService(
           title: string;
           model?: string;
           assistantId?: string | null;
+          mode?: string;
         };
       }) => {
-        created.push({ model: data.model, assistantId: data.assistantId });
+        created.push({ model: data.model, assistantId: data.assistantId, mode: data.mode });
         return {
           id: 's4',
           createdAt: new Date(),
@@ -168,6 +172,8 @@ describe('SessionsService 归档语义', () => {
     expect(list[0].model).toBe('m1');
     expect(list[0].assistantId).toBe('a1');
     expect(list[0].assistantName).toBe('合同助手');
+    expect(list[0].mode).toBe('task');
+    expect(list[1].mode).toBe('chat');
     expect(list[1].assistantName).toBeNull();
   });
 
@@ -181,7 +187,7 @@ describe('SessionsService 选模', () => {
     const { svc, created } = makeService();
     const s = await svc.create('t1', 'u1', {});
     expect(s.model).toBe('m1');
-    expect(created).toEqual([{ model: 'm1', assistantId: null }]);
+    expect(created).toEqual([{ model: 'm1', assistantId: null, mode: 'chat' }]);
   });
 
   it('指定模型必须在可用列表内', async () => {
@@ -196,7 +202,7 @@ describe('SessionsService 选模', () => {
     const { svc, created } = makeService();
     const s = await svc.create('t1', 'u1', { model: 'm2' });
     expect(s.model).toBe('m2');
-    expect(created).toEqual([{ model: 'm2', assistantId: null }]);
+    expect(created).toEqual([{ model: 'm2', assistantId: null, mode: 'chat' }]);
   });
 
   it('未显式选模时使用助手默认模型，并绑定助手', async () => {
@@ -204,14 +210,28 @@ describe('SessionsService 选模', () => {
     const s = await svc.create('t1', 'u1', { assistantId: 'a1' });
     expect(s.model).toBe('m2');
     expect(s.assistantName).toBe('合同助手');
-    expect(created).toEqual([{ model: 'm2', assistantId: 'a1' }]);
+    expect(created).toEqual([{ model: 'm2', assistantId: 'a1', mode: 'chat' }]);
   });
 
   it('显式模型优先于助手默认模型', async () => {
     const { svc, created } = makeService();
     const s = await svc.create('t1', 'u1', { assistantId: 'a1', model: 'm1' });
     expect(s.model).toBe('m1');
-    expect(created).toEqual([{ model: 'm1', assistantId: 'a1' }]);
+    expect(created).toEqual([{ model: 'm1', assistantId: 'a1', mode: 'chat' }]);
+  });
+
+  it('任务分类随会话落库并回显', async () => {
+    const { svc, created } = makeService();
+    const s = await svc.create('t1', 'u1', { mode: 'code' });
+    expect(s.mode).toBe('code');
+    expect(created).toEqual([{ model: 'm1', assistantId: null, mode: 'code' }]);
+  });
+
+  it('非法分类退回对话，不让建会话失败', async () => {
+    const { svc, created } = makeService();
+    const s = await svc.create('t1', 'u1', { mode: 'bogus' as never });
+    expect(s.mode).toBe('chat');
+    expect(created).toEqual([{ model: 'm1', assistantId: null, mode: 'chat' }]);
   });
 
   it('绑定他人/不存在的助手一律 404', async () => {
@@ -229,6 +249,7 @@ describe('SessionsService 选模', () => {
       model: 'm1',
       assistantId: 'a1',
       assistantName: '合同助手',
+      mode: 'task',
       assistant: {
         id: 'a1',
         name: '合同助手',

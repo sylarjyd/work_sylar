@@ -357,10 +357,14 @@ describe('模型接口', () => {
     );
     vi.stubGlobal('fetch', fetchMock);
 
-    await createSession('m1', 'a1');
+    await createSession('m1', 'a1', 'code');
     await createSession();
     const calls = fetchMock.mock.calls as unknown as Array<[string, RequestInit]>;
-    expect(JSON.parse(String(calls[0][1].body))).toEqual({ model: 'm1', assistantId: 'a1' });
+    expect(JSON.parse(String(calls[0][1].body))).toEqual({
+      model: 'm1',
+      assistantId: 'a1',
+      mode: 'code',
+    });
     expect(JSON.parse(String(calls[1][1].body))).toEqual({});
   });
 });

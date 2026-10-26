@@ -2,12 +2,14 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import {
   attachmentKindFor,
   isAssistantPermissionMode,
+  isSessionMode,
   normalizeSkills,
   type AssistantPermissionMode,
   type AssistantSkillKey,
   type AttachmentRef,
   type CreateSessionRequest,
   type MessageDto,
+  type SessionMode,
   type SessionSummary,
 } from '@ai-office/shared';
 import { PrismaService } from '../db/prisma.service';
@@ -29,6 +31,8 @@ export interface SessionRef {
   model: string | null;
   assistantId: string | null;
   assistantName: string | null;
+  /** 任务分类；存量会话缺省按对话处理。 */
+  mode: SessionMode;
   assistant: SessionAssistantRef | null;
 }
 
@@ -98,10 +102,12 @@ export class SessionsService {
       if (!models.some((m) => m.model === preferred)) throw new ModelUnavailableError();
       model = preferred;
     }
+    // 非法分类按对话处理：分类只影响提示词取向，不值得让建会话失败。
+    const mode: SessionMode = isSessionMode(req.mode) ? req.mode : 'chat';
     let s;
     try {
       s = await this.prisma.session.create({
-        data: { tenantId, userId, title: req.title ?? '新会话', model, assistantId },
+        data: { tenantId, userId, title: req.title ?? '新会话', model, assistantId, mode },
         include: { assistant: { select: { name: true } } },
       });
     } catch (err) {
@@ -140,6 +146,7 @@ export class SessionsService {
       model: s.model ?? null,
       assistantId: s.assistantId ?? null,
       assistantName: s.assistant?.name ?? null,
+      mode: isSessionMode(s.mode) ? s.mode : 'chat',
       assistant: s.assistant ? toAssistantRef(s.assistant) : null,
     };
   }
@@ -199,6 +206,7 @@ function toSummary(s: {
   title: string;
   createdAt: Date;
   model: string | null;
+  mode: string;
   assistantId?: string | null;
   assistant?: { name: string } | null;
 }): SessionSummary {
@@ -209,5 +217,6 @@ function toSummary(s: {
     model: s.model ?? null,
     assistantId: s.assistantId ?? null,
     assistantName: s.assistant?.name ?? null,
+    mode: isSessionMode(s.mode) ? s.mode : 'chat',
   };
 }

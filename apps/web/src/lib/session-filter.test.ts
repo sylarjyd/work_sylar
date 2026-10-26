@@ -10,6 +10,7 @@ const SESSIONS: SessionSummary[] = [
     model: null,
     assistantId: null,
     assistantName: null,
+    mode: 'chat',
   },
   {
     id: '2',
@@ -18,6 +19,7 @@ const SESSIONS: SessionSummary[] = [
     model: null,
     assistantId: null,
     assistantName: null,
+    mode: 'chat',
   },
   {
     id: '3',
@@ -26,6 +28,7 @@ const SESSIONS: SessionSummary[] = [
     model: null,
     assistantId: null,
     assistantName: null,
+    mode: 'chat',
   },
 ];
 

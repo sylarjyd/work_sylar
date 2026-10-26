@@ -17,6 +17,7 @@ import type {
   KbDocDto,
   MessageDto,
   PlanDto,
+  SessionMode,
   SessionSummary,
   UsageAggregateDto,
 } from '@ai-office/shared';
@@ -61,10 +62,12 @@ export async function listSessionMessages(sessionId: string): Promise<MessageDto
 export async function createSession(
   model?: string,
   assistantId?: string,
+  mode?: SessionMode,
 ): Promise<SessionSummary> {
-  const body: { model?: string; assistantId?: string } = {};
+  const body: { model?: string; assistantId?: string; mode?: SessionMode } = {};
   if (model) body.model = model;
   if (assistantId) body.assistantId = assistantId;
+  if (mode) body.mode = mode;
   const res = await authFetch('/api/sessions', {
     method: 'POST',
     body: JSON.stringify(body),

@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { Logger, NotFoundException } from '@nestjs/common';
 import type { RunCheckpointEvent } from '@ai-office/shared';
 import { RunExecutor, parseCheckpoint } from './run-executor.service';
-import type { RunJob, RunSnapshot } from './run-job';
+import { SESSION_MODE_PROMPTS, type RunJob, type RunSnapshot } from './run-job';
 import type { TasksService } from '../tasks/tasks.service';
 import type { AttachmentsService } from '../attachments/attachments.service';
 import type { ArtifactService } from '../artifacts/artifacts.service';
@@ -491,6 +491,37 @@ describe('RunExecutor', () => {
     };
     expect(body.modelRoutes[0]!.apiKey).toBe('sk-plain');
     expect(body.modelRoutes[0]!.apiKey).not.toBe(sealed);
+  });
+
+  it('任务分类提示追加在助手提示词之后', async () => {
+    const { executor, deps } = makeExecutor();
+    deps.tasks.loadSnapshot.mockResolvedValue({
+      ...snapshot(),
+      mode: 'code',
+      assistant: { systemPrompt: '你是写作助手' },
+    });
+    deps.fetch.mockResolvedValue(sseResponse([{ event: 'done', data: { runId: 'r1' } }]));
+
+    await executor.execute(job());
+
+    const body = JSON.parse(String(deps.fetch.mock.calls[0]![1].body)) as {
+      systemPrompt: string;
+    };
+    expect(body.systemPrompt.startsWith('你是写作助手')).toBe(true);
+    expect(body.systemPrompt).toContain(SESSION_MODE_PROMPTS.code);
+  });
+
+  it('未绑定助手时仍下发分类提示', async () => {
+    const { executor, deps } = makeExecutor();
+    deps.tasks.loadSnapshot.mockResolvedValue({ ...snapshot(), mode: 'chat' });
+    deps.fetch.mockResolvedValue(sseResponse([{ event: 'done', data: { runId: 'r1' } }]));
+
+    await executor.execute(job());
+
+    const body = JSON.parse(String(deps.fetch.mock.calls[0]![1].body)) as {
+      systemPrompt: string;
+    };
+    expect(body.systemPrompt).toBe(SESSION_MODE_PROMPTS.chat);
   });
 
   it('快照路由解密失败时释放预占、标记 failed 且不请求上游', async () => {

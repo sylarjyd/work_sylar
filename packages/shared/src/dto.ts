@@ -201,12 +201,28 @@ export interface AuthResponse {
   user: AuthUser;
 }
 
+/** 任务分类：决定运行时的行为取向（对话直答 / 多步任务 / 编码）。 */
+export const SESSION_MODES = ['chat', 'task', 'code'] as const;
+export type SessionMode = (typeof SESSION_MODES)[number];
+
+export function isSessionMode(v: unknown): v is SessionMode {
+  return typeof v === 'string' && (SESSION_MODES as readonly string[]).includes(v);
+}
+
+export const SESSION_MODE_LABELS: Record<SessionMode, string> = {
+  chat: '对话',
+  task: '任务',
+  code: '编码',
+};
+
 export interface CreateSessionRequest {
   title?: string;
   /** 新建任务时选定的模型；缺省用助手默认模型，再缺省用运营端默认模型。 */
   model?: string;
   /** 新建任务时选定的自定义助手；缺省使用默认助手。 */
   assistantId?: string;
+  /** 任务分类；缺省按对话处理。会话创建后固定，运行期按分类引导助手行为。 */
+  mode?: SessionMode;
 }
 
 export interface SessionSummary {
@@ -218,6 +234,8 @@ export interface SessionSummary {
   /** 会话绑定的助手；助手被删除后为空。 */
   assistantId: string | null;
   assistantName: string | null;
+  /** 任务分类；存量会话创建时没有该字段，读取时归一为对话。 */
+  mode: SessionMode;
 }
 
 export interface MessageDto {

@@ -14,7 +14,7 @@ import type {
 } from '@ai-office/shared';
 import { createSseParser } from '@ai-office/shared';
 import { endSpan, injectTraceparent, startSpan } from '@ai-office/telemetry';
-import { parseSnapshot, type RunJob, type RunSnapshot } from './run-job';
+import { SESSION_MODE_PROMPTS, parseSnapshot, type RunJob, type RunSnapshot } from './run-job';
 import { RUN_CONTROL_BUS, RUN_EVENT_BUS } from './queue.tokens';
 import type { RunEventBus } from './run-event-bus';
 import type { RunControlBus } from './run-control-bus';
@@ -642,6 +642,14 @@ export class RunExecutor {
     };
     injectTraceparent(upstreamHeaders, runtimeSpan);
 
+    // 助手提示词优先，任务分类提示追加其后：分类只补充取向，不覆盖角色设定。
+    const systemPrompt = [
+      snapshot.assistant?.systemPrompt?.trim(),
+      snapshot.mode ? SESSION_MODE_PROMPTS[snapshot.mode] : undefined,
+    ]
+      .filter(Boolean)
+      .join('\n\n');
+
     let upstream: Response;
     // 建连超时按尝试单独计时：重试每次都有完整的建连窗口。
     const connectTimer = setTimeout(() => abort.abort(), UPSTREAM_CONNECT_TIMEOUT_MS);
@@ -662,11 +670,9 @@ export class RunExecutor {
           ...(modelRoutes.length > 0 ? { modelRoutes } : {}),
           // 续跑指令由断点还原；runtime 会从该 round/seq 继续并把断点用量并入结算。
           ...(resume ? { resume } : {}),
+          ...(systemPrompt ? { systemPrompt } : {}),
           ...(snapshot.assistant
             ? {
-                ...(snapshot.assistant.systemPrompt
-                  ? { systemPrompt: snapshot.assistant.systemPrompt }
-                  : {}),
                 enabledTools: snapshot.assistant.enabledTools,
                 permissionMode: snapshot.assistant.permissionMode,
                 ...(snapshot.assistant.kbIds ? { kbIds: snapshot.assistant.kbIds } : {}),

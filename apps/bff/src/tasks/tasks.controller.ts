@@ -161,6 +161,8 @@ export class TasksController {
       },
       config,
       traceId,
+      // 分类随每次运行固化：排队期间会话配置不再变化，但快照仍要自包含。
+      mode: session.mode,
       assistant: runAssistant,
       messages: [],
     };
