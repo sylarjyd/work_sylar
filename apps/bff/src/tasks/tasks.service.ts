@@ -200,9 +200,18 @@ export class TasksService {
     return this.prisma.task.count({ where: { status: 'queued', session: { tenantId } } });
   }
 
-  /** 单租户执行中任务数：用于 worker 的租户级并发让位。 */
-  async countRunning(tenantId: string): Promise<number> {
-    return this.prisma.task.count({ where: { status: 'running', session: { tenantId } } });
+  /**
+   * 单租户执行中任务数：用于 worker 的租户级并发让位。
+   * 崩溃重投时本作业的 Task 仍为 running，必须排除自身，否则并发为 1 时永久自锁。
+   */
+  async countRunning(tenantId: string, excludeTaskId?: string): Promise<number> {
+    return this.prisma.task.count({
+      where: {
+        status: 'running',
+        session: { tenantId },
+        ...(excludeTaskId ? { id: { not: excludeTaskId } } : {}),
+      },
+    });
   }
 
   async finish(

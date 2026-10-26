@@ -54,26 +54,39 @@ export class RunQueueService {
     const queued = await this.tasks.countQueued(job.tenantId);
     if (queued >= config.maxPerTenant) throw new QueueFullError(job.tenantId);
 
-    // jobId 复用 runId：重复提交天然幂等；终态作业保留少量样本便于排查。
+    // jobId 复用 runId：同一 run 重复提交只会保留一个作业，避免重复执行。
+    const existing = await this.queue.getJob(job.runId);
+    if (existing) {
+      const state = await existing.getState();
+      if (state === 'waiting' || state === 'delayed' || state === 'active') return;
+      // 已完成/失败的作业仍占用 jobId，先移除再入队，否则 add 只会拿回旧作业。
+      // remove 失败说明作业恰好被并发处理，按已入队处理，避免重复投递。
+      try {
+        await existing.remove();
+      } catch (err) {
+        this.logger.debug(`run ${job.runId} 清理旧作业失败: ${(err as Error).message}`);
+        return;
+      }
+    }
+
     await this.queue.add(RUN_JOB_NAME, job, {
       jobId: job.runId,
       removeOnComplete: 1000,
       removeOnFail: 5000,
     });
     this.metrics.runsEnqueued.inc();
-    this.metrics.runQueueDepth.inc();
   }
 
   /**
    * 移除尚未开始执行的作业（取消路径使用）。
    * 作业已被 worker 取走时 remove 会失败，返回 false 交由执行侧控制总线处理；
-   * 这里不调整 depth，取消后的指标回收由后续清理任务统一处理。
+   * 作业不存在说明已经执行完或被清理，视为移除成功。
    */
   async remove(runId: string): Promise<boolean> {
     if (!this.queue) return false;
     try {
       const job = await this.queue.getJob(runId);
-      if (!job) return false;
+      if (!job) return true;
       await job.remove();
       // 复查：remove 返回后作业必须确实消失，避免把竞态当成成功。
       return (await this.queue.getJob(runId)) == null;

@@ -16,7 +16,7 @@ import { PrismaModule } from '../db/prisma.module';
 import { ObservabilityModule } from '../observability/observability.module';
 import { SettingsModule } from '../settings/settings.module';
 import { TasksModule } from '../tasks/tasks.module';
-import { readQueueConfig } from './queue.config';
+import { readQueueConfig, type QueueRuntimeConfig } from './queue.config';
 import {
   QUEUE_CONFIG,
   RUN_CONTROL_BUS,
@@ -36,7 +36,8 @@ import { RunWorker } from './run-worker';
  * 运行队列模块：按 REDIS_URL 条件装配。
  * - 有 Redis：BullMQ 队列 + worker + 跨进程总线；
  * - 无 Redis：不创建任何连接，总线退化为进程内实现，submit 走内联执行。
- * 条件在 forRoot() 调用时确定，运行期不支持热切换（避免半连接状态）。
+ * 条件在 provider 实例化时（env 已加载后）确定，不在 forRoot() 调用时读取，
+ * 运行期不支持热切换（避免半连接状态）。
  */
 @Module({})
 export class QueueModule implements OnApplicationShutdown {
@@ -47,56 +48,53 @@ export class QueueModule implements OnApplicationShutdown {
     @Inject(RUN_CONTROL_BUS) private readonly controls: RunControlBus,
     private readonly worker: RunWorker,
     @Optional() @Inject(RUN_QUEUE) private readonly queue: RunQueue | null,
-    @Optional() @Inject(RUN_REDIS) private readonly redis: Redis | undefined,
+    @Optional() @Inject(RUN_REDIS) private readonly redis: Redis | null,
   ) {}
 
   static forRoot(): DynamicModule {
-    const config = readQueueConfig();
-    const redisUrl = config.redisUrl;
-
+    // forRoot() 在模块导入求值时调用，可能早于 .env 加载；所有依赖环境的 provider
+    // 必须用 factory，等 Nest 实例化时再读 process.env，否则 REDIS_URL 恒为未配置。
     const providers: Provider[] = [
-      { provide: QUEUE_CONFIG, useValue: config },
+      { provide: QUEUE_CONFIG, useFactory: () => readQueueConfig() },
+      {
+        provide: RUN_REDIS,
+        useFactory: (cfg: QueueRuntimeConfig): Redis | null =>
+          cfg.enabled && cfg.redisUrl ? createRunRedis(cfg.redisUrl) : null,
+        inject: [QUEUE_CONFIG],
+      },
+      {
+        provide: RUN_QUEUE,
+        useFactory: (cfg: QueueRuntimeConfig, redis: Redis | null): RunQueue | null => {
+          if (!redis) return null;
+          const queue = new Queue<RunJob, void, 'run'>(cfg.name, { connection: redis });
+          // 未监听 error 时 BullMQ 的 EventEmitter 错误会逃逸成未捕获异常。
+          queue.on('error', (err) => {
+            new Logger('RunQueue').error(`队列连接错误: ${err.message}`);
+          });
+          return queue;
+        },
+        inject: [QUEUE_CONFIG, RUN_REDIS],
+      },
+      {
+        provide: RUN_EVENT_BUS,
+        useFactory: (cfg: QueueRuntimeConfig, redis: Redis | null): RunEventBus =>
+          redis
+            ? new RedisRunEventBus(redis, () => createSubscriber(cfg.redisUrl!))
+            : new LocalRunEventBus(),
+        inject: [QUEUE_CONFIG, RUN_REDIS],
+      },
+      {
+        provide: RUN_CONTROL_BUS,
+        useFactory: (cfg: QueueRuntimeConfig, redis: Redis | null): RunControlBus =>
+          redis
+            ? new RedisRunControlBus(redis, () => createSubscriber(cfg.redisUrl!))
+            : new LocalRunControlBus(),
+        inject: [QUEUE_CONFIG, RUN_REDIS],
+      },
       RunExecutor,
       RunQueueService,
       RunWorker,
     ];
-
-    if (config.enabled && redisUrl) {
-      providers.push(
-        { provide: RUN_REDIS, useFactory: () => createRunRedis(redisUrl) },
-        {
-          provide: RUN_QUEUE,
-          useFactory: (redis: Redis): RunQueue => {
-            const queue = new Queue<RunJob, void, 'run'>(config.name, { connection: redis });
-            // 未监听 error 时 BullMQ 的 EventEmitter 错误会逃逸成未捕获异常。
-            queue.on('error', (err) => {
-              new Logger('RunQueue').error(`队列连接错误: ${err.message}`);
-            });
-            return queue;
-          },
-          inject: [RUN_REDIS],
-        },
-        {
-          provide: RUN_EVENT_BUS,
-          useFactory: (redis: Redis) =>
-            new RedisRunEventBus(redis, () => createSubscriber(redisUrl)),
-          inject: [RUN_REDIS],
-        },
-        {
-          provide: RUN_CONTROL_BUS,
-          useFactory: (redis: Redis) =>
-            new RedisRunControlBus(redis, () => createSubscriber(redisUrl)),
-          inject: [RUN_REDIS],
-        },
-      );
-    } else {
-      // 显式提供 null 而不是不提供，装配期即可确定「队列不可用」而非依赖可选注入。
-      providers.push(
-        { provide: RUN_QUEUE, useValue: null },
-        { provide: RUN_EVENT_BUS, useValue: new LocalRunEventBus() },
-        { provide: RUN_CONTROL_BUS, useValue: new LocalRunControlBus() },
-      );
-    }
 
     return {
       module: QueueModule,

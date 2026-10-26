@@ -12,13 +12,19 @@ import { BFF_METRICS, type BffMetrics } from '../observability/observability.met
 import { SettingsService } from '../settings/settings.service';
 import { TasksService } from '../tasks/tasks.service';
 import type { QueueRuntimeConfig } from './queue.config';
-import { QUEUE_CONFIG } from './queue.tokens';
+import { QUEUE_CONFIG, RUN_QUEUE, type RunQueue } from './queue.tokens';
 import { RUN_REDIS } from './redis.provider';
 import { RunExecutor } from './run-executor.service';
 import type { RunJob } from './run-job';
 
 /** 单租户并发已满时让位的延迟时长；到点后由 BullMQ 重新投递。 */
 const TENANT_BACKOFF_MS = 2000;
+
+/** 队列深度对账周期：inc/dec 会因崩溃、取消、多副本而漂移，定时以 Redis 实况纠正。 */
+const DEPTH_RECONCILE_MS = 30_000;
+
+/** 等待在途作业结束的上限；超时后强制关闭，避免 SIGTERM 被长任务无限拖住。 */
+const WORKER_CLOSE_TIMEOUT_MS = 15_000;
 
 /**
  * 运行队列消费者：仅队列启用时创建 Worker，否则整体空转。
@@ -28,10 +34,12 @@ const TENANT_BACKOFF_MS = 2000;
 export class RunWorker implements OnApplicationBootstrap, OnApplicationShutdown {
   private readonly logger = new Logger(RunWorker.name);
   private worker: Worker<RunJob, void, 'run'> | null = null;
+  private depthTimer: NodeJS.Timeout | null = null;
 
   constructor(
     @Inject(QUEUE_CONFIG) private readonly config: QueueRuntimeConfig,
-    @Optional() @Inject(RUN_REDIS) private readonly redis: Redis | undefined,
+    @Optional() @Inject(RUN_REDIS) private readonly redis: Redis | null,
+    @Optional() @Inject(RUN_QUEUE) private readonly queue: RunQueue | null,
     private readonly executor: RunExecutor,
     private readonly tasks: TasksService,
     private readonly settings: SettingsService,
@@ -45,7 +53,9 @@ export class RunWorker implements OnApplicationBootstrap, OnApplicationShutdown 
       this.config.name,
       async (job) => {
         const config = await this.settings.getQueueConfig();
-        const active = await this.tasks.countRunning(job.data.tenantId);
+        // 崩溃重投时本作业的 Task 仍是 running，按租户计数会把自身算进去；
+        // 排除自身任务，否则 perTenantConcurrency=1 时作业会永久自锁。
+        const active = await this.tasks.countRunning(job.data.tenantId, job.data.taskId);
         if (active >= config.perTenantConcurrency) {
           // 让位：作业退回延迟队列，不消耗尝试次数，也不占用 worker 并发。
           // worker 在处理器内保证已设置 job.token，这里用它防止锁失效后误移动。
@@ -58,8 +68,6 @@ export class RunWorker implements OnApplicationBootstrap, OnApplicationShutdown 
           await this.executor.execute(job.data);
         } finally {
           this.metrics.runQueueActive.dec();
-          // 取消等未走完整处理路径的作业可能造成 depth 漂移，由后续清理任务兜底。
-          this.metrics.runQueueDepth.dec();
         }
       },
       {
@@ -76,18 +84,68 @@ export class RunWorker implements OnApplicationBootstrap, OnApplicationShutdown 
     this.worker.on('error', (err) => {
       this.logger.error(`队列连接错误: ${err.message}`);
     });
+
+    if (this.queue) {
+      void this.reconcileDepth();
+      this.depthTimer = setInterval(() => void this.reconcileDepth(), DEPTH_RECONCILE_MS);
+      this.depthTimer.unref();
+    }
+
     this.logger.log(`运行队列 ${this.config.name} 已启动（并发 ${this.config.concurrency}）`);
   }
 
-  /** 停止拉取并等待在途作业结束；重复调用幂等。 */
+  /** 以 Redis 实况对账队列深度；失败只记日志，不影响 worker 主流程。 */
+  private async reconcileDepth(): Promise<void> {
+    if (!this.queue) return;
+    try {
+      const counts = await this.queue.getJobCounts('waiting', 'delayed');
+      this.metrics.runQueueDepth.set((counts.waiting ?? 0) + (counts.delayed ?? 0));
+    } catch (err) {
+      this.logger.debug(`队列深度对账失败: ${(err as Error).message}`);
+    }
+  }
+
+  /**
+   * 停止拉取并等待在途作业结束；重复调用幂等。
+   * worker.close() 会等待在途处理器（最长可达数分钟），关闭路径必须有上限，
+   * 超时后强制关闭，避免 SIGTERM 被长任务拖住。
+   */
   async close(): Promise<void> {
+    if (this.depthTimer) {
+      clearInterval(this.depthTimer);
+      this.depthTimer = null;
+    }
+
     const worker = this.worker;
     this.worker = null;
     if (!worker) return;
+
+    let timedOut = false;
+    let timer: NodeJS.Timeout | undefined;
     try {
-      await worker.close();
+      await Promise.race([
+        worker.close(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            timedOut = true;
+            reject(new Error('close_timeout'));
+          }, WORKER_CLOSE_TIMEOUT_MS);
+          timer.unref();
+        }),
+      ]);
     } catch (err) {
-      this.logger.warn(`关闭运行 worker 失败: ${(err as Error).message}`);
+      if (timedOut) {
+        this.logger.warn(`关闭运行 worker 超时（${WORKER_CLOSE_TIMEOUT_MS}ms），强制终止在途作业`);
+        try {
+          await worker.close(true);
+        } catch (forceErr) {
+          this.logger.warn(`强制关闭运行 worker 失败: ${(forceErr as Error).message}`);
+        }
+      } else {
+        this.logger.warn(`关闭运行 worker 失败: ${(err as Error).message}`);
+      }
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   }
 

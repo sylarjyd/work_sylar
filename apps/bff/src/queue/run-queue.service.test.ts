@@ -100,9 +100,42 @@ describe('RunQueueService', () => {
       removeOnFail: 5000,
     });
     const enqueued = await metrics.runsEnqueued.get();
-    const depth = await metrics.runQueueDepth.get();
     expect(enqueued.values[0]!.value).toBe(1);
-    expect(depth.values[0]!.value).toBe(1);
+    // 深度改为 worker 周期对账，入队路径不再自增。
+    const depth = await metrics.runQueueDepth.get();
+    expect(depth.values[0]?.value ?? 0).toBe(0);
+  });
+
+  it('同一 runId 已有 waiting 作业时不重复入队也不累加指标', async () => {
+    const queue = makeQueue();
+    (queue.getJob as ReturnType<typeof vi.fn>).mockResolvedValue({
+      getState: vi.fn().mockResolvedValue('waiting'),
+      remove: vi.fn(),
+    });
+    const { service, metrics } = makeService({ queue });
+
+    await service.enqueue(job());
+
+    expect(queue.add).not.toHaveBeenCalled();
+    const enqueued = await metrics.runsEnqueued.get();
+    expect(enqueued.values[0]?.value ?? 0).toBe(0);
+  });
+
+  it('同一 runId 的已完成作业先移除再重新入队', async () => {
+    const queue = makeQueue();
+    const remove = vi.fn().mockResolvedValue(undefined);
+    (queue.getJob as ReturnType<typeof vi.fn>).mockResolvedValue({
+      getState: vi.fn().mockResolvedValue('completed'),
+      remove,
+    });
+    const { service, metrics } = makeService({ queue });
+
+    await service.enqueue(job());
+
+    expect(remove).toHaveBeenCalledTimes(1);
+    expect(queue.add).toHaveBeenCalledTimes(1);
+    const enqueued = await metrics.runsEnqueued.get();
+    expect(enqueued.values[0]!.value).toBe(1);
   });
 
   it('启用队列时 submit 入队并返回 queued', async () => {
@@ -122,6 +155,11 @@ describe('RunQueueService', () => {
   it('remove 在无队列时返回 false', async () => {
     const { service } = makeService({ enabled: false, queue: null });
     await expect(service.remove('r1')).resolves.toBe(false);
+  });
+
+  it('remove 在作业不存在时视为成功', async () => {
+    const { service } = makeService();
+    await expect(service.remove('r1')).resolves.toBe(true);
   });
 
   it('remove 删除后复查作业已不存在才返回 true', async () => {

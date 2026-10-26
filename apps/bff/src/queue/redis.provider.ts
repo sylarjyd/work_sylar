@@ -1,6 +1,6 @@
 import { Redis } from 'ioredis';
 
-/** 运行总线 Redis 客户端的注入令牌；Task 8 的 QueueModule 按 REDIS_URL 决定是否提供。 */
+/** 运行总线 Redis 客户端的注入令牌；队列禁用时 QueueModule 提供 null。 */
 export const RUN_REDIS = Symbol('RUN_REDIS');
 
 /** 普通命令连接：用于发布运行事件与控制指令；未配置 Redis 时不创建。 */

@@ -255,6 +255,22 @@ describe('TasksService', () => {
     expect(ctx.db.attachments[0]).toMatchObject({ sessionId: null, messageId: null });
   });
 
+  it('countRunning 可排除自身任务，崩溃重投时不会自锁', async () => {
+    const count = vi.fn().mockResolvedValue(1);
+    const counting = new TasksService({ task: { count } } as any, sessions as any);
+
+    await expect(counting.countRunning('t1', 'task-self')).resolves.toBe(1);
+    expect(count).toHaveBeenLastCalledWith({
+      where: { status: 'running', session: { tenantId: 't1' }, id: { not: 'task-self' } },
+    });
+
+    // 不传排除项时保持原有语义。
+    await counting.countRunning('t1');
+    expect(count).toHaveBeenLastCalledWith({
+      where: { status: 'running', session: { tenantId: 't1' } },
+    });
+  });
+
   it('loadSnapshot 返回入队快照，缺失或为空时抛 NotFoundException', async () => {
     const input = { goal: '目标', messages: [], traceId: null };
     ctx.db.tasks.push({ id: 'task1', input });
