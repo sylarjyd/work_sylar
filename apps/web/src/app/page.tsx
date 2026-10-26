@@ -14,6 +14,7 @@ import {
   type AttachmentKind,
   type AttachmentRef,
   type ClientModelDto,
+  type MessageDto,
   type RunStatus,
   type SessionSummary,
 } from '@ai-office/shared';
@@ -47,6 +48,7 @@ import {
   listArtifacts,
   listAssistants,
   listModels,
+  listSessionMessages,
   listSessions,
   streamRun,
   streamTask,
@@ -194,6 +196,8 @@ export default function Home() {
   const [goal, setGoal] = useState('');
   const [submittedGoal, setSubmittedGoal] = useState('');
   const [events, setEvents] = useState<AgentEvent[]>([]);
+  // 历史消息：切换/打开会话时回填，新一轮运行只追加到 events，不回写这里。
+  const [history, setHistory] = useState<MessageDto[]>([]);
   const [artifacts, setArtifacts] = useState<ArtifactDto[]>([]);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState('');
@@ -223,6 +227,9 @@ export default function Home() {
   // 所有由本页创建的 object URL 统一登记，卸载时兜底释放，避免长期占用 blob 内存。
   const objectUrlsRef = useRef(new Set<string>());
   const artifactReqRef = useRef(0);
+  // 历史消息请求序号与已加载会话：快速切换时丢弃迟到响应，重复点击不重复请求。
+  const historyReqRef = useRef(0);
+  const loadedHistoryRef = useRef('');
   const lastUserScrollRef = useRef(0);
   // 重连游标：seq 从 0 开始，未收到任何 step 时用 -1 从头回放。
   const lastSeqRef = useRef(-1);
@@ -233,7 +240,9 @@ export default function Home() {
       router.push('/login');
       return;
     }
-    void refresh();
+    // 从其它菜单页点击历史会话会带 ?session= 回到工作台。
+    const preferred = new URLSearchParams(window.location.search).get('session') ?? '';
+    void refresh(preferred);
     void refreshModels();
     void refreshAssistants();
   }, [router]);
@@ -293,15 +302,37 @@ export default function Home() {
     }
   }
 
-  async function refresh() {
+  async function refresh(preferred = '') {
     try {
       const list = await listSessions();
       setSessions(list);
-      if (list.length) {
-        setSessionId(list[0].id);
-        if (list[0].model) setSelectedModel(list[0].model);
+      const pick = (preferred && list.find((s) => s.id === preferred)) || list[0];
+      if (pick) {
+        setSessionId(pick.id);
+        if (pick.model) setSelectedModel(pick.model);
+        // 只有显式指定会话（跨页面跳回）才自动展开历史，正常进入仍停在草稿首页。
+        if (preferred === pick.id) void loadHistory(pick.id);
       }
     } catch (err) {
+      if (isUnauthorized(err)) {
+        router.push('/login');
+        return;
+      }
+      setError(errorText(err));
+    }
+  }
+
+  async function loadHistory(sid: string) {
+    if (!sid) return;
+    const req = ++historyReqRef.current;
+    try {
+      const list = await listSessionMessages(sid);
+      if (req !== historyReqRef.current) return;
+      loadedHistoryRef.current = sid;
+      setHistory(list);
+      stickToBottomRef.current = true;
+    } catch (err) {
+      if (req !== historyReqRef.current) return;
       if (isUnauthorized(err)) {
         router.push('/login');
         return;
@@ -364,6 +395,9 @@ export default function Home() {
 
   function resetConversation() {
     setEvents([]);
+    setHistory([]);
+    historyReqRef.current += 1;
+    loadedHistoryRef.current = '';
     setSubmittedGoal('');
     setDecisions({});
     setError('');
@@ -376,13 +410,32 @@ export default function Home() {
     discardSubmitted();
   }
 
+  /** 只清实时视图，保留成果区与待发送附件：切回当前会话回看历史时用。 */
+  function clearLiveTurn() {
+    setEvents([]);
+    setSubmittedGoal('');
+    setSubmittedAttachments([]);
+    setDecisions({});
+    setRunStatus(null);
+    setQueuePosition(null);
+    stickToBottomRef.current = true;
+  }
+
   function handleSelect(id: string) {
-    if (running || id === sessionId) return;
-    const target = sessions.find((s) => s.id === id);
-    // 历史会话没有固化的模型：展示当前默认模型，实际运行由服务端按默认值解析。
-    setSelectedModel(target?.model ?? defaultModel);
-    setSessionId(id);
-    resetConversation();
+    if (running) return;
+    const needLoad = loadedHistoryRef.current !== id;
+    if (id !== sessionId) {
+      const target = sessions.find((s) => s.id === id);
+      // 历史会话没有固化的模型：展示当前默认模型，实际运行由服务端按默认值解析。
+      setSelectedModel(target?.model ?? defaultModel);
+      setSessionId(id);
+      resetConversation();
+    } else if (needLoad) {
+      // 同一会话但还没回看过（例如刚跑完一轮）：实时视图换成落库消息，避免同一轮展示两次。
+      clearLiveTurn();
+    }
+    // 首次进入时 sessionId 已被 refresh() 预选，这里补上历史消息。
+    if (needLoad) void loadHistory(id);
   }
 
   function markUserScroll() {
@@ -392,6 +445,8 @@ export default function Home() {
   function handleNewSession() {
     if (running) return;
     // 新任务先清成草稿：真正建会话推迟到首次发送，才能把用户选的模型/助手写进会话。
+    // 同时去掉 ?session=，避免刷新后又跳回刚离开的会话。
+    window.history.replaceState(null, '', '/');
     setSessionId('');
     resetConversation();
     void refreshModels();
@@ -669,14 +724,18 @@ export default function Home() {
     models.length > 0 &&
     modelAvailable;
   const inConversation =
-    running || events.length > 0 || submittedGoal !== '' || submittedAttachments.length > 0;
+    running ||
+    history.length > 0 ||
+    events.length > 0 ||
+    submittedGoal !== '' ||
+    submittedAttachments.length > 0;
   const confirmCard = currentConfirmCard(events);
 
   useEffect(() => {
     const el = scrollRef.current;
     if (!el || !stickToBottomRef.current) return;
     el.scrollTop = el.scrollHeight;
-  }, [events.length, running, confirmCard?.confirmId, submittedGoal]);
+  }, [history.length, events.length, running, confirmCard?.confirmId, submittedGoal]);
 
   useEffect(() => {
     // 发送后视图从 Hero 切到会话，输入器会重新挂载，run() 里的同步 focus 会随旧节点卸载丢失。
@@ -942,6 +1001,37 @@ export default function Home() {
               onKeyDown={markUserScroll}
             >
               <div className="wb-thread">
+                {history.length > 0 && (
+                  <div className="wb-chat">
+                    {history.map((m) =>
+                      m.role === 'user' ? (
+                        <div className="wb-user-msg" key={m.id}>
+                          {m.content && <div className="wb-user-text">{m.content}</div>}
+                          {m.attachments.length > 0 && (
+                            <div className="wb-user-attachments">
+                              {m.attachments.map((a) => (
+                                <span key={a.id} className="wb-user-attachment" title={a.filename}>
+                                  <IconFile size={14} />
+                                  <span className="wb-user-attachment-name">{a.filename}</span>
+                                  <span className="wb-user-attachment-meta">
+                                    {attachmentKindLabel(a.kind)}
+                                  </span>
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="wb-assistant-msg" key={m.id}>
+                          <span className="wb-assistant-avatar" aria-hidden="true">
+                            <IconSpark size={16} />
+                          </span>
+                          <div className="wb-assistant-text">{m.content}</div>
+                        </div>
+                      ),
+                    )}
+                  </div>
+                )}
                 {(submittedGoal || submittedAttachments.length > 0) && (
                   <div className="wb-user-msg">
                     {submittedGoal && <div className="wb-user-text">{submittedGoal}</div>}

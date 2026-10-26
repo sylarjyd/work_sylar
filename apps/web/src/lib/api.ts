@@ -15,6 +15,7 @@ import type {
   KbBasePatch,
   KbDeleteResultDto,
   KbDocDto,
+  MessageDto,
   PlanDto,
   SessionSummary,
   UsageAggregateDto,
@@ -48,6 +49,13 @@ export async function listSessions(): Promise<SessionSummary[]> {
   const res = await authFetch('/api/sessions');
   if (!res.ok) throw new Error(`sessions_failed_${res.status}`);
   return (await res.json()) as SessionSummary[];
+}
+
+/** 历史消息（user / assistant 两角色），用于回看会话。 */
+export async function listSessionMessages(sessionId: string): Promise<MessageDto[]> {
+  const res = await authFetch(`/api/sessions/${encodeURIComponent(sessionId)}/messages`);
+  if (!res.ok) throw new Error(`messages_failed_${res.status}`);
+  return (await res.json()) as MessageDto[];
 }
 
 export async function createSession(

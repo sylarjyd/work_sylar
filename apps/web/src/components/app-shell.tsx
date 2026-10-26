@@ -24,7 +24,15 @@ import {
   WalletOutlined,
 } from '@ant-design/icons';
 import type { SessionSummary } from '@ai-office/shared';
-import { clearToken, fetchMe, getEmail, getRole, getToken, isUnauthorized } from '../lib/api';
+import {
+  clearToken,
+  fetchMe,
+  getEmail,
+  getRole,
+  getToken,
+  isUnauthorized,
+  listSessions,
+} from '../lib/api';
 import { relativeTime } from '../lib/format';
 import { filterSessions } from '../lib/session-filter';
 import { IconSpark } from './icons';
@@ -67,6 +75,8 @@ export function AppShell({
   // 角色与邮箱只在挂载后读取：SSR 阶段没有 localStorage，渲染期读取会触发 hydration 不一致。
   const [role, setRole] = useState('');
   const [email, setEmail] = useState('');
+  // 其它页面不传 sessions：由外壳自行拉取，保证最近会话在任意菜单下都能看到。
+  const [remoteSessions, setRemoteSessions] = useState<SessionSummary[] | undefined>(undefined);
   const [collapsed, setCollapsed] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -97,22 +107,47 @@ export function AppShell({
     };
   }, [router]);
 
+  useEffect(() => {
+    // 工作台自己管理会话列表（含新建后的即时插入），这里只在外层未提供时兜底。
+    if (sessions !== undefined) return;
+    const token = getToken();
+    if (!token) return;
+    let cancelled = false;
+    listSessions()
+      .then((list) => {
+        if (cancelled || getToken() !== token) return;
+        setRemoteSessions(list);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        if (isUnauthorized(err)) {
+          router.replace('/login');
+          return;
+        }
+        // 拉取失败也要结束骨架态，避免最近会话区一直缺失。
+        setRemoteSessions([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sessions, router]);
+
   // 折叠状态挂载后读取，避免服务端渲染与水合结果不一致；
-  // 没有手动选择时，窄屏默认收起，用户手动展开后以手动选择为准。
+  // 默认收起，用户手动展开后以手动选择为准。
   useEffect(() => {
     const stored = window.localStorage.getItem('wb.sidebar.collapsed');
-    if (stored === '1') setCollapsed(true);
-    else if (stored === '0') setCollapsed(false);
-    else if (window.matchMedia('(max-width: 960px)').matches) setCollapsed(true);
+    if (stored === '0') setCollapsed(false);
+    else setCollapsed(true);
   }, []);
 
   useEffect(() => {
     if (searchOpen) searchRef.current?.focus();
   }, [searchOpen]);
 
+  const historySessions = sessions ?? remoteSessions;
   const visibleSessions = useMemo(
-    () => filterSessions(sessions ?? [], query),
-    [sessions, query],
+    () => filterSessions(historySessions ?? [], query),
+    [historySessions, query],
   );
 
   function persistCollapsed(next: boolean) {
@@ -148,6 +183,15 @@ export function AppShell({
   function logout() {
     clearToken();
     router.push('/login');
+  }
+
+  // 其它菜单页没有会话状态，点击后回到工作台并按 ?session 打开该会话。
+  function selectSession(id: string) {
+    if (onSelectSession) {
+      onSelectSession(id);
+      return;
+    }
+    router.push(`/?session=${encodeURIComponent(id)}`);
   }
 
   const menuItems = [
@@ -204,7 +248,7 @@ export function AppShell({
             >
               <MenuFoldOutlined />
             </button>
-            {sessions !== undefined && (
+            {historySessions !== undefined && (
               <button
                 ref={searchButtonRef}
                 type="button"
@@ -221,7 +265,7 @@ export function AppShell({
           </div>
         </div>
 
-        {sessions !== undefined && !collapsed && searchOpen && (
+        {historySessions !== undefined && !collapsed && searchOpen && (
           <div className="wb-search">
             <SearchOutlined />
             <input
@@ -266,7 +310,7 @@ export function AppShell({
           style={{ background: 'transparent', borderInlineEnd: 'none' }}
         />
 
-        {sessions !== undefined && !collapsed && (
+        {historySessions !== undefined && !collapsed && (
           <div className="wb-recent">
             <div className="wb-recent-label">最近</div>
             <div className="wb-session-list">
@@ -281,7 +325,7 @@ export function AppShell({
                     type="button"
                     className={`wb-session${s.id === sessionId ? ' active' : ''}`}
                     aria-current={s.id === sessionId ? 'true' : undefined}
-                    onClick={() => onSelectSession?.(s.id)}
+                    onClick={() => selectSession(s.id)}
                     disabled={sessionDisabled}
                     title={s.title}
                   >

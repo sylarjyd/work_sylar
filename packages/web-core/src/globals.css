@@ -2470,6 +2470,27 @@ a {
   border-right: 0;
 }
 
+/* AntD 的 Sider 内层默认是块级容器，账号区无法靠 margin-top:auto 沉底；
+   这里把它改成纵向 flex，交给会话列表占据剩余空间并内部滚动。 */
+.wb-sidebar .ant-layout-sider-children {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* 极矮视口下让导航自身滚动，避免把底部账号区顶出可视区。 */
+.wb-nav-menu {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.wb-side-head,
+.wb-search,
+.wb-new-task {
+  flex: 0 0 auto;
+}
+
 .wb-side-head {
   display: flex;
   align-items: center;
@@ -2628,6 +2649,7 @@ a {
 
 .wb-recent {
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
   min-height: 0;
   margin-top: 16px;
@@ -2641,8 +2663,10 @@ a {
 
 .wb-session-list {
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
   gap: 2px;
+  min-height: 0;
   overflow-y: auto;
 }
 
@@ -2700,6 +2724,7 @@ a {
 
 .wb-user {
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: 9px;
   padding-top: 12px;
@@ -2998,7 +3023,46 @@ a {
   white-space: pre-wrap;
   word-break: break-word;
   background: var(--wb-sidebar);
-  border-radius: 16px;
+  /* 右下角收一个小圆角，和助手左侧的头像形成问答方向感。 */
+  border-radius: 18px 18px 6px 18px;
+}
+
+/* 历史会话：问答按对话流排版，助手回复用品牌头像承载，不再复用事件日志样式。 */
+.wb-chat {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  padding: 4px 0 2px;
+}
+
+.wb-assistant-msg {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.wb-assistant-avatar {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  margin-top: 1px;
+  color: #fff;
+  background: linear-gradient(135deg, #00d69a, #00a878);
+  border-radius: 9px;
+}
+
+.wb-assistant-text {
+  flex: 1;
+  min-width: 0;
+  max-width: 760px;
+  padding-top: 3px;
+  font-size: 15px;
+  line-height: 1.75;
+  color: var(--wb-ink);
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .wb-event {
