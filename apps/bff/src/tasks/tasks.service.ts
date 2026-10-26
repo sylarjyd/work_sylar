@@ -105,6 +105,9 @@ export class TasksService {
               sessionId,
               goal,
               status: 'queued',
+              // 首次运行也算一次尝试：重试按 attempts+1 建 run，
+              // 这里不置 1 会让第一次重试生成重复的 attempt=1。
+              attempts: 1,
               input: snapshot as unknown as Prisma.InputJsonValue,
             },
           });

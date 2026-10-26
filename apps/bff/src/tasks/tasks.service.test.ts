@@ -280,7 +280,13 @@ describe('TasksService', () => {
       snapshot({ goal: '写周报', traceId: 'trace' }),
     );
 
-    expect(ctx.db.tasks[0]).toMatchObject({ sessionId: 's1', goal: '写周报', status: 'queued' });
+    // attempts 从 1 起算，首次重试才能得到 attempt=2。
+    expect(ctx.db.tasks[0]).toMatchObject({
+      sessionId: 's1',
+      goal: '写周报',
+      status: 'queued',
+      attempts: 1,
+    });
     // 入队快照被补全为「历史 + 本次用户消息」，执行器无需再查历史。
     expect(ctx.db.tasks[0].input).toMatchObject({
       goal: '写周报',
