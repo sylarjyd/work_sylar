@@ -1,7 +1,7 @@
 import 'reflect-metadata';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { BillingService } from './billing.service';
-import { InsufficientCreditsError } from './billing.errors';
+import { InsufficientCreditsError, RateLimitedError } from './billing.errors';
 import { PrismaService } from '../db/prisma.service';
 
 type Row = Record<string, any>;
@@ -77,7 +77,10 @@ function makeDb() {
         return row;
       },
       findUnique: async ({ where }: any) => db.credits.find((c) => c.tenantId === where.tenantId) ?? null,
-      update: async ({ where, data }: any) => apply(db.credits.find((c) => c.tenantId === where.tenantId)!, data),
+      // 用 vi.fn 包一层，便于断言准入路径未触碰额度。
+      update: vi.fn(async ({ where, data }: any) =>
+        apply(db.credits.find((c) => c.tenantId === where.tenantId)!, data),
+      ),
     },
     creditLot: {
       create: async ({ data }: any) => {
@@ -118,11 +121,11 @@ function makeDb() {
         db.txs.find((t) => t.id === where.id && t.tenantId === where.tenantId) ?? null,
     },
     creditHold: {
-      create: async ({ data }: any) => {
+      create: vi.fn(async ({ data }: any) => {
         const row = { createdAt: NOW, ...data };
         db.holds.push(row);
         return row;
-      },
+      }),
       findUnique: async ({ where }: any) => db.holds.find((h) => h.runId === where.runId) ?? null,
       findMany: async ({ where }: any) =>
         db.holds.filter((h) => !where?.expiresAt?.lte || h.expiresAt <= where.expiresAt.lte),
@@ -227,7 +230,11 @@ function makeDb() {
   return { db, prisma: client as unknown as PrismaService };
 }
 
-const limiter = { hit: async () => ({ allowed: true, retryAfter: 0 }) };
+// 默认放行；单个用例可通过 makeService({ rateLimited: true }) 切到超限分支。
+let rateLimited = false;
+const limiter = {
+  hit: vi.fn(async () => (rateLimited ? { allowed: false, retryAfter: 7 } : { allowed: true, retryAfter: 0 })),
+};
 
 function seed(db: ReturnType<typeof makeDb>['db']) {
   db.plans.push({
@@ -247,10 +254,17 @@ function seed(db: ReturnType<typeof makeDb>['db']) {
 let ctx: ReturnType<typeof makeDb>;
 let svc: BillingService;
 
-beforeEach(() => {
+/** 统一构造服务；rateLimited 仅覆盖限流结果，既有用例不传即保持放行。 */
+function makeService(opts: { rateLimited?: boolean } = {}): BillingService {
   ctx = makeDb();
   seed(ctx.db);
-  svc = new BillingService(ctx.prisma, limiter as any);
+  rateLimited = opts.rateLimited ?? false;
+  limiter.hit.mockClear();
+  return new BillingService(ctx.prisma, limiter as any);
+}
+
+beforeEach(() => {
+  svc = makeService();
 });
 
 describe('BillingService', () => {
@@ -260,6 +274,24 @@ describe('BillingService', () => {
     expect(summary.plan.id).toBe('free');
     expect(ctx.db.lots).toHaveLength(1);
     expect(ctx.db.txs[0]).toMatchObject({ type: 'grant', amount: 500, source: 'base' });
+  });
+
+  it('admitRun 只校验不预占', async () => {
+    const admitted = makeService();
+    await admitted.admitRun('t1');
+    expect(ctx.prisma.creditHold.create).not.toHaveBeenCalled();
+    expect(ctx.prisma.tenantCredit.update).not.toHaveBeenCalled();
+  });
+
+  it('admitRun 命中限流抛 RateLimitedError', async () => {
+    const admitted = makeService({ rateLimited: true });
+    await expect(admitted.admitRun('t1')).rejects.toBeInstanceOf(RateLimitedError);
+  });
+
+  it('beginRun 不再消耗 RPM', async () => {
+    const admitted = makeService();
+    await admitted.beginRun('r1', 't1');
+    expect(limiter.hit).not.toHaveBeenCalled();
   });
 
   it('beginRun 预占不超过单次上限，余额为 0 时抛 InsufficientCreditsError', async () => {

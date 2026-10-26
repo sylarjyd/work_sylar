@@ -195,16 +195,37 @@ export class BillingService implements OnModuleDestroy {
   }
 
   // ------------------------------------------------------------------ 预占与结算
-  /** 运行前：校验套餐/限流/余额，锁行预占额度。返回给 runtime 的计费约束。 */
-  async beginRun(runId: string, tenantId: string): Promise<RunBilling> {
+  /**
+   * 入队前只读准入：套餐有效、RPM 未超、余额>0、价格齐全。
+   * 不锁额度、不预占——排队期间可能等待很久，提前预占会让额度空转；
+   * 真正执行时再由 beginRun 在事务内锁行预占。
+   */
+  async admitRun(tenantId: string): Promise<void> {
     const { plan, sub } = await this.ensureSubscription(tenantId);
     if (sub.status !== 'active' || sub.periodEnd.getTime() <= Date.now()) {
       throw new PlanExpiredError();
     }
+    // RPM 在入队时消耗一次，beginRun 不再重复计数。
     const rl = await this.limiter.hit(`run:${tenantId}`, plan.rpm);
     if (!rl.allowed) {
       this.metrics?.rateLimitHits.inc({ scope: 'tenant' });
       throw new RateLimitedError(rl.retryAfter);
+    }
+    const credit = await this.prisma.tenantCredit.findUnique({ where: { tenantId } });
+    const available = (credit?.balance ?? 0) - (credit?.reserved ?? 0);
+    if (available < 1) throw new InsufficientCreditsError();
+    const prices = await this.loadPrices(this.prisma);
+    // 价格漏配会让 runtime 按 0 计费并绕过预算，入队时即拒绝，避免排到执行才失败。
+    for (const model of plan.allowedModels) {
+      if (!prices[model]) throw new Error(`model_price_missing:${model}`);
+    }
+  }
+
+  /** 出队执行前：校验套餐/余额，锁行预占额度。返回给 runtime 的计费约束。 */
+  async beginRun(runId: string, tenantId: string): Promise<RunBilling> {
+    const { plan, sub } = await this.ensureSubscription(tenantId);
+    if (sub.status !== 'active' || sub.periodEnd.getTime() <= Date.now()) {
+      throw new PlanExpiredError();
     }
 
     const now = new Date();
