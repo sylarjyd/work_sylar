@@ -153,7 +153,11 @@ export async function listArtifacts(sessionId: string): Promise<ArtifactDto[]> {
 
 /** 取消运行：排队中的直接撤销，执行中的交由控制总线通知；终态 run 幂等返回当前状态。 */
 export async function cancelRun(runId: string): Promise<{ status: string }> {
-  const res = await authFetch(`/api/runs/${runId}/cancel`, { method: 'POST' });
+  // authFetch 固定带 JSON content-type，空体 POST 会被 Fastify 以 400 拒绝，必须补空对象。
+  const res = await authFetch(`/api/runs/${runId}/cancel`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  });
   if (!res.ok) throw new Error(`cancel_failed_${res.status}`);
   return (await res.json()) as { status: string };
 }

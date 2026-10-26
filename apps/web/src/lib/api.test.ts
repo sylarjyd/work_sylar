@@ -60,6 +60,8 @@ describe('运行控制与断线重连', () => {
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toContain('/api/runs/r1/cancel');
     expect(init.method).toBe('POST');
+    // 空体 + JSON content-type 会被 Fastify 判 400，必须显式发空对象。
+    expect(init.body).toBe('{}');
   });
 
   it('cancelRun 失败时抛出可识别的错误码', async () => {
