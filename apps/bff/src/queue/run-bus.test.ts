@@ -8,8 +8,8 @@ import { LocalRunControlBus, RedisRunControlBus, type RunControlMessage } from '
 function createFakeSubscriber() {
   let messageListener: ((channel: string, raw: string) => void) | undefined;
   const redis = {
-    subscribe: vi.fn(async () => 1),
-    unsubscribe: vi.fn(async () => 0),
+    subscribe: vi.fn(async (_channel: string) => 1),
+    unsubscribe: vi.fn(async (_channel: string) => 0),
     disconnect: vi.fn(),
     on: vi.fn((event: string, listener: (channel: string, raw: string) => void) => {
       if (event === 'message') messageListener = listener;
@@ -18,6 +18,7 @@ function createFakeSubscriber() {
   };
   return {
     redis: redis as unknown as Redis,
+    mocks: redis,
     emit(channel: string, raw: string) {
       messageListener?.(channel, raw);
     },
@@ -28,6 +29,8 @@ function createFakeSubscriber() {
 function fakePublisher() {
   return { publish: vi.fn(async () => 1) };
 }
+
+const eventFrame = (event: string, data: unknown): string => JSON.stringify({ event, data });
 
 describe('LocalRunEventBus', () => {
   it('发布后可订阅，退订后不再收到', async () => {
@@ -103,33 +106,103 @@ describe('RedisRunEventBus', () => {
     );
   });
 
-  it('subscribe 使用独立连接、过滤坏帧，退订释放连接', async () => {
-    const publisher = fakePublisher();
+  it('同一运行的多次订阅共享连接，按频道引用计数退订', async () => {
     const sub = createFakeSubscriber();
     const factory = vi.fn(() => sub.redis);
-    const bus = new RedisRunEventBus(publisher as unknown as Redis, factory);
-    const got: SseMessage[] = [];
+    const bus = new RedisRunEventBus(fakePublisher() as unknown as Redis, factory);
+    const first: SseMessage[] = [];
+    const second: SseMessage[] = [];
 
-    const off = await bus.subscribe('r1', (m) => got.push(m));
+    const offFirst = await bus.subscribe('r1', (m) => first.push(m));
+    const offSecond = await bus.subscribe('r1', (m) => second.push(m));
+
+    // 单连接订阅多频道：两个订阅者只建一条连接、只 subscribe 一次。
     expect(factory).toHaveBeenCalledTimes(1);
-    expect(sub.redis.subscribe).toHaveBeenCalledWith('run:r1:events');
+    expect(sub.mocks.subscribe).toHaveBeenCalledTimes(1);
+    expect(sub.mocks.subscribe).toHaveBeenCalledWith('run:r1:events');
     expect(sub.listenerReady()).toBe(true);
 
-    sub.emit('run:r1:events', JSON.stringify({ event: 'done', data: { runId: 'r1' } }));
+    sub.emit('run:r1:events', eventFrame('step', { seq: 1 }));
+    expect(first).toHaveLength(1);
+    expect(second).toHaveLength(1);
+
+    // 退订其一仍能收到；频道尚未解绑。
+    await offFirst();
+    expect(sub.mocks.unsubscribe).not.toHaveBeenCalled();
+    sub.emit('run:r1:events', eventFrame('step', { seq: 2 }));
+    expect(first).toHaveLength(1);
+    expect(second).toHaveLength(2);
+
+    // 全部退订后只解绑一次。
+    await offSecond();
+    expect(sub.mocks.unsubscribe).toHaveBeenCalledTimes(1);
+    expect(sub.mocks.unsubscribe).toHaveBeenCalledWith('run:r1:events');
+  });
+
+  it('重复退订幂等，只执行一次 unsubscribe', async () => {
+    const sub = createFakeSubscriber();
+    const bus = new RedisRunEventBus(fakePublisher() as unknown as Redis, () => sub.redis);
+    const off = await bus.subscribe('r1', () => undefined);
+
+    await off();
+    await off();
+    await off();
+
+    expect(sub.mocks.unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it('subscribe 失败时抛出，且可重试、无处理器残留', async () => {
+    const sub = createFakeSubscriber();
+    sub.mocks.subscribe.mockRejectedValueOnce(new Error('subscribe failed'));
+    const bus = new RedisRunEventBus(fakePublisher() as unknown as Redis, () => sub.redis);
+    const got: SseMessage[] = [];
+
+    await expect(bus.subscribe('r1', (m) => got.push(m))).rejects.toThrow('subscribe failed');
+
+    // 失败订阅的处理器已清理，连接上到达的帧不会回调它。
+    sub.emit('run:r1:events', eventFrame('step', { seq: 1 }));
+    expect(got).toHaveLength(0);
+
+    // 共享连接可被后续订阅复用并重试成功。
+    const off = await bus.subscribe('r1', (m) => got.push(m));
+    expect(sub.mocks.subscribe).toHaveBeenCalledTimes(2);
+    sub.emit('run:r1:events', eventFrame('step', { seq: 2 }));
+    expect(got).toHaveLength(1);
+
+    await off();
+    expect(sub.mocks.unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it('退订后不再回调该处理器', async () => {
+    const sub = createFakeSubscriber();
+    const bus = new RedisRunEventBus(fakePublisher() as unknown as Redis, () => sub.redis);
+    const got: SseMessage[] = [];
+    const off = await bus.subscribe('r1', (m) => got.push(m));
+
+    sub.emit('run:r1:events', eventFrame('step', { seq: 1 }));
+    await off();
+    sub.emit('run:r1:events', eventFrame('step', { seq: 2 }));
+
+    expect(got).toHaveLength(1);
+  });
+
+  it('过滤坏帧', async () => {
+    const sub = createFakeSubscriber();
+    const bus = new RedisRunEventBus(fakePublisher() as unknown as Redis, () => sub.redis);
+    const got: SseMessage[] = [];
+    const off = await bus.subscribe('r1', (m) => got.push(m));
+
     // 坏 JSON、缺字段、非法事件名一律忽略。
     sub.emit('run:r1:events', '{not json');
     sub.emit('run:r1:events', JSON.stringify({ event: 'done' }));
-    sub.emit('run:r1:events', JSON.stringify({ event: 'bogus', data: {} }));
-    sub.emit('run:r1:events', JSON.stringify({ event: 'step', data: { seq: 1 } }));
+    sub.emit('run:r1:events', eventFrame('bogus', {}));
+    sub.emit('run:r1:events', eventFrame('step', { seq: 1 }));
 
-    expect(got.map((m) => m.event)).toEqual(['done', 'step']);
-
+    expect(got.map((m) => m.event)).toEqual(['step']);
     await off();
-    expect(sub.redis.unsubscribe).toHaveBeenCalledWith('run:r1:events');
-    expect(sub.redis.disconnect).toHaveBeenCalledTimes(1);
   });
 
-  it('订阅者抛错不影响连接与后续帧', async () => {
+  it('同步处理器抛错不影响连接与后续帧', async () => {
     const sub = createFakeSubscriber();
     const bus = new RedisRunEventBus(fakePublisher() as unknown as Redis, () => sub.redis);
     let calls = 0;
@@ -137,10 +210,33 @@ describe('RedisRunEventBus', () => {
       calls += 1;
       throw new Error('subscriber boom');
     });
-    expect(() => sub.emit('run:r1:events', JSON.stringify({ event: 'step', data: {} }))).not.toThrow();
-    sub.emit('run:r1:events', JSON.stringify({ event: 'done', data: {} }));
+    expect(() => sub.emit('run:r1:events', eventFrame('step', {}))).not.toThrow();
+    sub.emit('run:r1:events', eventFrame('done', {}));
     // 第一次抛错，第二次仍被分发。
     expect(calls).toBe(2);
+  });
+
+  it('异步处理器拒绝不影响同帧其他处理器与后续帧', async () => {
+    const sub = createFakeSubscriber();
+    const bus = new RedisRunEventBus(fakePublisher() as unknown as Redis, () => sub.redis);
+    const got: SseMessage[] = [];
+
+    await bus.subscribe('r1', async () => {
+      throw new Error('async subscriber boom');
+    });
+    await bus.subscribe('r1', () => {
+      throw new Error('sync subscriber boom');
+    });
+    await bus.subscribe('r1', (m) => got.push(m));
+
+    sub.emit('run:r1:events', eventFrame('step', { seq: 1 }));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(got).toHaveLength(1);
+
+    sub.emit('run:r1:events', eventFrame('done', {}));
+    await Promise.resolve();
+    expect(got.map((m) => m.event)).toEqual(['step', 'done']);
   });
 });
 
@@ -160,15 +256,11 @@ describe('RedisRunControlBus', () => {
     );
   });
 
-  it('订阅后消息 round-trip，非法控制帧忽略，退订释放连接', async () => {
+  it('订阅后消息 round-trip，非法控制帧忽略', async () => {
     const sub = createFakeSubscriber();
-    const factory = vi.fn(() => sub.redis);
-    const bus = new RedisRunControlBus(fakePublisher() as unknown as Redis, factory);
+    const bus = new RedisRunControlBus(fakePublisher() as unknown as Redis, () => sub.redis);
     const got: RunControlMessage[] = [];
-
     const off = await bus.subscribe('r1', (m) => got.push(m));
-    expect(factory).toHaveBeenCalledTimes(1);
-    expect(sub.redis.subscribe).toHaveBeenCalledWith('run:r1:control');
 
     sub.emit('run:r1:control', JSON.stringify({ type: 'cancel' }));
     sub.emit('run:r1:control', JSON.stringify({ type: 'confirm', confirmId: 'c1', approved: true }));
@@ -180,9 +272,52 @@ describe('RedisRunControlBus', () => {
       { type: 'cancel' },
       { type: 'confirm', confirmId: 'c1', approved: true },
     ]);
-
     await off();
-    expect(sub.redis.unsubscribe).toHaveBeenCalledWith('run:r1:control');
-    expect(sub.redis.disconnect).toHaveBeenCalledTimes(1);
+  });
+
+  it('同一运行共享连接，最后退订才解绑且幂等', async () => {
+    const sub = createFakeSubscriber();
+    const factory = vi.fn(() => sub.redis);
+    const bus = new RedisRunControlBus(fakePublisher() as unknown as Redis, factory);
+    const got: RunControlMessage[] = [];
+
+    const offFirst = await bus.subscribe('r1', () => undefined);
+    const offSecond = await bus.subscribe('r1', (m) => got.push(m));
+    expect(factory).toHaveBeenCalledTimes(1);
+    expect(sub.mocks.subscribe).toHaveBeenCalledTimes(1);
+
+    await offFirst();
+    await offFirst();
+    expect(sub.mocks.unsubscribe).not.toHaveBeenCalled();
+    sub.emit('run:r1:control', JSON.stringify({ type: 'cancel' }));
+    expect(got).toHaveLength(1);
+
+    await offSecond();
+    await offSecond();
+    expect(sub.mocks.unsubscribe).toHaveBeenCalledTimes(1);
+    expect(sub.mocks.unsubscribe).toHaveBeenCalledWith('run:r1:control');
+  });
+
+  it('异步处理器拒绝不影响同帧其他处理器与后续帧', async () => {
+    const sub = createFakeSubscriber();
+    const bus = new RedisRunControlBus(fakePublisher() as unknown as Redis, () => sub.redis);
+    const got: RunControlMessage[] = [];
+
+    await bus.subscribe('r1', async () => {
+      throw new Error('async control boom');
+    });
+    await bus.subscribe('r1', (m) => got.push(m));
+
+    sub.emit('run:r1:control', JSON.stringify({ type: 'cancel' }));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(got).toHaveLength(1);
+
+    sub.emit('run:r1:control', JSON.stringify({ type: 'confirm', confirmId: 'c1', approved: false }));
+    await Promise.resolve();
+    expect(got).toEqual([
+      { type: 'cancel' },
+      { type: 'confirm', confirmId: 'c1', approved: false },
+    ]);
   });
 });

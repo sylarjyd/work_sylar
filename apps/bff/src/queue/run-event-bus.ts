@@ -43,11 +43,19 @@ export class LocalRunEventBus implements RunEventBus {
   }
 }
 
+const SUBSCRIBE_TIMEOUT_MS = 5000;
+const UNSUBSCRIBE_TIMEOUT_MS = 5000;
+
 /**
  * 多进程实现：事件经 Redis Pub/Sub 跨进程分发。
- * 订阅方必须使用独立连接（Factory 每次新建），Redis 订阅态连接无法再执行普通命令。
+ * 进程内共享一条订阅连接（订阅态连接无法执行普通命令，但可订阅多个频道），
+ * 频道按处理器数量引用计数，最后一个退订时才真正 unsubscribe。
  */
 export class RedisRunEventBus implements RunEventBus {
+  private sub: Redis | null = null;
+  private readonly handlers = new Map<string, Set<(msg: SseMessage) => void>>();
+  private readonly subscribed = new Set<string>();
+
   constructor(
     private readonly publisher: Redis,
     private readonly subscriberFactory: () => Redis,
@@ -62,28 +70,86 @@ export class RedisRunEventBus implements RunEventBus {
 
   async subscribe(runId: string, handler: (msg: SseMessage) => void): Promise<() => void> {
     const channel = runEventChannel(runId);
-    const subscriber = this.subscriberFactory();
-    // 先挂监听再订阅，避免订阅确认后、监听注册前到达的帧被丢弃。
-    subscriber.on('message', (_channel: string, raw: string) => {
-      const msg = decodeEventFrame(raw);
-      if (!msg) return;
+    let set = this.handlers.get(channel);
+    if (!set) {
+      set = new Set();
+      this.handlers.set(channel, set);
+    }
+    set.add(handler);
+    if (!this.subscribed.has(channel)) {
       try {
-        handler(msg);
-      } catch {
-        // 订阅者自身异常不能打断 Redis 连接的事件分发。
+        await withTimeout(this.ensureSubscriber().subscribe(channel), SUBSCRIBE_TIMEOUT_MS);
+        this.subscribed.add(channel);
+      } catch (err) {
+        // 订阅失败不留下悬挂处理器；连接交给 ioredis 自动重连。
+        set.delete(handler);
+        if (set.size === 0) this.handlers.delete(channel);
+        throw err;
       }
-    });
-    await subscriber.subscribe(channel);
+    }
 
     let closed = false;
     return async () => {
       // 幂等：重复退订不再触碰连接。
       if (closed) return;
       closed = true;
-      await subscriber.unsubscribe(channel).catch(() => undefined);
-      subscriber.disconnect();
+      const current = this.handlers.get(channel);
+      current?.delete(handler);
+      if (current && current.size === 0) {
+        this.handlers.delete(channel);
+        this.subscribed.delete(channel);
+        const sub = this.sub;
+        // 断线时 unsubscribe 可能排队不返回；超时后放弃等待，连接由 ioredis 重连。
+        if (sub) {
+          await withTimeout(sub.unsubscribe(channel), UNSUBSCRIBE_TIMEOUT_MS).catch(
+            () => undefined,
+          );
+        }
+      }
     };
   }
+
+  private ensureSubscriber(): Redis {
+    if (!this.sub) {
+      // 单连接订阅多频道；每次订阅新建连接会随 SSE 连接数线性膨胀。
+      this.sub = this.subscriberFactory();
+      this.sub.on('message', (channel: string, raw: string) => this.dispatch(channel, raw));
+    }
+    return this.sub;
+  }
+
+  private dispatch(channel: string, raw: string): void {
+    const set = this.handlers.get(channel);
+    if (!set) return;
+    const msg = decodeEventFrame(raw);
+    if (!msg) return;
+    for (const handler of [...set]) {
+      try {
+        // handler 若为异步函数，其 rejection 也必须吞掉，否则会逃逸成未处理异常。
+        Promise.resolve(handler(msg)).catch(() => undefined);
+      } catch {
+        // 同步异常隔离，不能打断同运行其他订阅者。
+      }
+    }
+  }
+}
+
+/** 给 Redis 操作加超时；断线时命令可能无限排队，清理流程不能因此卡死。 */
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`Redis 总线操作超时（${ms}ms）`)), ms);
+    (timer as { unref?: () => void }).unref?.();
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
 }
 
 /** 校验并解码事件帧；坏 JSON、缺字段、非法事件名一律返回 null。 */
