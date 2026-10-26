@@ -4,6 +4,7 @@ import { attachmentKindFor, type AgentEvent } from '@ai-office/shared';
 import { PrismaService } from '../db/prisma.service';
 import { SessionsService, type SessionRef } from '../sessions/sessions.service';
 import type { PreparedAttachment, PreparedMessage } from '../attachments/attachments.service';
+import type { RunSnapshot } from '../queue/run-job';
 
 /** 并发抢占同一 seq 时的最大尝试次数（首次 + 最多 4 次重试）。 */
 const MAX_SEQ_ATTEMPTS = 5;
@@ -166,6 +167,13 @@ export class TasksService {
         }
       }
     }
+  }
+
+  /** 读取入队时固化的运行快照；缺失说明入队不完整或数据被清理，执行器据此失败收尾。 */
+  async loadSnapshot(taskId: string): Promise<RunSnapshot> {
+    const task = await this.prisma.task.findUnique({ where: { id: taskId } });
+    if (!task || !task.input) throw new NotFoundException('task_snapshot_missing');
+    return task.input as unknown as RunSnapshot;
   }
 
   /**

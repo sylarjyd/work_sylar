@@ -1,5 +1,6 @@
 import 'reflect-metadata';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { NotFoundException } from '@nestjs/common';
 import { TasksService } from './tasks.service';
 import type { PrismaService } from '../db/prisma.service';
 
@@ -45,6 +46,7 @@ function makeDb() {
       },
     },
     task: {
+      findUnique: async ({ where }: any) => db.tasks.find((t) => t.id === where.id) ?? null,
       create: async ({ data }: any) => {
         const row = { id: `task${db.tasks.length + 1}`, ...data };
         db.tasks.push(row);
@@ -251,5 +253,16 @@ describe('TasksService', () => {
     expect(ctx.db.tasks).toHaveLength(0);
     expect(ctx.db.runs).toHaveLength(0);
     expect(ctx.db.attachments[0]).toMatchObject({ sessionId: null, messageId: null });
+  });
+
+  it('loadSnapshot 返回入队快照，缺失或为空时抛 NotFoundException', async () => {
+    const input = { goal: '目标', messages: [], traceId: null };
+    ctx.db.tasks.push({ id: 'task1', input });
+    await expect(svc.loadSnapshot('task1')).resolves.toEqual(input);
+
+    await expect(svc.loadSnapshot('missing')).rejects.toBeInstanceOf(NotFoundException);
+
+    ctx.db.tasks.push({ id: 'task2', input: null });
+    await expect(svc.loadSnapshot('task2')).rejects.toThrow('task_snapshot_missing');
   });
 });
