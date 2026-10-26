@@ -1,8 +1,8 @@
 # AI 办公智能体 · 架构设计（Architecture Design）
 
-- 版本：v1.0
-- 日期：2026-10-16
-- 状态：随 M2 交付更新
+- 版本：v1.1
+- 日期：2026-10-26
+- 状态：随 M5b-3 队列交付更新
 - 关联：`docs/design/01-overview-design.md`、`docs/design/03-detailed-design.md`、`docs/deploy/06-deployment.md`
 
 ---
@@ -22,7 +22,7 @@
 |---|---|
 | 单一职责 | 每层只做本职（BFF 不跑 Agent、runtime 不碰账号） |
 | 契约先行 | 跨层类型集中在 `@ai-office/shared` |
-| 无状态优先 | BFF/runtime 无会话态，便于横向扩展（运行态入 Redis 为规划） |
+| 无状态优先 | BFF/runtime 无会话态，便于横向扩展；任务作业与限流计数共享 Redis（M5b-3/M5a），运行权威状态仍在 Postgres |
 | 字节不穿 BFF | 大对象由产生方直写对象存储，BFF 只代理下载流 |
 | 边界校验 | 不信任跨进程输入（runtime 的产物引用、模型的 filename/URL） |
 | 失败要可降级 | 落库失败不挂起客户端；模型/网络失败不伪造成功 |
@@ -45,12 +45,14 @@ flowchart LR
         RT["agent-runtime :4001<br/>node dist/server.js"]
         PG[("Postgres :5432")]
         S3[("MinIO :9000/:9001")]
+        REDIS[("Redis :6379")]
     end
     Browser["浏览器"] -->|HTTPS| WEB
     Browser -->|"XHR/SSE (CORS)"| BFF
     BFF -->|"HTTP + SSE"| RT
     BFF --> PG
     BFF --> S3
+    BFF --> REDIS
     RT --> S3
 ```
 
@@ -61,6 +63,7 @@ flowchart LR
 | `apps/agent-runtime` | `node dist/server.js` | 4001 | Node 服务（原生 `http`） |
 | Postgres | docker | 5432 | 外部依赖 |
 | MinIO | docker | 9000（API）/ 9001（控制台） | 外部依赖 |
+| Redis | docker | 6379 | 外部依赖（队列/限流；未配时退化为进程内联执行） |
 
 > **关键**：`agent-runtime` 默认仅绑 `127.0.0.1`；未配 `AGENT_RUNTIME_TOKEN` 时**只放行回环来源**（fail-closed）。对外暴露必须设 `AGENT_RUNTIME_HOST=0.0.0.0` 并配 `AGENT_RUNTIME_TOKEN`，BFF 会自动携带同一 token。
 
@@ -93,11 +96,13 @@ flowchart LR
 
 - 技术：Node/TS 独立服务，原生 `http` 建服务；工具与文档库。
 - 职责：
-  - **Agent Loop**：plan→act→observe，受 `maxRounds` 保护。
-  - **工具注册表**：`web.search` / `web.fetch` / `doc.docx` / `doc.xlsx` / `doc.pptx`。
-  - **模型网关**：OpenAI 兼容协议接入（默认 DeepSeek），无 key 时确定性 Mock。
+  - **Agent Loop**：plan→act→observe，受 `maxRounds` 保护；按 `checkpoint` 续跑。
+  - **工具注册表**：`web.search` / `web.fetch` / `doc.docx` / `doc.xlsx` / `doc.pptx` / `code.exec`（沙箱）/ `kb.retrieve`；MCP 工具以 `mcp.<server>.<tool>` 动态注入。
+  - **权限与确认**：工具标注 `safe` / `confirm` / `blocked`，`confirm` 执行前挂起并下发确认卡片。
+  - **模型网关**：OpenAI 兼容协议接入（默认 DeepSeek），多路由与 fallback，无 key 时确定性 Mock。
   - **对象存储写入**：产物字节直传 S3 兼容存储。
-- 协议：接收 BFF 的 `POST /runs`（JSON），以 SSE 回流 `step` / `usage` / `done` / `error`。
+  - **MCP Host**：stdio 接入，进程池按 `(tenantId, name)` 隔离，心跳与崩溃退避重拉。
+- 协议：接收 BFF 的 `POST /runs`（JSON），以 SSE 回流 `step` / `usage` / `status` / `checkpoint` / `done` / `error`。
 
 ---
 
@@ -121,17 +126,28 @@ flowchart LR
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/health` | 健康检查，返回 `{ok:true}` |
+| GET | `/metrics` | Prometheus 指标（回环或 `x-internal-token`） |
 | POST | `/runs` | 执行一次运行，请求体 `RunRequest`，响应 `text/event-stream` |
+| POST | `/kb/ingest` | 知识库文档解析/切分/向量化入库 |
+| POST | `/connectors/validate` | 校验 MCP 连接器配置 |
 
-**`RunRequest`**（`@ai-office/shared`）：
+**`RunRequest`**（`@ai-office/shared`，节选）：
 
 ```ts
 interface RunRequest {
   runId: string;       // BFF 生成，保证落库与 SSE 对齐
   sessionId: string;
   tenantId: string;    // 产物 Key 需按租户隔离，BFF 从 JWT 取出透传
+  userId: string;      // 知识库按 tenant + user 隔离
   goal: string;
   messages: ChatMessage[];
+  billing?: RunBilling;             // 预占额度、允许模型与价格
+  config?: RunConfig;               // 管理端参数（夹取后生效）
+  modelRoutes?: RunModelRoute[];    // 按优先级的路由与 fallback
+  enabledTools?: string[];          // 允许的内置工具；空数组表示禁用
+  permissionMode?: AssistantPermissionMode;
+  kbIds?: string[];                 // 助手绑定的知识库
+  resume?: RunResume;               // 断点续跑：BFF 从 RunCheckpoint 读出后下发
 }
 ```
 
@@ -139,8 +155,10 @@ interface RunRequest {
 
 | event | data | 说明 |
 |---|---|---|
-| `step` | `AgentEvent` | 单步事件，`type ∈ {think, tool_call, tool_result, artifact}` |
-| `usage` | `{input, output}` | 累计 token 用量（透传，不落库） |
+| `step` | `AgentEvent` | 单步事件，`type ∈ {think, tool_call, tool_result, artifact, confirm_request, notice}` |
+| `usage` | `{input, output}` | 累计 token 用量（透传，结算用） |
+| `status` | `{status}` | 排队/执行状态变更（非 Step，不入库） |
+| `checkpoint` | `RunCheckpoint` | 轮次断点，BFF 落库供续跑 |
 | `done` | `{runId}` | 流正常结束 |
 | `error` | `{message}` | 运行时错误 |
 
@@ -152,6 +170,7 @@ interface AgentEvent {
 ```
 
 编码格式：`event: <name>\ndata: <json>\n\n`（见 `packages/shared/src/protocol.ts`）。
+SSE 断线续流：BFF 支持 `?afterSeq=`（或 `Last-Event-ID`），先回放缺失 step 再续实时事件。
 
 ---
 
@@ -238,9 +257,9 @@ sequenceDiagram
 
 | 存储 | 内容 | 现状 / 规划 |
 |---|---|---|
-| **Postgres** | 全部结构化元数据（租户/用户/会话/消息/任务/运行/步/产物） | 已用；pgvector 为规划 |
+| **Postgres** | 全部结构化元数据（租户/用户/会话/消息/任务/运行/步/产物）；pgvector 向量与知识库检索 | 已用（pgvector 随 M4a 交付） |
 | **对象存储（MinIO/S3）** | 产物字节（docx/xlsx/pptx） | 已用 |
-| **Redis** | 任务队列、运行态、限流计数 | 规划（M5/横向扩展） |
+| **Redis** | 任务队列（BullMQ）、取消控制消息、限流计数 | 已用（限流 M5a，队列 M5b-3）；运行权威状态与 SSE 回放仍走 Postgres |
 
 **Key 约定**：`artifacts/{tenantId}/{runId}/{uuid}-{filename}` —— 按租户天然隔离，`uuid` 前缀杜绝重名覆盖。
 
@@ -277,6 +296,9 @@ sequenceDiagram
 | 产物落库失败 | 记日志，不中断 SSE 流 |
 | 模型/文档 JSON 非法 | 工具抛错 → `tool_result ok:false` → Loop 继续 |
 | 客户端断连 | 主动 `cancel` 上游读取；销毁上游 S3 流 |
+| 作业尝试失败（上游不可达/5xx/空响应/流中断） | `RUN_QUEUE_MAX_ATTEMPTS` 内立即重投，从 `step` checkpoint 续跑；仍失败则落 failed，可由管理端手动重试 |
+| 取消 | 排队中移除作业（无 step/用量/预占）；执行中下发控制消息并中止上游，按断点已完成轮次结算用量 |
+| 运行失联（作业丢失） | 恢复任务每 5 分钟扫描一次，补发取消并收敛终态 |
 
 ### 8.2 资源回收
 
@@ -285,10 +307,14 @@ sequenceDiagram
 - 运行上限：`maxRounds`（默认 8）防止 Loop 失控。
 - 上下文防爆：工具结果回填截断至 4000 字符；`web.fetch` 文本截断至 8000 字符。
 
-### 8.3 可观测性（现状 + 规划）
+### 8.3 可观测性
 
-- 现状：Nest `Logger` 结构化日志（run 标识 + 失败原因）；`step` 表可完整回放一次运行。
-- 规划：全链路 trace、token/成本指标、告警（M5）。
+- 结构化日志：pino（敏感字段脱敏），带 `runId`/`traceId`。
+- 全链路 trace：OTel，贯穿 BFF→runtime。
+- 指标：BFF/runtime `/metrics`（HTTP、运行、模型、工具、结算、限流、队列深度与等待时长、取消/重试/续跑）。
+- 看板与告警：指标小时桶 + `/admin/overview` 概览；告警规则/事件 + HMAC Webhook（`/admin/alerts`）。
+- 回放与时间线：`step` 表完整回放一次运行；管理端运行时间线只展示工具名/文件名/静态文案。
+- 剩余（M5c）：多实例指标聚合与外部监控接入。
 
 ---
 
@@ -299,19 +325,20 @@ sequenceDiagram
 本系统负载为 **I/O 密集型**（等模型 API / 数据库 / 对象存储），Node 事件循环模型天然适配，单实例可承载数千并发连接与 SSE 流。真瓶颈在模型 API 限流、DB 连接与 CPU 密集操作（沙箱跑码、文档生成）。演进方向：
 
 1. **Fastify adapter**（较默认 Express 更快）——已采用。
-2. **无状态多实例 + 负载均衡**，Redis 共享会话/队列 —— 规划。
+2. **任务队列与限流计数共享 Redis** —— 已采用（M5b-3/M5a）；无状态多实例 + 负载均衡仍待落地。
 3. **CPU 密集操隔离**到 runtime/沙箱 worker 进程或容器，主 BFF 不碰重计算 —— 规划。
 
 > 若未来出现极致吞吐需求，正解是重写**热点服务**，而非更换整个框架；1–2 人节奏下暂不采用。
 
 ### 9.2 关键演进点
 
-| 演进 | 触发 | 设计预留 |
+| 演进 | 触发 | 状态 / 设计预留 |
 |---|---|---|
-| 模型网关收口（路由/限流/埋点/fallback） | M5 | `ModelGateway` 接口已抽象 |
-| 任务队列化 + 可恢复/断点续传 | M5 | `step` 表即 checkpoint |
-| 沙箱执行 | M3 | 工具契约 `RunContext` 已就位 |
-| MCP 工具并入 | M4 | 工具注册表声明式，可动态注入 |
+| 模型网关收口（路由/限流/埋点/fallback） | M5a | ✅ 已交付（`ModelGateway`） |
+| 任务队列化 + 可恢复/断点续传 | M5b-3 | ✅ 已交付（`step` 即 checkpoint） |
+| 沙箱执行 | M3 | ✅ 已交付（工具契约 `RunContext`） |
+| MCP 工具并入 | M4b | ✅ 已交付（注册表声明式注入） |
+| 无状态多实例 + 负载均衡 | 横向扩展 | 队列/限流已共享 Redis，LB 待落地 |
 | 桌面端复用 | 阶段二 | runtime 独立进程 + 稳定协议 |
 | 预签名 URL 直连下载 | 量大时 | 当前 BFF 代理；切换需暴露对象存储 |
 

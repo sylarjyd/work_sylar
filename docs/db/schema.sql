@@ -1,13 +1,18 @@
 -- =============================================================================
 -- AI 办公智能体 · 数据库 Schema（PostgreSQL 16）
 -- -----------------------------------------------------------------------------
--- 本文件是 apps/bff/prisma/schema.prisma 的等价 DDL，用于：
+-- 本文件是 apps/bff/prisma/schema.prisma 的等价 DDL（29 张表），用于：
 --   1) 首次建库的基线（无 Prisma 迁移历史时）；
 --   2) 审阅数据模型 / 供 DBA 参考。
 --
--- 权威来源：Prisma schema + 迁移文件（apps/bff/prisma/migrations）。
+-- 权威来源：Prisma schema（当前无迁移历史，开发用 db push）。
 --   常规变更请改 Prisma schema 并用 `prisma migrate`（生产）/`prisma db push`（开发），
 --   再同步更新本文件，避免二者漂移。
+--
+-- 重新生成：
+--   cd apps/bff
+--   npx prisma migrate diff --from-empty --to-schema-datamodel prisma/schema.prisma --script
+--   再补回文末的 pgvector 扩展与 HNSW 索引（Prisma 不生成 Unsupported 类型的索引）。
 --
 -- 应用方式：
 --   psql "$DATABASE_URL" -f docs/db/schema.sql
@@ -19,293 +24,663 @@
 --   - 外键默认 ON DELETE RESTRICT ON UPDATE CASCADE（Prisma 默认行为）。
 -- =============================================================================
 
--- 可选：更老版本 Postgres 若缺 gen_random_uuid()
--- CREATE EXTENSION IF NOT EXISTS pgcrypto;
-
 -- M4a 知识库：pgvector 扩展（镜像 pgvector/pgvector:pg16 自带）。
 CREATE EXTENSION IF NOT EXISTS vector;
 
--- -----------------------------------------------------------------------------
--- Tenant（租户 / 组织）
--- -----------------------------------------------------------------------------
+-- CreateSchema
+CREATE SCHEMA IF NOT EXISTS "public";
+
+-- CreateTable
 CREATE TABLE "Tenant" (
-    "id"        TEXT         NOT NULL DEFAULT gen_random_uuid(),
-    "type"      TEXT         NOT NULL DEFAULT 'personal',
-    "name"      TEXT         NOT NULL,
-    "plan"      TEXT         NOT NULL DEFAULT 'free',
+    "id" TEXT NOT NULL,
+    "type" TEXT NOT NULL DEFAULT 'personal',
+    "name" TEXT NOT NULL,
+    "plan" TEXT NOT NULL DEFAULT 'free',
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
     CONSTRAINT "Tenant_pkey" PRIMARY KEY ("id")
 );
 
--- -----------------------------------------------------------------------------
--- User（用户）
--- -----------------------------------------------------------------------------
+-- CreateTable
 CREATE TABLE "User" (
-    "id"           TEXT         NOT NULL DEFAULT gen_random_uuid(),
-    "tenantId"     TEXT         NOT NULL,
-    "email"        TEXT         NOT NULL,
-    "passwordHash" TEXT         NOT NULL,
-    "status"       TEXT         NOT NULL DEFAULT 'active',
-    "role"         TEXT         NOT NULL DEFAULT 'member',
-    "createdAt"    TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "id" TEXT NOT NULL,
+    "tenantId" TEXT NOT NULL,
+    "email" TEXT NOT NULL,
+    "passwordHash" TEXT NOT NULL,
+    "status" TEXT NOT NULL DEFAULT 'active',
+    "role" TEXT NOT NULL DEFAULT 'member',
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
     CONSTRAINT "User_pkey" PRIMARY KEY ("id")
 );
 
-CREATE UNIQUE INDEX "User_email_key" ON "User" ("email");
-CREATE INDEX "User_tenantId_idx" ON "User" ("tenantId");
-
-ALTER TABLE "User"
-    ADD CONSTRAINT "User_tenantId_fkey"
-    FOREIGN KEY ("tenantId") REFERENCES "Tenant" ("id")
-    ON DELETE RESTRICT ON UPDATE CASCADE;
-
--- -----------------------------------------------------------------------------
--- Session（会话）
--- -----------------------------------------------------------------------------
+-- CreateTable
 CREATE TABLE "Session" (
-    "id"        TEXT         NOT NULL DEFAULT gen_random_uuid(),
-    "tenantId"  TEXT         NOT NULL,
-    "userId"    TEXT         NOT NULL,
-    "title"     TEXT         NOT NULL DEFAULT '新会话',
-    "status"    TEXT         NOT NULL DEFAULT 'active',
+    "id" TEXT NOT NULL,
+    "tenantId" TEXT NOT NULL,
+    "userId" TEXT NOT NULL,
+    "title" TEXT NOT NULL DEFAULT '新会话',
+    "status" TEXT NOT NULL DEFAULT 'active',
+    "model" TEXT,
+    "assistantId" TEXT,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
     CONSTRAINT "Session_pkey" PRIMARY KEY ("id")
 );
 
-CREATE INDEX "Session_tenantId_userId_idx" ON "Session" ("tenantId", "userId");
-
-ALTER TABLE "Session"
-    ADD CONSTRAINT "Session_tenantId_fkey"
-    FOREIGN KEY ("tenantId") REFERENCES "Tenant" ("id")
-    ON DELETE RESTRICT ON UPDATE CASCADE;
-
-ALTER TABLE "Session"
-    ADD CONSTRAINT "Session_userId_fkey"
-    FOREIGN KEY ("userId") REFERENCES "User" ("id")
-    ON DELETE RESTRICT ON UPDATE CASCADE;
-
--- -----------------------------------------------------------------------------
--- Message（对话消息）
--- -----------------------------------------------------------------------------
-CREATE TABLE "Message" (
-    "id"        TEXT         NOT NULL DEFAULT gen_random_uuid(),
-    "sessionId" TEXT         NOT NULL,
-    "role"      TEXT         NOT NULL,
-    "content"   TEXT         NOT NULL,
-    "seq"       INTEGER      NOT NULL,
-    "tokens"    INTEGER,
+-- CreateTable
+CREATE TABLE "Assistant" (
+    "id" TEXT NOT NULL,
+    "tenantId" TEXT NOT NULL,
+    "userId" TEXT NOT NULL,
+    "name" TEXT NOT NULL,
+    "description" TEXT NOT NULL DEFAULT '',
+    "systemPrompt" TEXT NOT NULL DEFAULT '',
+    "permissionMode" TEXT NOT NULL DEFAULT 'standard',
+    "model" TEXT,
+    "skills" TEXT[] DEFAULT ARRAY[]::TEXT[],
+    "kbIds" TEXT[] DEFAULT ARRAY[]::TEXT[],
+    "kbDocIds" TEXT[] DEFAULT ARRAY[]::TEXT[],
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "Assistant_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "Message" (
+    "id" TEXT NOT NULL,
+    "sessionId" TEXT NOT NULL,
+    "role" TEXT NOT NULL,
+    "content" TEXT NOT NULL,
+    "seq" INTEGER NOT NULL,
+    "tokens" INTEGER,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
     CONSTRAINT "Message_pkey" PRIMARY KEY ("id")
 );
 
--- 同一会话内 seq 唯一：保证消息顺序稳定、避免并发落库重号。
-CREATE UNIQUE INDEX "Message_sessionId_seq_key" ON "Message" ("sessionId", "seq");
-
-ALTER TABLE "Message"
-    ADD CONSTRAINT "Message_sessionId_fkey"
-    FOREIGN KEY ("sessionId") REFERENCES "Session" ("id")
-    ON DELETE RESTRICT ON UPDATE CASCADE;
-
--- -----------------------------------------------------------------------------
--- Task（用户下达的目标）
--- -----------------------------------------------------------------------------
-CREATE TABLE "Task" (
-    "id"        TEXT         NOT NULL DEFAULT gen_random_uuid(),
-    "sessionId" TEXT         NOT NULL,
-    "goal"      TEXT         NOT NULL,
-    "status"    TEXT         NOT NULL DEFAULT 'queued',
+-- CreateTable
+CREATE TABLE "Attachment" (
+    "id" TEXT NOT NULL,
+    "tenantId" TEXT NOT NULL,
+    "userId" TEXT NOT NULL,
+    "sessionId" TEXT,
+    "messageId" TEXT,
+    "kind" TEXT NOT NULL,
+    "filename" TEXT NOT NULL,
+    "mime" TEXT NOT NULL,
+    "size" INTEGER NOT NULL,
+    "storageKey" TEXT NOT NULL,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "Attachment_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "Task" (
+    "id" TEXT NOT NULL,
+    "sessionId" TEXT NOT NULL,
+    "goal" TEXT NOT NULL,
+    "status" TEXT NOT NULL DEFAULT 'queued',
+    "input" JSONB,
+    "attempts" INTEGER NOT NULL DEFAULT 0,
+    "lastError" TEXT,
+    "queuedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "startedAt" TIMESTAMP(3),
+    "endedAt" TIMESTAMP(3),
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
     CONSTRAINT "Task_pkey" PRIMARY KEY ("id")
 );
 
-CREATE INDEX "Task_sessionId_idx" ON "Task" ("sessionId");
-
-ALTER TABLE "Task"
-    ADD CONSTRAINT "Task_sessionId_fkey"
-    FOREIGN KEY ("sessionId") REFERENCES "Session" ("id")
-    ON DELETE RESTRICT ON UPDATE CASCADE;
-
--- -----------------------------------------------------------------------------
--- Run（一次 Agent 执行实例）
--- -----------------------------------------------------------------------------
+-- CreateTable
 CREATE TABLE "Run" (
-    "id"        TEXT         NOT NULL DEFAULT gen_random_uuid(),
-    "taskId"    TEXT         NOT NULL,
-    "status"    TEXT         NOT NULL DEFAULT 'running',
-    "startedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "endedAt"   TIMESTAMP(3),
+    "id" TEXT NOT NULL,
+    "taskId" TEXT NOT NULL,
+    "attempt" INTEGER NOT NULL DEFAULT 1,
+    "status" TEXT NOT NULL DEFAULT 'queued',
+    "startedAt" TIMESTAMP(3),
+    "endedAt" TIMESTAMP(3),
+    "cancelRequestedAt" TIMESTAMP(3),
+    "traceId" TEXT,
+
     CONSTRAINT "Run_pkey" PRIMARY KEY ("id")
 );
 
-CREATE INDEX "Run_taskId_idx" ON "Run" ("taskId");
+-- CreateTable
+CREATE TABLE "RunCheckpoint" (
+    "runId" TEXT NOT NULL,
+    "round" INTEGER NOT NULL,
+    "seq" INTEGER NOT NULL,
+    "deltas" JSONB NOT NULL,
+    "usage" JSONB NOT NULL,
+    "artifactIds" JSONB NOT NULL,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
 
-ALTER TABLE "Run"
-    ADD CONSTRAINT "Run_taskId_fkey"
-    FOREIGN KEY ("taskId") REFERENCES "Task" ("id")
-    ON DELETE RESTRICT ON UPDATE CASCADE;
+    CONSTRAINT "RunCheckpoint_pkey" PRIMARY KEY ("runId")
+);
 
--- -----------------------------------------------------------------------------
--- Step（Agent loop 单步：审计 / 回放数据源）
--- -----------------------------------------------------------------------------
+-- CreateTable
 CREATE TABLE "Step" (
-    "id"      TEXT         NOT NULL DEFAULT gen_random_uuid(),
-    "runId"   TEXT         NOT NULL,
-    "seq"     INTEGER      NOT NULL,
-    "type"    TEXT         NOT NULL,  -- think | tool_call | tool_result | artifact | confirm_request
-    "payload" JSONB        NOT NULL,
-    "ts"      TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "id" TEXT NOT NULL,
+    "runId" TEXT NOT NULL,
+    "seq" INTEGER NOT NULL,
+    "type" TEXT NOT NULL,
+    "payload" JSONB NOT NULL,
+    "ts" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
     CONSTRAINT "Step_pkey" PRIMARY KEY ("id")
 );
 
--- 同一运行内 seq 唯一：对应的 SSE 事件序列与落库一一对齐。
-CREATE UNIQUE INDEX "Step_runId_seq_key" ON "Step" ("runId", "seq");
-
-ALTER TABLE "Step"
-    ADD CONSTRAINT "Step_runId_fkey"
-    FOREIGN KEY ("runId") REFERENCES "Run" ("id")
-    ON DELETE RESTRICT ON UPDATE CASCADE;
-
--- -----------------------------------------------------------------------------
--- Artifact（产出物元数据；字节在对象存储）
--- -----------------------------------------------------------------------------
+-- CreateTable
 CREATE TABLE "Artifact" (
-    "id"         TEXT         NOT NULL DEFAULT gen_random_uuid(),
-    "tenantId"   TEXT         NOT NULL,
-    "sessionId"  TEXT         NOT NULL,
-    "runId"      TEXT         NOT NULL,
-    "kind"       TEXT         NOT NULL,  -- docx | xlsx | pptx
-    "filename"   TEXT         NOT NULL,
-    "storageKey" TEXT         NOT NULL,  -- artifacts/{tenantId}/{runId}/{uuid}-{filename}
-    "size"       INTEGER      NOT NULL,
-    "version"    INTEGER      NOT NULL DEFAULT 1,
-    "createdAt"  TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "id" TEXT NOT NULL,
+    "tenantId" TEXT NOT NULL,
+    "sessionId" TEXT NOT NULL,
+    "runId" TEXT NOT NULL,
+    "kind" TEXT NOT NULL,
+    "filename" TEXT NOT NULL,
+    "storageKey" TEXT NOT NULL,
+    "size" INTEGER NOT NULL,
+    "version" INTEGER NOT NULL DEFAULT 1,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
     CONSTRAINT "Artifact_pkey" PRIMARY KEY ("id")
 );
 
-CREATE INDEX "Artifact_sessionId_idx" ON "Artifact" ("sessionId");
-CREATE INDEX "Artifact_tenantId_idx"  ON "Artifact" ("tenantId");
-
-ALTER TABLE "Artifact"
-    ADD CONSTRAINT "Artifact_sessionId_fkey"
-    FOREIGN KEY ("sessionId") REFERENCES "Session" ("id")
-    ON DELETE RESTRICT ON UPDATE CASCADE;
-
-ALTER TABLE "Artifact"
-    ADD CONSTRAINT "Artifact_runId_fkey"
-    FOREIGN KEY ("runId") REFERENCES "Run" ("id")
-    ON DELETE RESTRICT ON UPDATE CASCADE;
-
--- -----------------------------------------------------------------------------
--- KnowledgeBase / KbDoc / KbChunk（M4a 知识库；向量维度固定 1024，须与 EMBEDDING_DIM 一致）
--- -----------------------------------------------------------------------------
+-- CreateTable
 CREATE TABLE "KnowledgeBase" (
-    "id"          TEXT         NOT NULL DEFAULT gen_random_uuid(),
-    "tenantId"    TEXT         NOT NULL,
-    "userId"      TEXT         NOT NULL,
-    "name"        TEXT         NOT NULL,
-    "description" TEXT         NOT NULL DEFAULT '',
-    "createdAt"   TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt"   TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "id" TEXT NOT NULL,
+    "tenantId" TEXT NOT NULL,
+    "userId" TEXT NOT NULL,
+    "name" TEXT NOT NULL,
+    "description" TEXT NOT NULL DEFAULT '',
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
     CONSTRAINT "KnowledgeBase_pkey" PRIMARY KEY ("id")
 );
 
-CREATE UNIQUE INDEX "KnowledgeBase_tenantId_userId_name_key"
-    ON "KnowledgeBase" ("tenantId", "userId", "name");
-CREATE INDEX "KnowledgeBase_tenantId_userId_idx" ON "KnowledgeBase" ("tenantId", "userId");
-CREATE INDEX "KnowledgeBase_tenantId_idx" ON "KnowledgeBase" ("tenantId");
-
+-- CreateTable
 CREATE TABLE "KbDoc" (
-    "id"              TEXT         NOT NULL DEFAULT gen_random_uuid(),
-    "tenantId"        TEXT         NOT NULL,
-    "userId"          TEXT         NOT NULL,
-    -- 兼容存量数据时可为空；回填后由服务层强制写入，后续版本改为 NOT NULL。
+    "id" TEXT NOT NULL,
+    "tenantId" TEXT NOT NULL,
+    "userId" TEXT NOT NULL,
     "knowledgeBaseId" TEXT,
-    "filename"        TEXT         NOT NULL,
-    "mime"            TEXT         NOT NULL,
-    "size"            INTEGER      NOT NULL,
-    "storageKey"      TEXT         NOT NULL,
-    "status"          TEXT         NOT NULL DEFAULT 'pending',  -- pending | ready | failed
-    "chunkCount"      INTEGER      NOT NULL DEFAULT 0,
-    "error"           TEXT,
-    "createdAt"       TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "filename" TEXT NOT NULL,
+    "mime" TEXT NOT NULL,
+    "size" INTEGER NOT NULL,
+    "storageKey" TEXT NOT NULL,
+    "status" TEXT NOT NULL DEFAULT 'pending',
+    "chunkCount" INTEGER NOT NULL DEFAULT 0,
+    "error" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
     CONSTRAINT "KbDoc_pkey" PRIMARY KEY ("id")
 );
 
-CREATE INDEX "KbDoc_tenantId_userId_idx" ON "KbDoc" ("tenantId", "userId");
-CREATE INDEX "KbDoc_knowledgeBaseId_idx" ON "KbDoc" ("knowledgeBaseId");
-CREATE INDEX "KbDoc_tenantId_userId_knowledgeBaseId_idx"
-    ON "KbDoc" ("tenantId", "userId", "knowledgeBaseId");
-
-ALTER TABLE "KbDoc"
-    ADD CONSTRAINT "KbDoc_knowledgeBaseId_fkey"
-    FOREIGN KEY ("knowledgeBaseId") REFERENCES "KnowledgeBase" ("id")
-    ON DELETE CASCADE ON UPDATE CASCADE;
-
+-- CreateTable
 CREATE TABLE "KbChunk" (
-    "id"        TEXT         NOT NULL DEFAULT gen_random_uuid(),
-    "docId"     TEXT         NOT NULL,
-    "tenantId"  TEXT         NOT NULL,
-    "userId"    TEXT         NOT NULL,
-    "seq"       INTEGER      NOT NULL,
-    "text"      TEXT         NOT NULL,
-    "vector"    vector(1024) NOT NULL,
+    "id" TEXT NOT NULL,
+    "docId" TEXT NOT NULL,
+    "tenantId" TEXT NOT NULL,
+    "userId" TEXT NOT NULL,
+    "seq" INTEGER NOT NULL,
+    "text" TEXT NOT NULL,
+    "vector" vector(1024) NOT NULL,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
     CONSTRAINT "KbChunk_pkey" PRIMARY KEY ("id")
 );
 
-CREATE INDEX "KbChunk_docId_idx" ON "KbChunk" ("docId");
-CREATE INDEX "KbChunk_tenantId_userId_idx" ON "KbChunk" ("tenantId", "userId");
-CREATE INDEX "kb_chunk_vec_idx" ON "KbChunk" USING hnsw ("vector" vector_cosine_ops);
-
-ALTER TABLE "KbChunk"
-    ADD CONSTRAINT "KbChunk_docId_fkey"
-    FOREIGN KEY ("docId") REFERENCES "KbDoc" ("id")
-    ON DELETE CASCADE ON UPDATE CASCADE;
-
--- -----------------------------------------------------------------------------
--- Connector（M4b MCP 连接器配置；envEncrypted 为 AES-256-GCM 密文，永不回传前端）
--- -----------------------------------------------------------------------------
+-- CreateTable
 CREATE TABLE "Connector" (
-    "id"              TEXT         NOT NULL DEFAULT gen_random_uuid(),
-    "tenantId"        TEXT         NOT NULL,
-    "name"            TEXT         NOT NULL,
-    "command"         TEXT         NOT NULL,
-    "args"            JSONB        NOT NULL,
-    "envEncrypted"    TEXT         NOT NULL,
-    "enabled"         BOOLEAN      NOT NULL DEFAULT true,
-    "toolCount"       INTEGER      NOT NULL DEFAULT 0,
+    "id" TEXT NOT NULL,
+    "tenantId" TEXT NOT NULL,
+    "name" TEXT NOT NULL,
+    "command" TEXT NOT NULL,
+    "args" JSONB NOT NULL,
+    "envEncrypted" TEXT NOT NULL,
+    "enabled" BOOLEAN NOT NULL DEFAULT true,
+    "toolCount" INTEGER NOT NULL DEFAULT 0,
     "lastValidatedAt" TIMESTAMP(3),
-    "createdBy"       TEXT         NOT NULL,
-    "createdAt"       TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt"       TIMESTAMP(3) NOT NULL,
+    "createdBy" TEXT NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
     CONSTRAINT "Connector_pkey" PRIMARY KEY ("id")
 );
 
-CREATE UNIQUE INDEX "Connector_tenantId_name_key" ON "Connector" ("tenantId", "name");
-CREATE INDEX "Connector_tenantId_idx" ON "Connector" ("tenantId");
+-- CreateTable
+CREATE TABLE "Plan" (
+    "id" TEXT NOT NULL,
+    "name" TEXT NOT NULL,
+    "priceCents" INTEGER NOT NULL,
+    "monthlyBaseCredits" INTEGER NOT NULL,
+    "monthlyBonusCredits" INTEGER NOT NULL,
+    "maxCreditsPerRun" INTEGER NOT NULL,
+    "rpm" INTEGER NOT NULL,
+    "allowedModels" TEXT[],
+    "active" BOOLEAN NOT NULL DEFAULT true,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
--- =============================================================================
--- 可选：生产加固（不在 Prisma schema 中，按需单独应用；应用后需同步维护）
+    CONSTRAINT "Plan_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "Subscription" (
+    "id" TEXT NOT NULL,
+    "tenantId" TEXT NOT NULL,
+    "planId" TEXT NOT NULL,
+    "status" TEXT NOT NULL DEFAULT 'active',
+    "periodStart" TIMESTAMP(3) NOT NULL,
+    "periodEnd" TIMESTAMP(3) NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "Subscription_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "CreditLot" (
+    "id" TEXT NOT NULL,
+    "tenantId" TEXT NOT NULL,
+    "source" TEXT NOT NULL,
+    "granted" INTEGER NOT NULL,
+    "remaining" INTEGER NOT NULL,
+    "expiresAt" TIMESTAMP(3),
+    "note" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "CreditLot_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "CreditTx" (
+    "id" TEXT NOT NULL,
+    "tenantId" TEXT NOT NULL,
+    "type" TEXT NOT NULL,
+    "amount" INTEGER NOT NULL,
+    "source" TEXT,
+    "runId" TEXT,
+    "note" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "CreditTx_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "TenantCredit" (
+    "tenantId" TEXT NOT NULL,
+    "balance" INTEGER NOT NULL DEFAULT 0,
+    "reserved" INTEGER NOT NULL DEFAULT 0,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "TenantCredit_pkey" PRIMARY KEY ("tenantId")
+);
+
+-- CreateTable
+CREATE TABLE "CreditHold" (
+    "runId" TEXT NOT NULL,
+    "tenantId" TEXT NOT NULL,
+    "amount" INTEGER NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "expiresAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "CreditHold_pkey" PRIMARY KEY ("runId")
+);
+
+-- CreateTable
+CREATE TABLE "UsageRecord" (
+    "id" TEXT NOT NULL,
+    "runId" TEXT NOT NULL,
+    "tenantId" TEXT NOT NULL,
+    "userId" TEXT NOT NULL,
+    "sessionId" TEXT NOT NULL,
+    "models" JSONB NOT NULL,
+    "inputTokens" INTEGER NOT NULL,
+    "outputTokens" INTEGER NOT NULL,
+    "credits" INTEGER,
+    "status" TEXT NOT NULL DEFAULT 'pending',
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "settledAt" TIMESTAMP(3),
+
+    CONSTRAINT "UsageRecord_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "ModelProvider" (
+    "id" TEXT NOT NULL,
+    "name" TEXT NOT NULL,
+    "baseUrl" TEXT NOT NULL,
+    "apiKeyEnc" TEXT NOT NULL,
+    "apiKeyHint" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "ModelProvider_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "ModelPrice" (
+    "model" TEXT NOT NULL,
+    "providerId" TEXT,
+    "displayName" TEXT,
+    "enabled" BOOLEAN NOT NULL DEFAULT false,
+    "modalities" TEXT[] DEFAULT ARRAY['text']::TEXT[],
+    "capabilities" TEXT[] DEFAULT ARRAY['chat']::TEXT[],
+    "sortOrder" INTEGER NOT NULL DEFAULT 0,
+    "inputMilliCreditsPer1k" INTEGER NOT NULL,
+    "outputMilliCreditsPer1k" INTEGER NOT NULL,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "ModelPrice_pkey" PRIMARY KEY ("model")
+);
+
+-- CreateTable
+CREATE TABLE "Setting" (
+    "key" TEXT NOT NULL,
+    "value" JSONB NOT NULL,
+    "updatedBy" TEXT,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "Setting_pkey" PRIMARY KEY ("key")
+);
+
+-- CreateTable
+CREATE TABLE "AdminAuditLog" (
+    "id" TEXT NOT NULL,
+    "actorId" TEXT NOT NULL,
+    "actorEmail" TEXT NOT NULL,
+    "action" TEXT NOT NULL,
+    "targetType" TEXT NOT NULL,
+    "targetId" TEXT,
+    "summary" JSONB,
+    "ip" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "AdminAuditLog_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "MetricBucket" (
+    "id" TEXT NOT NULL,
+    "bucketStart" TIMESTAMP(3) NOT NULL,
+    "metric" TEXT NOT NULL,
+    "dimensionType" TEXT NOT NULL DEFAULT 'global',
+    "dimensionId" TEXT NOT NULL DEFAULT '',
+    "value" DOUBLE PRECISION NOT NULL,
+    "count" INTEGER NOT NULL DEFAULT 0,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "MetricBucket_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "AlertRule" (
+    "id" TEXT NOT NULL,
+    "key" TEXT NOT NULL,
+    "name" TEXT NOT NULL,
+    "metric" TEXT NOT NULL,
+    "comparator" TEXT NOT NULL,
+    "threshold" DOUBLE PRECISION NOT NULL,
+    "windowMinutes" INTEGER NOT NULL,
+    "cooldownMinutes" INTEGER NOT NULL,
+    "severity" TEXT NOT NULL,
+    "enabled" BOOLEAN NOT NULL DEFAULT true,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "AlertRule_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "AlertEvent" (
+    "id" TEXT NOT NULL,
+    "ruleId" TEXT NOT NULL,
+    "ruleName" TEXT NOT NULL,
+    "status" TEXT NOT NULL,
+    "value" DOUBLE PRECISION NOT NULL,
+    "message" TEXT NOT NULL,
+    "startedAt" TIMESTAMP(3) NOT NULL,
+    "resolvedAt" TIMESTAMP(3),
+    "notifiedAt" TIMESTAMP(3),
+    "deliveryStatus" TEXT,
+    "deliveryError" TEXT,
+    "openKey" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "AlertEvent_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateIndex
+CREATE UNIQUE INDEX "User_email_key" ON "User"("email");
+
+-- CreateIndex
+CREATE INDEX "User_tenantId_idx" ON "User"("tenantId");
+
+-- CreateIndex
+CREATE INDEX "Session_tenantId_userId_idx" ON "Session"("tenantId", "userId");
+
+-- CreateIndex
+CREATE INDEX "Session_assistantId_idx" ON "Session"("assistantId");
+
+-- CreateIndex
+CREATE INDEX "Assistant_tenantId_userId_idx" ON "Assistant"("tenantId", "userId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "Assistant_tenantId_userId_name_key" ON "Assistant"("tenantId", "userId", "name");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "Message_sessionId_seq_key" ON "Message"("sessionId", "seq");
+
+-- CreateIndex
+CREATE INDEX "Attachment_tenantId_userId_idx" ON "Attachment"("tenantId", "userId");
+
+-- CreateIndex
+CREATE INDEX "Attachment_sessionId_idx" ON "Attachment"("sessionId");
+
+-- CreateIndex
+CREATE INDEX "Attachment_messageId_idx" ON "Attachment"("messageId");
+
+-- CreateIndex
+CREATE INDEX "Task_sessionId_idx" ON "Task"("sessionId");
+
+-- CreateIndex
+CREATE INDEX "Task_status_queuedAt_idx" ON "Task"("status", "queuedAt");
+
+-- CreateIndex
+CREATE INDEX "Run_taskId_idx" ON "Run"("taskId");
+
+-- CreateIndex
+CREATE INDEX "Run_status_startedAt_idx" ON "Run"("status", "startedAt");
+
+-- CreateIndex
+CREATE INDEX "Run_traceId_idx" ON "Run"("traceId");
+
+-- CreateIndex
+CREATE INDEX "Run_startedAt_idx" ON "Run"("startedAt");
+
+-- CreateIndex
+CREATE INDEX "Step_ts_idx" ON "Step"("ts");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "Step_runId_seq_key" ON "Step"("runId", "seq");
+
+-- CreateIndex
+CREATE INDEX "Artifact_sessionId_idx" ON "Artifact"("sessionId");
+
+-- CreateIndex
+CREATE INDEX "Artifact_tenantId_idx" ON "Artifact"("tenantId");
+
+-- CreateIndex
+CREATE INDEX "KnowledgeBase_tenantId_userId_idx" ON "KnowledgeBase"("tenantId", "userId");
+
+-- CreateIndex
+CREATE INDEX "KnowledgeBase_tenantId_idx" ON "KnowledgeBase"("tenantId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "KnowledgeBase_tenantId_userId_name_key" ON "KnowledgeBase"("tenantId", "userId", "name");
+
+-- CreateIndex
+CREATE INDEX "KbDoc_tenantId_userId_idx" ON "KbDoc"("tenantId", "userId");
+
+-- CreateIndex
+CREATE INDEX "KbDoc_knowledgeBaseId_idx" ON "KbDoc"("knowledgeBaseId");
+
+-- CreateIndex
+CREATE INDEX "KbDoc_tenantId_userId_knowledgeBaseId_idx" ON "KbDoc"("tenantId", "userId", "knowledgeBaseId");
+
+-- CreateIndex
+CREATE INDEX "KbChunk_docId_idx" ON "KbChunk"("docId");
+
+-- CreateIndex
+CREATE INDEX "KbChunk_tenantId_userId_idx" ON "KbChunk"("tenantId", "userId");
+
+-- CreateIndex
+CREATE INDEX "Connector_tenantId_idx" ON "Connector"("tenantId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "Connector_tenantId_name_key" ON "Connector"("tenantId", "name");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "Subscription_tenantId_key" ON "Subscription"("tenantId");
+
+-- CreateIndex
+CREATE INDEX "Subscription_planId_idx" ON "Subscription"("planId");
+
+-- CreateIndex
+CREATE INDEX "CreditLot_tenantId_expiresAt_idx" ON "CreditLot"("tenantId", "expiresAt");
+
+-- CreateIndex
+CREATE INDEX "CreditLot_expiresAt_idx" ON "CreditLot"("expiresAt");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "CreditTx_runId_key" ON "CreditTx"("runId");
+
+-- CreateIndex
+CREATE INDEX "CreditTx_tenantId_createdAt_idx" ON "CreditTx"("tenantId", "createdAt");
+
+-- CreateIndex
+CREATE INDEX "CreditHold_tenantId_idx" ON "CreditHold"("tenantId");
+
+-- CreateIndex
+CREATE INDEX "CreditHold_expiresAt_idx" ON "CreditHold"("expiresAt");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "UsageRecord_runId_key" ON "UsageRecord"("runId");
+
+-- CreateIndex
+CREATE INDEX "UsageRecord_tenantId_createdAt_idx" ON "UsageRecord"("tenantId", "createdAt");
+
+-- CreateIndex
+CREATE INDEX "UsageRecord_status_createdAt_idx" ON "UsageRecord"("status", "createdAt");
+
+-- CreateIndex
+CREATE INDEX "UsageRecord_createdAt_idx" ON "UsageRecord"("createdAt");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "ModelProvider_name_key" ON "ModelProvider"("name");
+
+-- CreateIndex
+CREATE INDEX "ModelPrice_providerId_idx" ON "ModelPrice"("providerId");
+
+-- CreateIndex
+CREATE INDEX "ModelPrice_enabled_sortOrder_idx" ON "ModelPrice"("enabled", "sortOrder");
+
+-- CreateIndex
+CREATE INDEX "AdminAuditLog_createdAt_idx" ON "AdminAuditLog"("createdAt");
+
+-- CreateIndex
+CREATE INDEX "AdminAuditLog_targetType_targetId_idx" ON "AdminAuditLog"("targetType", "targetId");
+
+-- CreateIndex
+CREATE INDEX "AdminAuditLog_actorId_createdAt_idx" ON "AdminAuditLog"("actorId", "createdAt");
+
+-- CreateIndex
+CREATE INDEX "MetricBucket_metric_bucketStart_idx" ON "MetricBucket"("metric", "bucketStart");
+
+-- CreateIndex
+CREATE INDEX "MetricBucket_dimensionType_dimensionId_bucketStart_idx" ON "MetricBucket"("dimensionType", "dimensionId", "bucketStart");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "MetricBucket_bucketStart_metric_dimensionType_dimensionId_key" ON "MetricBucket"("bucketStart", "metric", "dimensionType", "dimensionId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "AlertRule_key_key" ON "AlertRule"("key");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "AlertEvent_openKey_key" ON "AlertEvent"("openKey");
+
+-- CreateIndex
+CREATE INDEX "AlertEvent_ruleId_startedAt_idx" ON "AlertEvent"("ruleId", "startedAt");
+
+-- CreateIndex
+CREATE INDEX "AlertEvent_status_startedAt_idx" ON "AlertEvent"("status", "startedAt");
+
+-- CreateIndex
+CREATE INDEX "AlertEvent_startedAt_idx" ON "AlertEvent"("startedAt");
+
+-- AddForeignKey
+ALTER TABLE "User" ADD CONSTRAINT "User_tenantId_fkey" FOREIGN KEY ("tenantId") REFERENCES "Tenant"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "Session" ADD CONSTRAINT "Session_tenantId_fkey" FOREIGN KEY ("tenantId") REFERENCES "Tenant"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "Session" ADD CONSTRAINT "Session_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "Session" ADD CONSTRAINT "Session_assistantId_fkey" FOREIGN KEY ("assistantId") REFERENCES "Assistant"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "Message" ADD CONSTRAINT "Message_sessionId_fkey" FOREIGN KEY ("sessionId") REFERENCES "Session"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "Attachment" ADD CONSTRAINT "Attachment_sessionId_fkey" FOREIGN KEY ("sessionId") REFERENCES "Session"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "Attachment" ADD CONSTRAINT "Attachment_messageId_fkey" FOREIGN KEY ("messageId") REFERENCES "Message"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "Task" ADD CONSTRAINT "Task_sessionId_fkey" FOREIGN KEY ("sessionId") REFERENCES "Session"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "Run" ADD CONSTRAINT "Run_taskId_fkey" FOREIGN KEY ("taskId") REFERENCES "Task"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "RunCheckpoint" ADD CONSTRAINT "RunCheckpoint_runId_fkey" FOREIGN KEY ("runId") REFERENCES "Run"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "Step" ADD CONSTRAINT "Step_runId_fkey" FOREIGN KEY ("runId") REFERENCES "Run"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "Artifact" ADD CONSTRAINT "Artifact_sessionId_fkey" FOREIGN KEY ("sessionId") REFERENCES "Session"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "Artifact" ADD CONSTRAINT "Artifact_runId_fkey" FOREIGN KEY ("runId") REFERENCES "Run"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "KbDoc" ADD CONSTRAINT "KbDoc_knowledgeBaseId_fkey" FOREIGN KEY ("knowledgeBaseId") REFERENCES "KnowledgeBase"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "KbChunk" ADD CONSTRAINT "KbChunk_docId_fkey" FOREIGN KEY ("docId") REFERENCES "KbDoc"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "Subscription" ADD CONSTRAINT "Subscription_planId_fkey" FOREIGN KEY ("planId") REFERENCES "Plan"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "Subscription" ADD CONSTRAINT "Subscription_tenantId_fkey" FOREIGN KEY ("tenantId") REFERENCES "Tenant"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "TenantCredit" ADD CONSTRAINT "TenantCredit_tenantId_fkey" FOREIGN KEY ("tenantId") REFERENCES "Tenant"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ModelPrice" ADD CONSTRAINT "ModelPrice_providerId_fkey" FOREIGN KEY ("providerId") REFERENCES "ModelProvider"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+
 -- -----------------------------------------------------------------------------
--- 1) Artifact 版本并发安全：当前 version 靠「查 max+1」计算，并发下可能重号
---    （见 docs/develop/05-dev-plan.md P1）。加唯一约束把冲突暴露为可重试的错误：
---
---    CREATE UNIQUE INDEX "Artifact_sessionId_filename_version_key"
---        ON "Artifact" ("sessionId", "filename", "version");
---
--- 2) 枚举列加 CHECK，防止脏值写入：
---
---    ALTER TABLE "Artifact" ADD CONSTRAINT "Artifact_kind_check"
---        CHECK ("kind" IN ('docx', 'xlsx', 'pptx'));
---    ALTER TABLE "Artifact" ADD CONSTRAINT "Artifact_size_check"
---        CHECK ("size" >= 0);
---    ALTER TABLE "Step" ADD CONSTRAINT "Step_type_check"
---        CHECK ("type" IN ('think', 'tool_call', 'tool_result', 'artifact', 'confirm_request'));
---    ALTER TABLE "Run"  ADD CONSTRAINT "Run_status_check"
---        CHECK ("status" IN ('running', 'done', 'failed'));
---    ALTER TABLE "Task" ADD CONSTRAINT "Task_status_check"
---        CHECK ("status" IN ('queued', 'running', 'done', 'failed'));
---
--- 3) 对象存储 Key 前缀不变量（tenantId/runId 隔离）在应用层校验；
---    如需库级兜底，可加 CHECK 约束 storageKey LIKE 'artifacts/%'。
--- =============================================================================
+-- pgvector HNSW 索引（Prisma 不生成 Unsupported 类型的索引，需手工维护）
+-- -----------------------------------------------------------------------------
+CREATE INDEX "kb_chunk_vec_idx" ON "KbChunk" USING hnsw ("vector" vector_cosine_ops);

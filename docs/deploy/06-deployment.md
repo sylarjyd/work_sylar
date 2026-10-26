@@ -1,11 +1,11 @@
 # AI 办公智能体 · 部署文档（Deployment Guide）
 
-- 版本：v1.2
-- 日期：2026-10-20
-- 状态：随 M5b-2 可观测性交付更新
+- 版本：v1.3
+- 日期：2026-10-26
+- 状态：随 M5b-3 队列交付更新
 - 关联：`docs/design/02-architecture.md`、`docs/db/schema.sql`
 
-> 本文覆盖**本地开发**与**生产部署**两套流程。当前代码已具备生产级安全边界，但生产化项（密钥托管、队列、CI/CD）见 §10 与开发计划 §6。
+> 本文覆盖**本地开发**与**生产部署**两套流程。当前代码已具备生产级安全边界，但生产化项（密钥托管、CI/CD）见 §10 与开发计划 §6。
 
 ---
 
@@ -273,7 +273,7 @@ server {
 
 ### 9.1 扩容
 
-- BFF 无状态，可**多实例 + LB**；会话/队列态（规划）入 Redis 共享。
+- BFF 无状态，可**多实例 + LB**；任务队列与限流计数共享 Redis（M5b-3/M5a），运行权威状态与 SSE 回放仍在 Postgres。
 - runtime 无状态（运行态在请求内），可多实例，由 BFF 侧的 LB 分发 `AGENT_RUNTIME_URL`。
 - CPU 密集（沙箱/文档生成）隔离到独立 worker/容器（M3/M5）。
 - 瓶颈优先观察：模型 API 限流、DB 连接池、对象存储带宽。
@@ -406,7 +406,7 @@ Windows 用 `deploy.cmd`，参数对应 `-WithAdmin` / `-AdminOnly` / `-NoBuild`
 | 请求限流仅覆盖 RPM 与积分额度 | 限流指标与告警已随 M5b-2 落地；仍缺按 IP/全局滥用防护 | 开发计划 P7 |
 | runtime 鉴权默认可选 | 生产强制 `AGENT_RUNTIME_TOKEN` + 网络隔离 | 开发计划 P8 |
 | 无备份演练/生命周期 | 备份 + 演练 + S3 策略 | 开发计划 P9 |
-| 长任务无队列/续传 | 队列化 + checkpoint | 开发计划 P10 |
+| 长任务无队列/续传 | 已由 M5b-3 交付（BullMQ 队列 + checkpoint 续跑 + SSE 续流） | 开发计划 P10 |
 
 ---
 
@@ -554,6 +554,13 @@ curl -X POST http://localhost:4000/api/billing/admin/credits \
 2. 再滚动重启 BFF（worker 随进程一起滚动）。旧实例在关闭前会尽量收尾，新实例继续消费同一队列。
 3. 升级期间旧运行不受影响：执行器从中断前的 `step` checkpoint 续跑；恢复任务每 **5 分钟**扫描一次失联运行（running 但作业已丢失）并补发取消请求，最迟约 15 分钟收敛（10 分钟判定阈值 + 5 分钟扫描间隔）。
 4. 回滚应用版本即可，队列数据在 Redis 中保留；已落库的运行状态以 Postgres 为准。
+
+### 执行与结算口径
+
+- **attempt 从 1 起算**：任务首次运行写入 `Run.attempt=1`、`Task.attempts=1`；管理端重试在同一任务上 CAS 自增后创建新 run，`attempt = Task.attempts + 1`，新旧运行各自独立结算。
+- **重试是立即重投，没有退避**：`RUN_QUEUE_MAX_ATTEMPTS` 内的失败会马上重读断点续跑；只有上游在重试瞬间已恢复才可能自动续跑，持续不可用会按 failed 收尾，需管理端手动重试。
+- **取消的用量口径**：排队中取消直接移除作业，不产生 step、用量或预占；执行中取消会中止上游连接，runtime 在 `finally` 上报的用量帧没有接收方，BFF 改用断点里已完成轮次的累计用量结算（`UsageRecord.status='settled'`）。一个完整轮次都未完成时，取消不产生用量。
+- **断点截断**：每次尝试前按断点 `seq/artifactIds` 清理未确认的 step 与 artifact，避免续跑撞 `(runId, seq)` 唯一键或产生重复产物。
 
 ### 排障指标
 

@@ -1,11 +1,11 @@
 # AI 办公智能体 · 详细设计（Detailed Design）
 
-- 版本：v1.0
-- 日期：2026-10-16
-- 状态：随 M2 交付更新
+- 版本：v1.1
+- 日期：2026-10-26
+- 状态：核心链路（M0–M2）详解；M3–M5b 增量见对应规格与开发文档
 - 关联：`docs/design/01-overview-design.md`、`docs/design/02-architecture.md`、`docs/db/schema.sql`
 
-> 本文逐一描述**各模块的职责、接口签名、关键算法、错误处理与边界条件**，与当前代码一一对应。
+> 本文逐一描述**各模块的职责、接口签名、关键算法、错误处理与边界条件**。A–E 章以 M0–M2 核心链路为主体；M3–M5b 新增的确认与沙箱、知识库、连接器/MCP、计费、可观测、队列与断点续跑，以 `docs/superpowers/specs/` 下的设计与 `docs/develop/04-dev-guide.md` 为准，两者不一致时以后者为准。
 
 ---
 
@@ -392,6 +392,8 @@ Next.js App Router，客户端组件为主。
 ## E. 数据模型详解
 
 > DDL 见 `docs/db/schema.sql`；此处为字段语义与约束。
+>
+> 本章覆盖核心 8 表（M0–M2）。M3–M5b 新增表（`Assistant`、`Attachment`、`RunCheckpoint`、`KnowledgeBase`/`KbDoc`/`KbChunk`、`Connector`、计费 7 表、`ModelProvider`/`ModelConfig`、`Setting`、`AdminAuditLog`、`MetricBucket`、`AlertRule`/`AlertEvent`）以 `apps/bff/prisma/schema.prisma` 与 `docs/db/schema.sql` 为准。
 
 ### E.1 `Tenant`
 

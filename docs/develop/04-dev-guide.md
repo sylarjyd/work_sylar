@@ -1,8 +1,8 @@
 # AI 办公智能体 · 代码开发文档（含项目代码结构）
 
-- 版本：v1.0
-- 日期：2026-10-19
-- 状态：随 M5a 交付更新
+- 版本：v1.1
+- 日期：2026-10-26
+- 状态：随 M5b-3 队列验收更新
 - 关联：`docs/design/03-detailed-design.md`、`docs/develop/05-dev-plan.md`
 
 本文件面向**新加入的开发者**，说明仓库结构、开发环境、分层约定、常见开发任务的做法与测试规范。
@@ -18,7 +18,7 @@
 | 任务编排 | Turborepo 2 | 并行 dev、依赖感知 build/test |
 | 语言 | TypeScript 5.6（strict） | 统一配置 `tsconfig.base.json` |
 | 测试 | Vitest 2 | 各包 `vitest run` |
-| 构建 | tsup（shared/runtime）、nest build（bff）、next build（web） | — |
+| 构建 | tsup（shared/telemetry/runtime）、nest build（bff）、next build（web/admin） | — |
 
 ---
 
@@ -37,8 +37,12 @@ work_sylar/
 │  ├─ deploy/                  # 部署文档
 │  ├─ db/schema.sql            # 数据库 DDL（与 Prisma 对齐）
 │  └─ superpowers/             # 上游设计文档与各里程碑 spec/plan
+├─ docker/wait-for-http.mjs    # 服务就绪探测
+├─ scripts/                    # start/stop/deploy（PowerShell 与 bash）
+├─ logs/ .run/                 # 本地服务日志与 PID（gitignore）
 ├─ packages/
 │  ├─ shared/                  # @ai-office/shared：跨层契约（协议 + DTO）
+│  ├─ telemetry/               # @ai-office/telemetry：日志/trace/指标底座
 │  └─ web-core/                # @ai-office/web-core：两端共用的认证/追踪/错误文案/全局样式
 └─ apps/
    ├─ agent-runtime/           # @ai-office/agent-runtime：Agent 引擎
@@ -57,7 +61,8 @@ packages/shared/
    ├─ index.ts                 # 再导出 protocol + dto
    ├─ protocol.ts              # SSE 事件名/StepType/AgentEvent + 编解码/解析器
    ├─ protocol.test.ts         # 编解码与分片解析测试
-   └─ dto.ts                   # 全部跨层 DTO 与请求/响应类型
+   ├─ dto.ts                   # 全部跨层 DTO 与请求/响应类型
+   └─ attachment.test.ts       # 附件 DTO 校验测试
 ```
 
 **职责**：跨层类型的唯一来源；不依赖任何 app。
@@ -68,37 +73,32 @@ packages/shared/
 apps/agent-runtime/
 ├─ package.json                # dev=tsx watch；build=tsup；start=node dist/server.js
 ├─ tsconfig.json
-└─ src/
-   ├─ server.ts                # HTTP 服务：/health、/runs(SSE)；入口块 loadRootEnv+bucket
-   ├─ server.test.ts
-   ├─ agent-loop.ts            # plan→act→observe 主循环
-   ├─ agent-loop.test.ts
+└─ src/                        # *.test.ts 与被测文件同目录
+   ├─ server.ts                # HTTP：/health、/metrics、/runs(SSE)、/kb/ingest、/connectors/validate
+   ├─ agent-loop.ts            # plan→act→observe 主循环；checkpoint 续跑
+   ├─ confirm/broker.ts        # confirm 工具挂起、应答与超时
+   ├─ billing.ts               # 积分预算与用量上报
+   ├─ run-config.ts            # 运行参数夹取（maxRounds、工具白名单等）
    ├─ load-env.ts              # 读取仓库根 .env
-   ├─ model/
-   │  ├─ types.ts              # ModelGateway / ChatRequest / ChatResponse / ModelMessage
-   │  ├─ create-gateway.ts     # 按 env 选真模型或 Mock
-   │  ├─ create-gateway.test.ts
-   │  ├─ openai-compat.ts      # OpenAI 兼容网关（函数名转换、多轮 tool 字段）
-   │  ├─ openai-compat.test.ts
-   │  └─ mock-gateway.ts       # 无 key 的确定性回退
-   ├─ storage/
-   │  ├─ s3.ts                 # S3/MinIO 封装：ensureBucket/putObject/getObjectStream
-   │  └─ s3.test.ts
+   ├─ model/                   # 网关：types、create-gateway、openai-compat、mock、
+   │                           #       routing（多模型 fallback）、observed（指标）、attachments、errors
+   ├─ embedding/               # 向量化网关（OpenAI 兼容 + Mock）
+   ├─ kb/                      # 文档解析/切分/入库 + BFF 内部客户端
+   ├─ mcp/                     # MCP Host：stdio 传输、工具发现、配置校验、BFF 连接器客户端
+   ├─ observability/metrics.ts # 运行/工具/模型/结算指标
+   ├─ storage/s3.ts            # S3/MinIO 封装：ensureBucket/putObject/getObjectStream
    └─ tools/
-      ├─ types.ts              # RunContext + Tool 契约
+      ├─ types.ts              # RunContext + Tool 契约（含 permission）
       ├─ registry.ts           # createTools：组装内置工具集
-      ├─ registry.test.ts
       ├─ web-search.ts         # web.search（Tavily / DuckDuckGo）
-      ├─ web-search.test.ts
       ├─ web-fetch.ts          # web.fetch（SSRF 防护）
-      ├─ web-fetch.test.ts
       ├─ doc.ts                # doc.docx/xlsx/pptx；safeFilename/artifactKey/emit
-      ├─ doc.test.ts
       ├─ doc-generators.ts     # 纯函数：JSON → Buffer（docx/exceljs/pptxgenjs）
-      └─ doc-generators.test.ts
+      ├─ code-exec.ts          # code.exec（受限子进程沙箱）
+      └─ kb-retrieve.ts        # kb.retrieve（经 BFF 内部端点检索）
 ```
 
-**职责**：Agent 引擎（Loop + 工具 + 模型网关 + 对象存储写入）。不处理账号/多租户业务。
+**职责**：Agent 引擎（Loop + 工具 + 模型网关 + 沙箱 + MCP Host + 对象存储写入）。不处理账号/计费/多租户业务。
 
 ### 2.3 `apps/bff`
 
@@ -108,39 +108,35 @@ apps/bff/
 ├─ nest-cli.json
 ├─ docker-compose.yml          # Postgres 16 + MinIO + Redis（本地依赖）
 ├─ prisma/schema.prisma        # 数据模型（见 §6）
-└─ src/
+└─ src/                        # *.test.ts 与被测文件同目录
    ├─ main.ts                  # 引导：loadRootEnv→create→CORS→listen
    ├─ app.module.ts            # 模块装配
    ├─ cors.ts                  # CORS_OPTIONS（main 与测试共用）
    ├─ load-env.ts
-   ├─ db/
-   │  ├─ prisma.module.ts
-   │  └─ prisma.service.ts     # PrismaClient + connect/disconnect
-   ├─ auth/
-   │  ├─ jwt.ts                # sign/verify + secret()
-   │  ├─ jwt.guard.ts          # Bearer 校验
-   │  ├─ current-user.ts       # @CurrentUser()
-   │  ├─ auth.service.ts       # register/login（argon2 + 建租户）
-   │  ├─ auth.controller.ts
-   │  └─ *.test.ts
-   ├─ sessions/
-   │  ├─ sessions.service.ts   # list/create/assertOwned/messages
-   │  ├─ sessions.controller.ts
-   │  └─ sessions.controller.test.ts
-   ├─ tasks/
-   │  ├─ tasks.service.ts      # prepare/recordStep/finish
-   │  ├─ tasks.controller.ts   # SSE 转发 + 落库（核心）
-   │  └─ tasks.controller.test.ts
-   ├─ artifacts/
-   │  ├─ storage.ts            # ARTIFACT_STORAGE + createArtifactStorage
-   │  ├─ artifacts.service.ts  # record/list/getForDownload + assertValidRef
-   │  ├─ artifacts.controller.ts
-   │  └─ *.test.ts
-   └─ stream/
-      └─ sse-proxy.ts          # writeHead（hijack 后显式写响应头）
+   ├─ db/                      # PrismaModule / PrismaService
+   ├─ auth/                    # jwt、guards（JwtGuard/AdminGuard）、注册登录（argon2 + 建租户）
+   ├─ sessions/                # 会话 CRUD、assertOwned、消息历史
+   ├─ tasks/                   # prepare/recordStep/finish；SSE 转发与落库
+   ├─ runs/                    # 运行查询、确认应答、取消/重试入口
+   ├─ artifacts/               # 产物元数据 + 下载代理（assertValidRef）
+   ├─ attachments/             # 会话附件上传/下载
+   ├─ assistants/              # 自定义助手（提示词、工具、知识库绑定）
+   ├─ kb/                      # 知识库上传/检索内部端点/存储清理
+   ├─ connector/               # MCP 连接器 CRUD、凭证加密、内部端点
+   ├─ billing/                 # 套餐/积分账本/预占结算/限流/补偿扫描
+   ├─ models/                  # 模型目录、env providers、运行路由
+   ├─ queue/                   # BullMQ 装配、worker/executor、取消控制、断点续跑、恢复扫描
+   ├─ alerts/                  # 告警规则/评估/事件/HMAC Webhook
+   ├─ audit/                   # 管理端审计写入
+   ├─ settings/                # 系统参数
+   ├─ secrets/secret-box.ts    # AES-256-GCM 加解密
+   ├─ metrics/                 # 指标小时桶、领导者锁
+   ├─ observability/           # 日志、health、metrics、请求/运行 telemetry
+   ├─ admin/                   # 运营端控制器/服务（用户/租户/会话/任务/模型/套餐/审计/KB/告警/设置/概览）
+   └─ stream/sse-proxy.ts      # writeHead（hijack 后显式写响应头）
 ```
 
-**职责**：面向前端的应用服务（认证/多租户/会话/任务编排入口/SSE 网关/产物元数据与下载代理）。
+**职责**：面向前端的应用服务（认证/多租户/会话/任务编排入口/SSE 网关/产物与附件/知识库/连接器/计费/管理端）。
 
 ### 2.4 `packages/web-core`
 
@@ -152,6 +148,7 @@ packages/web-core/
    ├─ auth.ts                  # BFF_URL、token/role 存取、authFetch、login/register
    ├─ trace.ts                 # traceparent / request-id 生成
    ├─ errors.ts                # 错误文案
+   ├─ antd.tsx                 # Ant Design 主题/别名（运营平台共用）
    ├─ globals.css              # 两端唯一的全局样式来源
    └─ *.test.ts
 ```
@@ -169,16 +166,23 @@ apps/web/
    │  ├─ layout.tsx            # 根布局（lang=zh-CN，导入 web-core/globals.css）
    │  ├─ page.tsx              # 工作台（目标输入 + 事件流 + 成果区）
    │  ├─ login/page.tsx        # 登录/注册
+   │  ├─ assistants/page.tsx   # 自定义助手
    │  ├─ billing/page.tsx      # 计费
    │  ├─ connectors/page.tsx   # 连接器
    │  └─ kb/page.tsx           # 知识库
    ├─ components/
-   │  └─ app-shell.tsx         # 侧栏/顶栏；管理员的“运营平台”外链
+   │  ├─ app-shell.tsx         # 侧栏/顶栏；管理员的“运营平台”外链
+   │  ├─ artifact-drawer.tsx   # 成果区抽屉
+   │  └─ icons.tsx
    └─ lib/
       ├─ api.ts                # 客户业务 API（认证函数从 web-core re-export）
+      ├─ run-stream.ts         # 任务提交/SSE 续流（afterSeq）
       ├─ sse-parser.ts         # 复用 shared 解析器
       ├─ render-step.ts        # AgentEvent → 文本
-      └─ *.test.ts
+      ├─ pending-confirm.ts    # 确认卡片的待办状态
+      ├─ attachments.ts        # 附件上传/下载
+      ├─ session-filter.ts     # 会话筛选
+      └─ format.ts / *.test.ts
 ```
 
 **职责**：面向终端客户的公网应用，不含任何运营页面。
@@ -196,20 +200,39 @@ apps/admin/
    │  ├─ login/page.tsx        # 运营端独立登录（仅 admin）
    │  └─ (console)/            # AdminShell 包裹，URL 无前缀
    │     ├─ overview/ alerts/ users/ tenants/ plans/
-   │     ├─ sessions/ tasks/ models/ settings/ audit/
+   │     ├─ sessions/ tasks/ models/ settings/ audit/ kb/
    │     └─ layout.tsx
    ├─ components/
    │  ├─ admin-shell.tsx       # 导航、退出、“返回工作台”外链
-   │  └─ metric-chart.tsx
+   │  ├─ metric-chart.tsx
+   │  └─ chart-geometry.ts
    └─ lib/
       ├─ admin-api.ts          # /api/admin/* 调用（认证走 web-core）
       ├─ admin-guard.ts        # 非管理员 → /login
+      ├─ admin-nav.ts          # 导航配置
       ├─ alert-draft.ts
-      ├─ chart-geometry.ts
-      └─ run-timeline.ts
+      ├─ run-timeline.ts       # 运行时间线条目
+      ├─ task-status.ts        # 任务状态与操作可用性
+      └─ *.test.ts
 ```
 
 **职责**：平台运营后台，通常部署在内网。与客户端不共享登录态，需单独用管理员账号登录；直连 `/api/admin/*` 仍由服务端 `AdminGuard` 鉴权。
+
+### 2.7 `packages/telemetry`
+
+```
+packages/telemetry/
+├─ package.json                # build=tsup（--dts），exports 指向 dist
+└─ src/
+   ├─ index.ts                 # 再导出 context + logger + trace + metrics
+   ├─ context.ts               # AsyncLocalStorage 上下文（requestId/traceId/runId）
+   ├─ logger.ts                # pino 结构化日志 + 敏感字段脱敏
+   ├─ trace.ts                 # OTel 初始化、span 与 traceparent 收发
+   ├─ metrics.ts               # Prometheus 注册表、分桶与指标辅助
+   └─ *.test.ts
+```
+
+**职责**：BFF 与 runtime 共享的日志/trace/指标底座，保证两端字段与语义一致。
 
 ---
 
@@ -252,11 +275,11 @@ pnpm --filter @ai-office/bff db:push           # 同步表结构到数据库
 ### 4.2 依赖方向（不可违反）
 
 ```
-web   ──▶ web-core ──▶ shared
-admin ──▶ web-core ──▶ shared
-bff ──▶ shared
-runtime ──▶ shared
-（shared / web-core 不依赖任何 app；web 与 admin 互不依赖）
+web    ──▶ web-core ──▶ shared
+admin  ──▶ web-core ──▶ shared
+bff    ──▶ shared, telemetry
+runtime ──▶ shared, telemetry
+（shared / telemetry / web-core 不依赖任何 app；web 与 admin 互不依赖）
 ```
 
 ### 4.3 注释规范
@@ -295,6 +318,7 @@ runtime ──▶ shared
 {
   name: 'doc.markdown',
   description: '生成 Markdown 文档，返回产出物引用。',
+  permission: 'safe',   // 必填：safe / confirm / blocked
   parameters: {
     type: 'object',
     properties: { filename: { type: 'string' }, content: { type: 'string' } },
@@ -312,7 +336,8 @@ runtime ──▶ shared
 4. **接线**：`registry.ts` 的 `createTools` 已含 `...createDocTools(storage)`，无需改动。
 5. **测试**：`tools/doc.test.ts` 注入假 storage，断言返回 `ArtifactRef` 与 `storageKey` 前缀含 `tenantId/runId`。
 6. **`emit` 与校验复用**：`emit` 已统一「清洗文件名 → 拼 Key → 上传 → 返回引用」；新工具务必复用，不要另起炉灶。
-7. 提交：`feat(runtime): 增加 doc.markdown 工具`。
+7. **权限标注**：`permission` 必填——`safe` 直接执行；`confirm` 执行前下发确认卡片并挂起等待应答；`blocked` 拒绝调用。
+8. 提交：`feat(runtime): 增加 doc.markdown 工具`。
 
 > 若工具返回 `{artifact: ...}`，`agent-loop` 会自动补发 `artifact` step，BFF 会自动落库——无需改 Loop 或 BFF。
 
@@ -348,7 +373,11 @@ runtime ──▶ shared
 
 ## 6. 数据模型（Prisma 速览）
 
-模型：`Tenant` / `User` / `Session` / `Message` / `Task` / `Run` / `Step` / `Artifact`。唯一约束：`User.email`、`Message(sessionId,seq)`、`Step(runId,seq)`。索引：`User(tenantId)`、`Session(tenantId,userId)`、`Task(sessionId)`、`Run(taskId)`、`Artifact(sessionId)`、`Artifact(tenantId)`。
+核心模型：`Tenant` / `User` / `Session` / `Assistant` / `Message` / `Attachment` / `Task` / `Run` / `RunCheckpoint` / `Step` / `Artifact`。
+
+扩展模型：`KnowledgeBase` / `KbDoc` / `KbChunk`（知识库与向量）；`Connector`（MCP 连接器，env 加密）；`Plan` / `Subscription` / `CreditLot` / `CreditTx` / `TenantCredit` / `CreditHold` / `UsageRecord`（计费）；`ModelProvider` / `ModelConfig`（模型目录）；`Setting` / `AdminAuditLog` / `MetricBucket` / `AlertRule` / `AlertEvent`（管理端、审计、指标与告警）。
+
+唯一约束：`User.email`、`Message(sessionId,seq)`、`Step(runId,seq)`。索引：`User(tenantId)`、`Session(tenantId,userId)`、`Task(sessionId)`、`Run(taskId)`、`Artifact(sessionId)`、`Artifact(tenantId)` 等。
 
 字段语义与关系详见详细设计 §E，DDL 详见 `docs/db/schema.sql`。
 
@@ -433,7 +462,7 @@ pnpm --filter @ai-office/bff typecheck             # 类型
 
 1. **队列并发**：同一租户连续发起 5 个任务（`RUN_QUEUE_PER_TENANT=2`、`RUN_QUEUE_CONCURRENCY≥2`），预期 2 个 running、3 个 queued；前两个结束后排队任务自动补位。
 2. **断线重连**：运行中刷新/关闭工作台页面，再打开同一任务。前端会带 `?afterSeq=<lastSeq>`（或 `Last-Event-ID`）续流，先回放缺失 step，再继续实时事件，不丢失中间步骤。
-3. **取消**：排队中取消应移除作业并立即返回 canceled；执行中取消应受理控制消息，运行在收尾后转 canceled（已产生的 step 与用量保留）。终态重复取消幂等，不产生副作用。
-4. **checkpoint 续跑**：运行中停掉 agent-runtime 再启动，执行器应从中断前 checkpoint 继续；连续中断达到 `RUN_QUEUE_MAX_ATTEMPTS` 次尝试仍失败即落 failed（默认 2 次）。
-5. **管理端手动重试**：运营端任务详情对 failed/canceled 运行点重试，基于任务目标创建新 run 并重新排队（attempt 递增）；容量不足时返回 429。
+3. **取消**：排队中取消应移除作业并立即返回 canceled，不产生 step、用量或预占；执行中取消会中止上游连接，运行转 canceled 并保留已产生的 step，用量按断点中已完成轮次结算（一轮都未完成时无用量）。终态重复取消幂等，不产生副作用。
+4. **checkpoint 续跑**：失败重试是**立即**发起的，没有退避。要观察自动续跑，需让上游在下一次尝试时已恢复（例如临时掐断 BFF→runtime 的连接后立即恢复）；若各次尝试期间上游都不可用，运行按 failed 收尾，此时走管理端重试。验证点：`Step.seq` 连续、artifact 不重复、`ai_office_runs_resumed_total` 递增。
+5. **管理端手动重试**：运营端任务详情对 failed/canceled 运行点重试，基于任务目标创建新 run 并重新排队；首次运行 `attempt=1`，重试后 `attempt=2` 并逐次递增，计费独立。容量不足时返回 429。
 6. **指标**：`GET /metrics`（回环或 `x-internal-token`）应包含 `ai_office_run_queue_depth`、`ai_office_run_queue_wait_seconds`、`ai_office_runs_canceled_total`、`ai_office_runs_retried_total`、`ai_office_runs_resumed_total`。可先发起几个排队/取消/重试操作，确认计数与直方图有值。

@@ -16,7 +16,7 @@ pnpm build      # 全量构建
 
 ```bash
 cp .env.example .env      # 填入 DEEPSEEK_API_KEY（缺省时 Agent 走确定性 Mock，链路仍可验证）
-pnpm --filter @ai-office/bff db:up      # 起 Postgres 与 MinIO（docker compose）
+pnpm --filter @ai-office/bff db:up      # 起 Postgres / MinIO / Redis（docker compose）
 pnpm --filter @ai-office/bff db:push    # 同步表结构
 ```
 
@@ -57,6 +57,17 @@ pnpm --filter @ai-office/bff db:push    # 同步表结构
 ## M4b 已具备
 
 - 连接器 / MCP：接入外部 MCP Server（stdio），自动发现其工具并纳入 Agent 工具箱；`/connectors` 页由管理员新增/启停/删除（凭证加密入库），工具调用沿用 M3 确认卡片
+
+## M5a 已具备
+
+- 计费与网关：套餐/订阅、月度积分账本（运行前预占、`usage` 结算、断连补偿）；多模型路由与可重试 fallback、RPM 限流（超限 429、余额不足 402）
+- 工作台 `/billing`：套餐、余额、流水与按日/模型用量
+
+## M5b 已具备
+
+- 管理端：用户/会员/会话/任务/模型/参数/审计，`/admin/overview` 看板与 `/admin/alerts` 告警中心
+- 可观测：pino 结构化日志（敏感字段脱敏）、OTel 全链路 trace、`/metrics` 指标端点
+- 任务队列：BullMQ/Redis 队列（未配 Redis 或 `RUN_QUEUE_ENABLED=0` 时退化为进程内联执行），排队位次与租户/实例并发控制；取消（排队移除 / 执行中按已完成轮次结算）、手动重试、`step` 断点续跑、SSE 断线续流
 
 ## 一键容器部署
 
