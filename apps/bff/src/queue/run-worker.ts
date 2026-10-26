@@ -23,8 +23,8 @@ const TENANT_BACKOFF_MS = 2000;
 /** 队列深度对账周期：inc/dec 会因崩溃、取消、多副本而漂移，定时以 Redis 实况纠正。 */
 const DEPTH_RECONCILE_MS = 30_000;
 
-/** 等待在途作业结束的上限；超时后强制关闭，避免 SIGTERM 被长任务无限拖住。 */
-const WORKER_CLOSE_TIMEOUT_MS = 15_000;
+/** 等待在途作业结束的上限；超时后强制断开后端连接，避免 SIGTERM 被长任务无限拖住。 */
+export const WORKER_CLOSE_TIMEOUT_MS = 15_000;
 
 /**
  * 运行队列消费者：仅队列启用时创建 Worker，否则整体空转。
@@ -108,9 +108,10 @@ export class RunWorker implements OnApplicationBootstrap, OnApplicationShutdown 
   /**
    * 停止拉取并等待在途作业结束；重复调用幂等。
    * worker.close() 会等待在途处理器（最长可达数分钟），关闭路径必须有上限，
-   * 超时后强制关闭，避免 SIGTERM 被长任务拖住。
+   * 超时后强制断开后端连接，避免 SIGTERM 被长任务拖住。
    */
   async close(): Promise<void> {
+    // 先停对账定时器，否则关闭期间仍会访问即将断开的连接。
     if (this.depthTimer) {
       clearInterval(this.depthTimer);
       this.depthTimer = null;
@@ -124,6 +125,7 @@ export class RunWorker implements OnApplicationBootstrap, OnApplicationShutdown 
     let timer: NodeJS.Timeout | undefined;
     try {
       await Promise.race([
+        // 不传 force：先礼后兵，给在途作业收尾的机会。
         worker.close(),
         new Promise<never>((_, reject) => {
           timer = setTimeout(() => {
@@ -135,12 +137,17 @@ export class RunWorker implements OnApplicationBootstrap, OnApplicationShutdown 
       ]);
     } catch (err) {
       if (timedOut) {
-        this.logger.warn(`关闭运行 worker 超时（${WORKER_CLOSE_TIMEOUT_MS}ms），强制终止在途作业`);
-        try {
-          await worker.close(true);
-        } catch (forceErr) {
-          this.logger.warn(`强制关闭运行 worker 失败: ${(forceErr as Error).message}`);
-        }
+        this.logger.warn('worker 关闭超时，强制断开连接');
+        // BullMQ 的 close 是幂等的：首次 close() 已缓存 closing Promise，二次
+        // close(true) 只会返回同一个「非强制关闭」的 Promise，force 参数被忽略。
+        // 因此超时后不能再次 close(true)，必须直接断开后端连接（普通连接与
+        // blocking 连接），否则 SIGTERM 仍会被最长达数分钟的在途流拖住。
+        const backend = (
+          worker as unknown as {
+            backend?: { disconnect?: () => Promise<void> };
+          }
+        ).backend;
+        await backend?.disconnect?.().catch(() => undefined);
       } else {
         this.logger.warn(`关闭运行 worker 失败: ${(err as Error).message}`);
       }
