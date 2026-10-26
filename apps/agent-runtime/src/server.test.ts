@@ -14,7 +14,7 @@ import type {
   RuntimeSummaryDto,
   UsageEvent,
 } from '@ai-office/shared';
-import { createRuntimeServer, filterTools, isLoopback } from './server';
+import { createRuntimeServer, filterTools, isLoopback, isValidResume } from './server';
 import { createRuntimeMetrics } from './observability/metrics';
 import type { ModelGateway } from './model/types';
 import type { Tool } from './tools/types';
@@ -83,6 +83,42 @@ describe('isLoopback', () => {
     expect(isLoopback('10.0.0.5')).toBe(false);
     expect(isLoopback('::ffff:10.0.0.5')).toBe(false);
     expect(isLoopback(undefined)).toBe(false);
+  });
+});
+
+describe('isValidResume', () => {
+  const base = { round: 0, seq: 0, deltas: [], usage: [] };
+
+  it('round/seq 允许到 20 亿，超过即拒绝（为 Prisma Int 自增预留余量）', () => {
+    expect(isValidResume({ ...base, round: 2_000_000_000, seq: 2_000_000_000 })).toBe(true);
+    expect(isValidResume({ ...base, round: 2_000_000_001 })).toBe(false);
+    expect(isValidResume({ ...base, seq: 2_000_000_001 })).toBe(false);
+  });
+
+  it('工具调用未配对时禁止插入 assistant；正常往返顺序仍合法', () => {
+    const call = (id: string) => ({ id, name: 'n', args: {} });
+    expect(
+      isValidResume({
+        ...base,
+        deltas: [
+          { role: 'assistant', content: 'x', toolCalls: [call('c1')] },
+          { role: 'assistant', content: '插队' },
+          { role: 'tool', content: 'x', toolCallId: 'c1' },
+        ],
+      }),
+    ).toBe(false);
+    // 调用 → 结果 → 下一轮调用 → 结果：每段往返都紧邻，应当放行。
+    expect(
+      isValidResume({
+        ...base,
+        deltas: [
+          { role: 'assistant', content: 'x', toolCalls: [call('c1')] },
+          { role: 'tool', content: 'x', toolCallId: 'c1' },
+          { role: 'assistant', content: 'y', toolCalls: [call('c2')] },
+          { role: 'tool', content: 'y', toolCallId: 'c2' },
+        ],
+      }),
+    ).toBe(true);
   });
 });
 
@@ -168,8 +204,17 @@ describe('runtime server', () => {
           { role: 'assistant', content: 'x', toolCalls: [{ id: 'c1', name: 'n', args: [] }] },
         ],
       },
-      // 超出 Prisma Int 上限（seq 之后还要自增）。
-      { ...base, seq: 2147483647 },
+      // 工具调用与结果之间插入 assistant：真实 provider 会拒绝这种历史。
+      {
+        ...base,
+        deltas: [
+          { role: 'assistant', content: 'x', toolCalls: [{ id: 'c1', name: 'n', args: {} }] },
+          { role: 'assistant', content: '插队' },
+          { role: 'tool', content: 'x', toolCallId: 'c1' },
+        ],
+      },
+      // 超出逻辑序号上限（已为 Prisma Int 预留自增余量）。
+      { ...base, seq: 2_000_000_001 },
       { ...base, usage: [{ model: '', input: 1, output: 1 }] },
       { ...base, usage: [{ model: 'm', input: -1, output: 0 }] },
       { ...base, usage: [{ model: 'm', input: '1', output: 0 }] },

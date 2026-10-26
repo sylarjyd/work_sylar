@@ -508,6 +508,10 @@ export function isValidResume(v: unknown): v is RunResume {
     const delta = raw as Record<string, unknown>;
     if (typeof delta.content !== 'string') return false;
     if (delta.role === 'assistant') {
+      // 工具调用必须紧邻其 tool 结果：上一轮调用还未配对时又来了 assistant，
+      // 真实 provider 会拒绝这段历史。agent loop 也只在结果补齐后才发下一条 assistant，
+      // 因此这里出现插队 assistant 只可能是载荷被破坏或伪造。
+      if (pending.size > 0) return false;
       // assistant 只承载调用，不能带 toolCallId；否则会伪装成工具结果破坏往返结构。
       if (delta.toolCallId !== undefined) return false;
       if (delta.toolCalls !== undefined) {
@@ -549,8 +553,12 @@ export function isValidResume(v: unknown): v is RunResume {
   return true;
 }
 
-/** Prisma Int 上限再留 1 位给 seq 后自增：2147483646 是最后一个安全值。 */
-const MAX_INT_SEQ = 2_147_483_646;
+/**
+ * 逻辑序号上限。Prisma Int 最大 2147483647，这里留约 1.47 亿余量：
+ * 续跑一个工具轮会连续自增多步（每调用至少 tool_call + tool_result），
+ * 只留 1 位会在落库时溢出；20 亿既能容纳正常运行，又能拒绝明显异常/伪造的巨值。
+ */
+const MAX_INT_SEQ = 2_000_000_000;
 
 function isIntInRange(v: unknown): v is number {
   return typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= MAX_INT_SEQ;

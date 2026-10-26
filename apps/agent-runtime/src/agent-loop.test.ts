@@ -919,6 +919,37 @@ describe('runAgent', () => {
       { input: 6, output: 3, models: [{ model: 'mock', input: 6, output: 3 }] },
     ]);
   });
+
+  it('resume 中同一模型的重复用量条目累加，而不是覆盖', async () => {
+    const gateway: ModelGateway = {
+      async chat() {
+        return { content: '收尾', toolCalls: [], usage: { input: 1, output: 1 }, model: 'm1' };
+      },
+    };
+    const usages: UsageEvent[] = [];
+    await collect(
+      runAgent(
+        {
+          ...req,
+          resume: {
+            round: 1,
+            seq: 3,
+            deltas: [],
+            // 多段运行合并时同一模型会出现多条；必须求和（10+5+本轮 1 / 1+2+本轮 1）。
+            usage: [
+              { model: 'm1', input: 10, output: 1 },
+              { model: 'm1', input: 5, output: 2 },
+            ],
+          },
+        },
+        { gateway, tools: [], onUsage: (u) => usages.push(u) },
+      ),
+    );
+
+    expect(usages).toEqual([
+      { input: 16, output: 4, models: [{ model: 'm1', input: 16, output: 4 }] },
+    ]);
+  });
 });
 
 /** 第一轮发起一次工具调用、第二轮收尾的桩网关。 */

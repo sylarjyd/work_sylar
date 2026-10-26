@@ -163,7 +163,7 @@ model RunCheckpoint {
   round       Int
   /// 下一事件序号（已落库步骤的最大 seq + 1）。
   seq         Int
-  /// 自上次 checkpoint 以来新增的 assistant/tool 消息增量，避免重复存储附件内容。
+  /// 截至该轮的全部 assistant/tool 消息（累计），BFF 覆盖保存并原样回放，避免半轮历史与首跑分叉。
   deltas      Json
   usage       Json
   /// 已落库的产物 ID；恢复时删除未列入的记录，避免半轮产物重复。
