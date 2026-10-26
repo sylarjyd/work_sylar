@@ -9,7 +9,7 @@ import type {
 } from '@ai-office/shared';
 import { createSseParser } from '@ai-office/shared';
 import { endSpan, injectTraceparent, startSpan } from '@ai-office/telemetry';
-import type { RunJob, RunSnapshot } from './run-job';
+import { parseSnapshot, type RunJob, type RunSnapshot } from './run-job';
 import type { RunEventBus } from './run-event-bus';
 import { TasksService } from '../tasks/tasks.service';
 import { AttachmentsService } from '../attachments/attachments.service';
@@ -25,9 +25,27 @@ const UPSTREAM_CONNECT_TIMEOUT_MS = 10_000;
 /** 上游流空闲超时：超过该时长未收到任何 chunk 视为 runtime 卡死。 */
 const UPSTREAM_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
 
+/** error 事件统一负载：前端只读 message，机器码留给日志与客户端分支判断。 */
+const RUN_ERROR_MESSAGES = {
+  plan_expired: '套餐已过期，请续费后重试',
+  insufficient_credits: '积分不足，请充值后重试',
+  run_failed: '本次运行失败，请稍后重试',
+  attachment_unavailable: '附件读取失败，请重新上传',
+  upstream_unreachable: '模型服务不可达，请稍后重试',
+  upstream_error: '模型服务返回错误，请稍后重试',
+  upstream_empty_body: '模型服务返回空响应，请稍后重试',
+} as const;
+
+type RunErrorCode = keyof typeof RUN_ERROR_MESSAGES;
+
+function errorPayload(code: RunErrorCode): { message: string; error: RunErrorCode } {
+  return { message: RUN_ERROR_MESSAGES[code], error: code };
+}
+
 // 项目未启用 DOM lib，`ReadableStreamReadResult` 不存在，从 reader.read 推导。
 type StreamReadResult<T> = Awaited<ReturnType<ReadableStreamDefaultReader<T>['read']>>;
 
+// 与 tasks.controller 重复，Task 9 切换后删除 controller 版本。
 /** 带空闲超时的读取：超时后 reject，避免上游卡死导致执行器与 hold 永久悬挂。 */
 function readWithIdleTimeout(
   reader: ReadableStreamDefaultReader<Uint8Array>,
@@ -71,7 +89,7 @@ export class RunExecutor {
     try {
       billing = await this.billing.beginRun(runId, tenantId);
     } catch (err) {
-      const error =
+      const error: RunErrorCode =
         err instanceof PlanExpiredError
           ? 'plan_expired'
           : err instanceof InsufficientCreditsError
@@ -79,22 +97,23 @@ export class RunExecutor {
             : 'run_failed';
       this.logger.error(`run ${runId} 预占失败（${error}）: ${(err as Error).message}`);
       await this.safeFinish(runId, taskId, 'failed', '', sessionId);
-      await this.publish(runId, { event: 'error', data: { error } });
+      await this.publish(runId, { event: 'error', data: errorPayload(error) });
       return;
     }
 
     // 执行细节全部来自入队快照，避免排队期间配置/模型漂移。
+    // 读取、结构校验与取 selectedModel 必须在同一 try 内：残缺快照也要走归还预占的失败路径。
     let snapshot: RunSnapshot;
     try {
-      snapshot = await this.tasks.loadSnapshot(taskId);
+      snapshot = parseSnapshot(await this.tasks.loadSnapshot(taskId));
+      billing = { ...billing, selectedModel: snapshot.resolution.selectedModel };
     } catch (err) {
       this.logger.error(`run ${runId} 读取运行快照失败: ${(err as Error).message}`);
       await this.releaseHold(runId);
       await this.safeFinish(runId, taskId, 'failed', '', sessionId);
-      await this.publish(runId, { event: 'error', data: { error: 'run_failed' } });
+      await this.publish(runId, { event: 'error', data: errorPayload('run_failed') });
       return;
     }
-    billing = { ...billing, selectedModel: snapshot.resolution.selectedModel };
 
     // 附件字节在事务外读取；读取失败时 task/run 已存在，必须失败收尾并归还预占。
     let messages: ChatMessage[];
@@ -104,7 +123,7 @@ export class RunExecutor {
       this.logger.error(`run ${runId} 读取附件失败: ${(err as Error).message}`);
       await this.releaseHold(runId);
       await this.safeFinish(runId, taskId, 'failed', '', sessionId);
-      await this.publish(runId, { event: 'error', data: { error: 'attachment_unavailable' } });
+      await this.publish(runId, { event: 'error', data: errorPayload('attachment_unavailable') });
       return;
     }
 
@@ -162,7 +181,7 @@ export class RunExecutor {
         this.logger.error(`run ${runId} 上游不可达: ${(err as Error).message}`);
         await this.releaseHold(runId);
         await this.safeFinish(runId, taskId, 'failed', '', sessionId);
-        await this.publish(runId, { event: 'error', data: { error: 'upstream_unreachable' } });
+        await this.publish(runId, { event: 'error', data: errorPayload('upstream_unreachable') });
         return;
       } finally {
         // 建连已有结果就撤销定时器：不能中断随后建立的长流。
@@ -171,12 +190,14 @@ export class RunExecutor {
 
       if (!upstream.ok) {
         runTelemetry.forceFail();
+        // 不读取错误响应体，但必须取消 body，避免长连接/流资源残留。
+        await upstream.body?.cancel().catch(() => undefined);
         this.logger.error(
           `run ${runId} 上游返回 ${upstream.status}（${upstream.headers.get('content-type') ?? 'unknown'}）`,
         );
         await this.releaseHold(runId);
         await this.safeFinish(runId, taskId, 'failed', '', sessionId);
-        await this.publish(runId, { event: 'error', data: { error: 'upstream_error' } });
+        await this.publish(runId, { event: 'error', data: errorPayload('upstream_error') });
         return;
       }
 
@@ -186,7 +207,7 @@ export class RunExecutor {
         this.logger.error(`run ${runId} 上游返回空响应体`);
         await this.releaseHold(runId);
         await this.safeFinish(runId, taskId, 'failed', '', sessionId);
-        await this.publish(runId, { event: 'error', data: { error: 'upstream_empty_body' } });
+        await this.publish(runId, { event: 'error', data: errorPayload('upstream_empty_body') });
         return;
       }
 
@@ -264,7 +285,7 @@ export class RunExecutor {
           runId,
           status === 'done'
             ? { event: 'done', data: { runId } }
-            : { event: 'error', data: { error: 'run_failed' } },
+            : { event: 'error', data: errorPayload('run_failed') },
         );
       }
     } catch (err) {
@@ -273,7 +294,7 @@ export class RunExecutor {
       this.logger.error(`run ${runId} 执行异常，按 failed 收尾: ${(err as Error).message}`);
       await this.releaseHold(runId);
       await this.safeFinish(runId, taskId, 'failed', '', sessionId);
-      await this.publish(runId, { event: 'error', data: { error: 'run_failed' } });
+      await this.publish(runId, { event: 'error', data: errorPayload('run_failed') });
     } finally {
       runTelemetry.finish(status, latestUsage, billing, (Date.now() - runStarted) / 1000);
     }
@@ -293,6 +314,7 @@ export class RunExecutor {
     }
   }
 
+  // 与 tasks.controller 重复，Task 9 切换后删除 controller 版本。
   /** 记录用量：瞬时故障最多重试 3 次（100ms/200ms 退避），全部失败才抛出最后一次错误。 */
   private async recordUsageWithRetry(
     runId: string,
@@ -314,6 +336,7 @@ export class RunExecutor {
     throw lastErr;
   }
 
+  // 与 tasks.controller 重复，Task 9 切换后删除 controller 版本。
   /** 落库收尾；失败只记日志，绝不向 worker 抛出。 */
   private async safeFinish(
     runId: string,

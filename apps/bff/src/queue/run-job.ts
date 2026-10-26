@@ -1,3 +1,4 @@
+import { NotFoundException } from '@nestjs/common';
 import type { RunConfig, RunModelRoute } from '@ai-office/shared';
 import type { PreparedMessage } from '../attachments/attachments.service';
 
@@ -30,4 +31,33 @@ export interface RunSnapshot {
     permissionMode?: 'standard' | 'readonly' | 'auto';
     kbIds?: string[];
   } | null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * 校验并转换 Task.input 中的运行快照。
+ * 旧数据或异常写入会产生残缺快照，必须在执行器里一次性拒绝，
+ * 否则会在 hold 未释放时抛出未预期异常导致 run 永久 running。
+ */
+export function parseSnapshot(raw: unknown): RunSnapshot {
+  if (!isRecord(raw)) throw new NotFoundException('task_snapshot_missing');
+  const { goal, messages, config, resolution, model, traceId, assistant } = raw;
+  if (
+    typeof goal !== 'string' ||
+    !Array.isArray(messages) ||
+    !isRecord(config) ||
+    !isRecord(resolution) ||
+    typeof resolution.selectedModel !== 'string' ||
+    resolution.selectedModel.length === 0 ||
+    !Array.isArray(resolution.modelRoutes) ||
+    !(typeof model === 'string' || model === null) ||
+    !(typeof traceId === 'string' || traceId === null) ||
+    !(assistant === null || isRecord(assistant))
+  ) {
+    throw new NotFoundException('task_snapshot_missing');
+  }
+  return raw as unknown as RunSnapshot;
 }

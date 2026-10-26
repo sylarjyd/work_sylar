@@ -99,6 +99,16 @@ function publishedEvents(deps: ExecutorDeps): string[] {
   return deps.events.publish.mock.calls.map((call) => (call[1] as { event: string }).event);
 }
 
+/** 取出最后一次发布的 error 负载，并校验 message 是前端可直接展示的非空字符串。 */
+function lastErrorData(deps: ExecutorDeps): { message: string; error: string } {
+  const calls = deps.events.publish.mock.calls;
+  const msg = calls[calls.length - 1]?.[1] as { event: string; data: { message?: unknown; error?: string } };
+  expect(msg.event).toBe('error');
+  expect(typeof msg.data.message).toBe('string');
+  expect((msg.data.message as string).length).toBeGreaterThan(0);
+  return msg.data as { message: string; error: string };
+}
+
 beforeEach(() => {
   process.env.AGENT_RUNTIME_URL = 'http://runtime.test';
   delete process.env.AGENT_RUNTIME_TOKEN;
@@ -157,19 +167,22 @@ describe('RunExecutor', () => {
     });
   });
 
-  it('上游 5xx 时释放预占并标记 failed', async () => {
+  it('上游 5xx 时取消响应体、释放预占并标记 failed', async () => {
     const { executor, deps } = makeExecutor();
-    deps.fetch.mockResolvedValue(new Response('boom', { status: 502 }));
+    const upstream = new Response('boom', { status: 502 });
+    const cancel = vi.spyOn(upstream.body!, 'cancel');
+    deps.fetch.mockResolvedValue(upstream);
 
     await executor.execute(job());
 
+    expect(cancel).toHaveBeenCalled();
     expect(deps.billing.releaseHold).toHaveBeenCalledWith('r1');
     expect(deps.tasks.finish).toHaveBeenCalledWith('r1', 't1', 'failed', '', 's1');
     expect(deps.billing.recordUsage).not.toHaveBeenCalled();
     expect(deps.billing.settle).not.toHaveBeenCalled();
-    expect(deps.events.publish).toHaveBeenCalledWith('r1', {
-      event: 'error',
-      data: { error: 'upstream_error' },
+    expect(lastErrorData(deps)).toEqual({
+      message: '模型服务返回错误，请稍后重试',
+      error: 'upstream_error',
     });
   });
 
@@ -181,9 +194,9 @@ describe('RunExecutor', () => {
 
     expect(deps.billing.releaseHold).toHaveBeenCalledWith('r1');
     expect(deps.tasks.finish).toHaveBeenCalledWith('r1', 't1', 'failed', '', 's1');
-    expect(deps.events.publish).toHaveBeenCalledWith('r1', {
-      event: 'error',
-      data: { error: 'upstream_empty_body' },
+    expect(lastErrorData(deps)).toEqual({
+      message: '模型服务返回空响应，请稍后重试',
+      error: 'upstream_empty_body',
     });
   });
 
@@ -195,18 +208,18 @@ describe('RunExecutor', () => {
 
     expect(deps.fetch).not.toHaveBeenCalled();
     expect(deps.tasks.finish).toHaveBeenCalledWith('r1', 't1', 'failed', '', 's1');
-    expect(deps.events.publish).toHaveBeenCalledWith('r1', {
-      event: 'error',
-      data: { error: 'insufficient_credits' },
+    expect(lastErrorData(deps)).toEqual({
+      message: '积分不足，请充值后重试',
+      error: 'insufficient_credits',
     });
 
     const second = makeExecutor();
     second.deps.billing.beginRun.mockRejectedValue(new PlanExpiredError());
     await second.executor.execute(job());
     expect(second.deps.fetch).not.toHaveBeenCalled();
-    expect(second.deps.events.publish).toHaveBeenCalledWith('r1', {
-      event: 'error',
-      data: { error: 'plan_expired' },
+    expect(lastErrorData(second.deps)).toEqual({
+      message: '套餐已过期，请续费后重试',
+      error: 'plan_expired',
     });
   });
 
@@ -232,6 +245,62 @@ describe('RunExecutor', () => {
     expect(deps.billing.releaseHold).toHaveBeenCalledWith('r1');
     expect(deps.tasks.finish).toHaveBeenCalledWith('r1', 't1', 'failed', '', 's1');
     expect(publishedEvents(deps)).toEqual(['error']);
+    expect(lastErrorData(deps).error).toBe('run_failed');
+  });
+
+  it('残缺快照时不抛错：释放预占、标记 failed 并发布带 message 的 error', async () => {
+    const { executor, deps } = makeExecutor();
+    // 旧数据/异常写入可能只剩空对象，selectedModel 等字段全部缺失。
+    deps.tasks.loadSnapshot.mockResolvedValue({});
+
+    await expect(executor.execute(job())).resolves.toBeUndefined();
+
+    expect(deps.fetch).not.toHaveBeenCalled();
+    expect(deps.billing.releaseHold).toHaveBeenCalledWith('r1');
+    expect(deps.tasks.finish).toHaveBeenCalledWith('r1', 't1', 'failed', '', 's1');
+    expect(publishedEvents(deps)).toEqual(['error']);
+    expect(lastErrorData(deps)).toEqual({
+      message: '本次运行失败，请稍后重试',
+      error: 'run_failed',
+    });
+  });
+
+  it('正常完成但无 usage 时释放预占且不结算', async () => {
+    const { executor, deps } = makeExecutor();
+    deps.fetch.mockResolvedValue(
+      sseResponse([
+        { event: 'step', data: stepEvent(0, 'think', { text: 'hi' }) },
+        { event: 'done', data: { runId: 'r1' } },
+      ]),
+    );
+
+    await executor.execute(job());
+
+    expect(deps.billing.recordUsage).not.toHaveBeenCalled();
+    expect(deps.billing.settle).not.toHaveBeenCalled();
+    expect(deps.billing.releaseHold).toHaveBeenCalledWith('r1');
+    expect(deps.tasks.finish).toHaveBeenCalledWith('r1', 't1', 'done', 'hi', 's1');
+  });
+
+  it('用量记录重试全部失败时释放预占且不结算', async () => {
+    const { executor, deps } = makeExecutor();
+    deps.billing.recordUsage.mockRejectedValue(new Error('db down'));
+    deps.fetch.mockResolvedValue(
+      sseResponse([
+        {
+          event: 'usage',
+          data: { input: 3, output: 2, models: [{ model: 'm1', input: 3, output: 2 }] },
+        },
+        { event: 'done', data: { runId: 'r1' } },
+      ]),
+    );
+
+    await executor.execute(job());
+
+    expect(deps.billing.recordUsage).toHaveBeenCalledTimes(3);
+    expect(deps.billing.releaseHold).toHaveBeenCalledWith('r1');
+    expect(deps.billing.settle).not.toHaveBeenCalled();
+    expect(deps.tasks.finish).toHaveBeenCalledWith('r1', 't1', 'done', '', 's1');
   });
 
   it('上游发 error 事件时记为 failed，但已收到的 usage 仍结算', async () => {
@@ -250,9 +319,9 @@ describe('RunExecutor', () => {
 
     expect(deps.billing.settle).toHaveBeenCalledWith('r1');
     expect(deps.tasks.finish).toHaveBeenCalledWith('r1', 't1', 'failed', '', 's1');
-    expect(deps.events.publish).toHaveBeenCalledWith('r1', {
-      event: 'error',
-      data: { error: 'run_failed' },
+    expect(lastErrorData(deps)).toEqual({
+      message: '本次运行失败，请稍后重试',
+      error: 'run_failed',
     });
   });
 
