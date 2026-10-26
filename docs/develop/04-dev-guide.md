@@ -424,3 +424,16 @@ pnpm --filter @ai-office/bff typecheck             # 类型
 4. 依次验证：用户禁用后既有 token 立即 401；为租户开通套餐与调额；创建/停用套餐；修改模型价格；归档会话后普通用户列表不可见；修改 `maxRounds` 后下一次运行按新值停止；审计页能查到上述记录。
 5. 边界验证：普通账号在运营端登录应被拒绝并清除登录态；未登录访问 `/overview` 跳 `/login`；客户端访问 `/admin/users` 应 404；运营端登录态不写入客户端 origin。
 6. 运行 `pnpm test` 与 `pnpm build`。
+
+---
+
+## 12. 本地验证队列（M5b-3）
+
+准备：`pnpm --filter @ai-office/bff db:up`（Compose 含 Redis）+ `db:push`；`.env` 配置 `REDIS_URL`，且不要设 `RUN_QUEUE_ENABLED=0`。改 `.env` 后重启 BFF。
+
+1. **队列并发**：同一租户连续发起 5 个任务（`RUN_QUEUE_PER_TENANT=2`、`RUN_QUEUE_CONCURRENCY≥2`），预期 2 个 running、3 个 queued；前两个结束后排队任务自动补位。
+2. **断线重连**：运行中刷新/关闭工作台页面，再打开同一任务。前端会带 `?afterSeq=<lastSeq>`（或 `Last-Event-ID`）续流，先回放缺失 step，再继续实时事件，不丢失中间步骤。
+3. **取消**：排队中取消应移除作业并立即返回 canceled；执行中取消应受理控制消息，运行在收尾后转 canceled（已产生的 step 与用量保留）。终态重复取消幂等，不产生副作用。
+4. **checkpoint 续跑**：运行中停掉 agent-runtime 再启动，执行器应从中断前 checkpoint 继续；连续中断超过 `RUN_QUEUE_MAX_ATTEMPTS` 才落 failed。
+5. **管理端手动重试**：运营端任务详情对 failed/canceled 运行点重试，基于任务目标创建新 run 并重新排队（attempt 递增）；容量不足时返回 429。
+6. **指标**：`GET /metrics`（回环或 `x-internal-token`）应包含 `ai_office_run_queue_depth`、`ai_office_run_queue_wait_seconds`、`ai_office_runs_canceled_total`、`ai_office_runs_retried_total`、`ai_office_runs_resumed_total`。可先发起几个排队/取消/重试操作，确认计数与直方图有值。

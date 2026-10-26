@@ -4,6 +4,7 @@ import {
   boundedLabel,
   createMetricsRegistry,
   HTTP_DURATION_BUCKETS,
+  RUN_QUEUE_WAIT_BUCKETS,
 } from './index';
 
 describe('metrics', () => {
@@ -28,5 +29,9 @@ describe('metrics', () => {
     expect(HTTP_DURATION_BUCKETS).toEqual([
       0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30,
     ]);
+  });
+
+  it('队列等待桶以秒为单位，覆盖 10 分钟长等待', () => {
+    expect(RUN_QUEUE_WAIT_BUCKETS).toEqual([1, 5, 15, 30, 60, 120, 300, 600]);
   });
 });

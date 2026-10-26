@@ -40,6 +40,8 @@ export class RunsService {
       if (removed && (await this.tasks.markCanceled(runId, run.taskId))) {
         // 先落库再发布：订阅方收到 canceled 会立即回查 DB。
         await this.publishCanceled(runId);
+        // 只有本次请求真正促成取消才计数；幂等返回不计，避免重复放大。
+        this.metrics.runsCanceled.inc();
         return { status: 'canceled' };
       }
       // 作业已被取走或并发取消已落库：以 DB 为准。终态直接幂等返回；
@@ -51,6 +53,8 @@ export class RunsService {
     // 条件标记 + 控制消息：先把取消意图落库，执行器即使错过消息也能在执行前兜底。
     await this.tasks.markCancelRequested(runId);
     await this.control.publish(runId, { type: 'cancel' });
+    // 控制消息发出即视为取消请求被接受；发布失败会先抛错，不会走到这里。
+    this.metrics.runsCanceled.inc();
     return { status: 'running' };
   }
 

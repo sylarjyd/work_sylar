@@ -3,6 +3,7 @@ import {
   createMetricsRegistry,
   HTTP_DURATION_BUCKETS,
   MODEL_DURATION_BUCKETS,
+  RUN_QUEUE_WAIT_BUCKETS,
 } from '@ai-office/telemetry';
 
 export const BFF_METRICS = Symbol('BFF_METRICS');
@@ -20,9 +21,11 @@ export interface BffMetrics {
   runsEnqueued: Counter;
   runsResumed: Counter;
   runsRetried: Counter;
+  runsCanceled: Counter;
   runsQueueFailures: Counter;
   runQueueDepth: Gauge;
   runQueueActive: Gauge;
+  runQueueWait: Histogram;
   rateLimitHits: Counter;
   alertsFired: Counter;
   alertEvalFailures: Counter;
@@ -98,6 +101,11 @@ export function createBffMetrics(
       help: '手动重试次数',
       registers: [registry],
     }),
+    runsCanceled: new Counter({
+      name: 'ai_office_runs_canceled_total',
+      help: '被取消的运行数',
+      registers: [registry],
+    }),
     runsQueueFailures: new Counter({
       name: 'ai_office_runs_queue_failures_total',
       help: '队列作业失败次数',
@@ -111,6 +119,12 @@ export function createBffMetrics(
     runQueueActive: new Gauge({
       name: 'ai_office_run_queue_active',
       help: '正在执行的队列作业数',
+      registers: [registry],
+    }),
+    runQueueWait: new Histogram({
+      name: 'ai_office_run_queue_wait_seconds',
+      help: '运行从入队到开始执行的等待时长',
+      buckets: RUN_QUEUE_WAIT_BUCKETS,
       registers: [registry],
     }),
     rateLimitHits: new Counter({

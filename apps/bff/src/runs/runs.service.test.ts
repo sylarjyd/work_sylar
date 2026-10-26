@@ -106,6 +106,56 @@ describe('RunsService.cancel', () => {
     expect(deps.events.publish).not.toHaveBeenCalled();
   });
 
+  it('排队取消成功时取消指标恰好计数一次', async () => {
+    const { svc, metrics } = makeService({ status: 'queued' });
+    const inc = vi.spyOn(metrics.runsCanceled, 'inc');
+
+    await expect(svc.cancel('r1', 't1', 'u1')).resolves.toEqual({ status: 'canceled' });
+
+    expect(inc).toHaveBeenCalledTimes(1);
+  });
+
+  it('执行中取消（控制消息发布成功）取消指标计数一次', async () => {
+    const { svc, metrics } = makeService({ status: 'running' });
+    const inc = vi.spyOn(metrics.runsCanceled, 'inc');
+
+    await expect(svc.cancel('r1', 't1', 'u1')).resolves.toEqual({ status: 'running' });
+
+    expect(inc).toHaveBeenCalledTimes(1);
+  });
+
+  it('控制消息发布失败时不计数并原样上抛', async () => {
+    const { svc, deps, metrics } = makeService({ status: 'running' });
+    const inc = vi.spyOn(metrics.runsCanceled, 'inc');
+    const busError = new Error('bus down');
+    deps.control.publish.mockRejectedValue(busError);
+
+    await expect(svc.cancel('r1', 't1', 'u1')).rejects.toBe(busError);
+
+    expect(inc).not.toHaveBeenCalled();
+  });
+
+  it('终态幂等与回查已终态路径均不计取消数', async () => {
+    for (const status of ['done', 'failed', 'canceled'] as const) {
+      const { svc, metrics } = makeService({ status });
+      const inc = vi.spyOn(metrics.runsCanceled, 'inc');
+      await svc.cancel('r1', 't1', 'u1');
+      expect(inc).not.toHaveBeenCalled();
+    }
+
+    // remove=false 且回查已 canceled：并发取消已落库，本次请求只是幂等返回。
+    const { svc, deps, metrics } = makeService({ status: 'queued' });
+    const inc = vi.spyOn(metrics.runsCanceled, 'inc');
+    deps.queue.remove.mockResolvedValue(false);
+    deps.tasks.findOwnedRun
+      .mockResolvedValueOnce(runRow('queued'))
+      .mockResolvedValueOnce(runRow('canceled'));
+
+    await expect(svc.cancel('r1', 't1', 'u1')).resolves.toEqual({ status: 'canceled' });
+
+    expect(inc).not.toHaveBeenCalled();
+  });
+
   it('终态幂等返回当前状态，不产生任何副作用', async () => {
     for (const status of ['done', 'failed', 'canceled'] as const) {
       const { svc, deps } = makeService({ status });

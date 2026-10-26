@@ -8,7 +8,7 @@ import type { TasksService } from '../tasks/tasks.service';
 import type { QueueRuntimeConfig } from './queue.config';
 import type { RunExecutor } from './run-executor.service';
 import type { RunJob } from './run-job';
-import { RunWorker, WORKER_CLOSE_TIMEOUT_MS } from './run-worker';
+import { RunWorker, WORKER_CLOSE_TIMEOUT_MS, runQueueWaitSeconds } from './run-worker';
 
 interface MockWorker {
   close: ReturnType<typeof vi.fn>;
@@ -44,6 +44,25 @@ function makeService(worker: MockWorker): RunWorker {
     worker as unknown as Worker<RunJob, void, 'run'>;
   return service;
 }
+
+describe('runQueueWaitSeconds', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('正常差值为秒', () => {
+    expect(runQueueWaitSeconds({ timestamp: 1_000, processedOn: 5_500 })).toBe(4.5);
+  });
+
+  it('processedOn 缺失时回退当前时间且不为负', () => {
+    vi.spyOn(Date, 'now').mockReturnValue(10_000);
+    expect(runQueueWaitSeconds({ timestamp: 8_000 })).toBe(2);
+  });
+
+  it('时钟回拨（processedOn 早于入队）不为负', () => {
+    expect(runQueueWaitSeconds({ timestamp: 5_000, processedOn: 4_000 })).toBe(0);
+  });
+});
 
 describe('RunWorker.close', () => {
   afterEach(() => {

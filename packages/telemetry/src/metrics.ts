@@ -5,6 +5,8 @@ export const HTTP_DURATION_BUCKETS = [
 ];
 export const MODEL_DURATION_BUCKETS = [0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 30, 60];
 export const TOOL_DURATION_BUCKETS = [0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30];
+/** 队列等待以秒计：短等待看清排队抖动，长桶覆盖数分钟以上的拥塞。 */
+export const RUN_QUEUE_WAIT_BUCKETS = [1, 5, 15, 30, 60, 120, 300, 600];
 
 export interface RegistryOptions {
   defaultMetrics?: boolean;

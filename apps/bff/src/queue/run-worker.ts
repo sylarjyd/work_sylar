@@ -27,6 +27,18 @@ const DEPTH_RECONCILE_MS = 30_000;
 export const WORKER_CLOSE_TIMEOUT_MS = 15_000;
 
 /**
+ * 以本次开始处理时间减入队时间；延迟让位与重试同样计入等待。
+ * processedOn 缺失时回退当前时间，时钟回拨则夹到 0，保证观测值非负。
+ */
+export function runQueueWaitSeconds(job: {
+  timestamp: number;
+  processedOn?: number | null;
+}): number {
+  const startedAt = job.processedOn ?? Date.now();
+  return Math.max(0, startedAt - job.timestamp) / 1000;
+}
+
+/**
  * 运行队列消费者：仅队列启用时创建 Worker，否则整体空转。
  * 处理器自己保证不抛错（执行器内部收尾），failed 事件只统计真正的框架级失败。
  */
@@ -63,6 +75,8 @@ export class RunWorker implements OnApplicationBootstrap, OnApplicationShutdown 
           throw new DelayedError();
         }
 
+        // 在真正开始执行时记录：让位重投的作业会在下一次尝试把累计等待一次性计入。
+        this.metrics.runQueueWait.observe(runQueueWaitSeconds(job));
         this.metrics.runQueueActive.inc();
         try {
           await this.executor.execute(job.data);

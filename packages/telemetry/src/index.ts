@@ -26,6 +26,7 @@ export {
   createMetricsRegistry,
   HTTP_DURATION_BUCKETS,
   MODEL_DURATION_BUCKETS,
+  RUN_QUEUE_WAIT_BUCKETS,
   TOOL_DURATION_BUCKETS,
   type RegistryOptions,
 } from './metrics';

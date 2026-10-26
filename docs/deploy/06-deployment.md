@@ -524,9 +524,43 @@ curl -X POST http://localhost:4000/api/billing/admin/credits \
 
 投递失败只影响通知，不阻塞评估；事件与 `deliveryStatus/deliveryError` 保留在告警中心。
 
+## 队列与 worker（M5b-3）
+
+### 依赖与降级
+
+- **Redis 必需**：`REDIS_URL` 可连且 `RUN_QUEUE_ENABLED` 不为 `0` 时启用 BullMQ 队列；`RUN_QUEUE_ENABLED=0` 可在保留 Redis 的前提下强制内联（故障降级用）。
+- **未配置 `REDIS_URL`** 时运行在 API 进程内**内联执行**，适合开发/单机；多实例下没有队列分摊，长任务也会占用 HTTP 进程。
+- **注意**：配了 `REDIS_URL` 但 Redis 连不上时，队列仍按启用装配，入队会失败而**不会自动降级**为内联。请用 readiness 探针（`/api/health/ready` 的 Redis 检查）确认连接，而不是靠错误配置“降级”。
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `RUN_QUEUE_ENABLED` | `1` | `0` 强制内联；仅在有 `REDIS_URL` 时才是队列模式 |
+| `RUN_QUEUE_NAME` | `runs` | BullMQ 队列名；多实例必须一致 |
+| `RUN_QUEUE_CONCURRENCY` | `4` | 单实例 worker 并发（1–32） |
+| `RUN_QUEUE_PER_TENANT` | `2` | 单租户并发（1–8）；管理端参数页可覆盖（DB 优先） |
+| `RUN_QUEUE_MAX_PER_TENANT` | `50` | 单租户排队上限（1–200），超出返回 429 `queue_full` |
+| `RUN_QUEUE_MAX_ATTEMPTS` | `2` | 执行尝试次数（0–5），耗尽后运行落 failed |
+
+### worker 与扩容
+
+- worker 与 BFF 同进程：**每个 BFF 实例都会启动 worker**，作业由 Redis 天然分摊，不需要单独部署 worker 服务。
+- 扩容 worker 就是**扩容 BFF**；多实例需共享同一 Redis 实例与同一 `RUN_QUEUE_NAME`，否则各自消费互不可见的队列。
+- 单实例吞吐由 `RUN_QUEUE_CONCURRENCY` 控制，单租户公平性由 `RUN_QUEUE_PER_TENANT` 控制（超出时作业延迟让位，不消耗尝试次数）。调大并发前先确认 DB 连接池、模型 API 限流与 runtime 容量。
+- BFF 重启会停止拉取并等待在途作业（上限 15 秒）；未完成的作业由 BullMQ 重投或恢复扫描兜底。
+
+### 升级步骤
+
+1. 先同步表结构：开发/无迁移历史用 `pnpm --filter @ai-office/bff prisma db push`（或 `db:push`）；生产按 §5.2 用 `prisma migrate deploy`。
+2. 再滚动重启 BFF（worker 随进程一起滚动）。旧实例在关闭前会尽量收尾，新实例继续消费同一队列。
+3. 升级期间旧运行不受影响：执行器从中断前的 `step` checkpoint 续跑；恢复任务每 **5 分钟**扫描一次失联运行（running 但作业已丢失）并补发取消请求，最迟约 15 分钟收敛（10 分钟判定阈值 + 5 分钟扫描间隔）。
+4. 回滚应用版本即可，队列数据在 Redis 中保留；已落库的运行状态以 Postgres 为准。
+
+### 排障指标
+
+`GET /metrics` 中优先看：`ai_office_run_queue_depth`（等待+延迟）、`ai_office_run_queue_wait_seconds`（入队到开始执行的等待）、`ai_office_runs_canceled_total`、`ai_office_runs_retried_total`、`ai_office_runs_resumed_total`。等待直方图持续落入高桶说明 worker 并发不足或租户并发过低。
+
 ### 安全边界（生产必读）
 
-- **禁止把 prompt、消息正文、工具入参/结果全文、Authorization、内部 token、API key、连接器 env、Webhook secret 写入日志或指标 label。**
 - **指标 label 禁止 userId/tenantId/sessionId/runId**；管理端指标接口也不返回邮箱、消息内容、工具入参/结果。
 - `/metrics`、`/api/health/ready` 仅回环或内部 token 可访问；runtime 指标端点仅在配置 `AGENT_RUNTIME_TOKEN` 后对非回环来源放行。
 - Webhook URL 仅管理员可改；secret 设置后永不返回明文，读取一律掩码。
