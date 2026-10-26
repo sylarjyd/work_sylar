@@ -139,6 +139,21 @@ export function parseCheckpoint(data: unknown): RunCheckpointEvent | null {
   };
 }
 
+/**
+ * 把断点里累计的用量还原成 usage 事件。
+ * 取消会先断开上游，runtime 在 finally 上报的 usage 没有接收方，
+ * 只能以已落库断点（完成轮次的用量）结算，避免取消把已消耗的 token 漏掉。
+ */
+export function usageFromCheckpoint(entries: CheckpointUsageEntry[]): UsageEvent | null {
+  if (entries.length === 0) return null;
+  const models = entries.map(({ model, input, output }) => ({ model, input, output }));
+  return {
+    input: models.reduce((sum, m) => sum + m.input, 0),
+    output: models.reduce((sum, m) => sum + m.output, 0),
+    models,
+  };
+}
+
 /** 本地落库故障：必须让本次运行失败，不能被当成传输故障重放（会重复写步骤/掩盖数据问题）。 */
 class LocalPersistenceError extends Error {}
 
@@ -537,6 +552,11 @@ export class RunExecutor {
     } finally {
       // 只有终态 failed 才计入失败指标：可重试的中间尝试不算失败。
       if (status === 'failed') runTelemetry.forceFail();
+      // 取消会先断开上游，usage 帧没有接收方；用断点中已确认的轮次用量兜底，
+      // 否则用户取消一次长任务就能白嫖已消耗的 token。
+      if (!latestUsage && status === 'canceled') {
+        latestUsage = await this.loadCheckpointUsage(runId);
+      }
       // 结算优先于 finish：即使 finish 失败，用量也已落账。
       // 结算抛错时保留 hold 与 pending，由补偿任务重试。
       if (latestUsage) {
@@ -837,6 +857,24 @@ export class RunExecutor {
       await this.artifacts.record(runId, sessionId, tenantId, payload as unknown as ArtifactRef);
     } catch (err) {
       this.logger.error(`run ${runId} artifact 落库失败: ${(err as Error).message}`);
+    }
+  }
+
+  /** 读取断点中已确认的用量；结构非法或读取失败按无用量处理，不阻断取消收尾。 */
+  private async loadCheckpointUsage(runId: string): Promise<UsageEvent | null> {
+    try {
+      const cpRow = await this.tasks.getCheckpoint(runId);
+      if (!cpRow) return null;
+      const cp = parseCheckpoint({
+        round: cpRow.round,
+        seq: cpRow.seq,
+        deltas: cpRow.deltas,
+        usage: cpRow.usage,
+      });
+      return cp ? usageFromCheckpoint(cp.usage) : null;
+    } catch (err) {
+      this.logger.warn(`run ${runId} 读取断点用量失败，取消按无用量处理: ${(err as Error).message}`);
+      return null;
     }
   }
 

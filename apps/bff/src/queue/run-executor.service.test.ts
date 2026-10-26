@@ -672,6 +672,45 @@ describe('RunExecutor', () => {
     expect(deps.off).toHaveBeenCalledTimes(1);
   });
 
+  it('流式阶段取消且已有断点：用断点用量结算，避免取消漏计', async () => {
+    const { executor, deps } = makeExecutor();
+    // 已完成轮次的用量只存在于断点里：取消断开上游后 usage 帧不可能再回传。
+    const cp = checkpointData();
+    deps.tasks.getCheckpoint.mockResolvedValue(storedCheckpoint(cp));
+    let handler: ((msg: RunControlMessage) => void) | undefined;
+    deps.control.subscribe.mockImplementation(async (_runId: string, h: typeof handler) => {
+      handler = h;
+      return deps.off;
+    });
+    let stepConsumed!: () => void;
+    const consumed = new Promise<void>((resolve) => {
+      stepConsumed = resolve;
+    });
+    deps.tasks.recordStep.mockImplementation(async () => stepConsumed());
+    deps.fetch.mockImplementation((_url: unknown, init: { signal: AbortSignal }) =>
+      Promise.resolve(
+        hangingSseResponse(
+          [{ event: 'step', data: stepEvent(0, 'think', { text: '半截回答' }) }],
+          init.signal,
+        ),
+      ),
+    );
+
+    const running = executor.execute(job());
+    await consumed;
+    handler!({ type: 'cancel' });
+    await expect(running).resolves.toBeUndefined();
+
+    expect(deps.billing.recordUsage).toHaveBeenCalledWith(
+      'r1',
+      { tenantId: 't1', userId: 'u1', sessionId: 's1' },
+      { input: 3, output: 2, models: [{ model: 'm1', input: 3, output: 2 }] },
+    );
+    expect(deps.billing.settle).toHaveBeenCalledWith('r1');
+    expect(deps.billing.releaseHold).not.toHaveBeenCalled();
+    expect(deps.tasks.finish).toHaveBeenCalledWith('r1', 't1', 'canceled', '', 's1');
+  });
+
   it('confirm 控制消息转发到 runtime HTTP 端点', async () => {
     // runtime 的待确认 promise 在它自己的进程内，只有持有该连接的执行器能送达决策。
     process.env.AGENT_RUNTIME_TOKEN = 'rt';
@@ -1248,9 +1287,17 @@ describe('RunExecutor', () => {
 
     await executor.execute(job());
 
-    expect(deps.tasks.getCheckpoint).toHaveBeenCalledTimes(1);
+    // 续跑前读一次断点，取消收尾时再读一次用于结算已完成轮次的用量。
+    expect(deps.tasks.getCheckpoint).toHaveBeenCalledTimes(2);
     expect(deps.fetch).not.toHaveBeenCalled();
-    expect(deps.billing.releaseHold).toHaveBeenCalledWith('r1');
+    // 断点里已有上一轮的实际用量：取消也要结算，不能直接释放预占。
+    expect(deps.billing.recordUsage).toHaveBeenCalledWith(
+      'r1',
+      { tenantId: 't1', userId: 'u1', sessionId: 's1' },
+      { input: 3, output: 2, models: [{ model: 'm1', input: 3, output: 2 }] },
+    );
+    expect(deps.billing.settle).toHaveBeenCalledWith('r1');
+    expect(deps.billing.releaseHold).not.toHaveBeenCalled();
     expect(deps.tasks.finish).toHaveBeenCalledWith('r1', 't1', 'canceled', '', 's1');
     expect(publishedEvents(deps)).toEqual(['status']);
   });
