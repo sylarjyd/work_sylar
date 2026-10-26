@@ -39,10 +39,12 @@ import type {
   AdminUserItemDto,
   AdminUserPatch,
   BillingSummaryDto,
+  CancelRunResultDto,
   KbDeleteResultDto,
   ModelCapability,
   ModelModality,
   PageDto,
+  RetryRunResultDto,
 } from '@ai-office/shared';
 import { authFetch, errorText } from '@ai-office/web-core';
 
@@ -132,6 +134,8 @@ export function adminErrorText(err: unknown): string {
     'admin_failed_400_invalid_value': '参数值超出允许范围',
     'admin_failed_400_invalid_patch': '告警规则参数不合法',
     'admin_failed_404_alert_rule_not_found': '告警规则不存在',
+    'admin_failed_409_run_not_retryable': '该运行当前状态不可重试',
+    'admin_failed_409_task_busy': '该任务已有新的运行，请刷新',
   };
   if (map[msg]) return map[msg];
   const failed = /^admin_failed_(\d{3})(?:_(.*))?$/.exec(msg);
@@ -262,6 +266,22 @@ export function getAdminRun(
 
 export function getAdminRunTimeline(id: string): Promise<AdminRunTimelineDto> {
   return request(`/api/admin/runs/${encodeURIComponent(id)}/timeline`);
+}
+
+export function adminCancelRun(runId: string): Promise<CancelRunResultDto> {
+  // authFetch 固定带 JSON content-type；Fastify 对空体 POST 直接 400，故发送空对象。
+  return request(`/api/admin/runs/${encodeURIComponent(runId)}/cancel`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  });
+}
+
+export function adminRetryRun(runId: string): Promise<RetryRunResultDto> {
+  // authFetch 固定带 JSON content-type；Fastify 对空体 POST 直接 400，故发送空对象。
+  return request(`/api/admin/runs/${encodeURIComponent(runId)}/retry`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  });
 }
 
 // ------------------------------------------------------------------ 模型

@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
+  adminCancelRun,
   adminErrorText,
+  adminRetryRun,
   createModelProvider,
   getAdminMetricTimeseries,
   getAdminOverview,
@@ -25,6 +27,14 @@ function stubWindow() {
       setItem: () => {},
       removeItem: () => {},
     },
+  });
+}
+
+function urls(fetchMock: { mock: { calls: unknown[][] } }): string[] {
+  return fetchMock.mock.calls.map((call) => {
+    const path = String((call as [string])[0]);
+    // authFetch 会拼上 BFF 源，这里只比较端点路径，避免测试依赖环境变量。
+    return path.replace(/^https?:\/\/[^/]+/, '');
   });
 }
 
@@ -224,6 +234,54 @@ describe('admin-api', () => {
     );
     expect(adminErrorText(new Error('admin_failed_404_alert_rule_not_found'))).toBe(
       '告警规则不存在',
+    );
+  });
+
+  it('取消/重试调用管理端点', async () => {
+    stubWindow();
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({}), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    await adminCancelRun('r1');
+    await adminRetryRun('r1');
+    expect(urls(fetchMock)).toEqual(['/api/admin/runs/r1/cancel', '/api/admin/runs/r1/retry']);
+  });
+
+  it('取消/重试路径参数做 URL 编码并发送空对象请求体', async () => {
+    stubWindow();
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({}), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    await adminCancelRun('r/1');
+    await adminRetryRun('r/1');
+    const calls = fetchMock.mock.calls as unknown as Array<[string, RequestInit]>;
+    expect(urls(fetchMock)).toEqual([
+      '/api/admin/runs/r%2F1/cancel',
+      '/api/admin/runs/r%2F1/retry',
+    ]);
+    // authFetch 固定带 JSON content-type，Fastify 会拒绝空体 POST（400），故须显式发送空对象。
+    expect(calls[0][1].method).toBe('POST');
+    expect(calls[0][1].body).toBe('{}');
+    expect(calls[1][1].method).toBe('POST');
+    expect(calls[1][1].body).toBe('{}');
+  });
+
+  it('运行取消/重试的 409 冲突有专门文案', () => {
+    expect(adminErrorText(new Error('admin_failed_409_run_not_retryable'))).toBe(
+      '该运行当前状态不可重试',
+    );
+    expect(adminErrorText(new Error('admin_failed_409_task_busy'))).toBe(
+      '该任务已有新的运行，请刷新',
     );
   });
 

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Alert,
+  App,
   Button,
   Card,
   Descriptions,
@@ -22,9 +23,13 @@ import type {
   AdminRunTimelineDto,
   AdminTaskDetailDto,
   AdminTaskItemDto,
+  RetryRunResultDto,
+  RunStatus,
 } from '@ai-office/shared';
 import {
+  adminCancelRun,
   adminErrorText,
+  adminRetryRun,
   getAdminRun,
   getAdminRunTimeline,
   getAdminTask,
@@ -49,12 +54,28 @@ const TIMELINE_COLOR: Record<'ok' | 'bad' | 'warn' | 'active', string> = {
   active: 'blue',
 };
 
+// 任务状态与最近运行状态共用同一套文案/颜色，避免同一含义在不同列显示不一致。
+const TASK_STATUS_META: Record<RunStatus, { label: string; color: string }> = {
+  queued: { label: '排队中', color: 'gold' },
+  running: { label: '运行中', color: 'processing' },
+  done: { label: '完成', color: 'success' },
+  failed: { label: '失败', color: 'error' },
+  canceled: { label: '已取消', color: 'default' },
+};
+
 function formatTime(value: string): string {
   return new Date(value).toLocaleString('zh-CN', { hour12: false });
 }
 
+function taskStatusTag(value: RunStatus | null) {
+  if (!value) return '—';
+  const meta = TASK_STATUS_META[value];
+  return <Tag color={meta.color}>{meta.label}</Tag>;
+}
+
 export default function AdminTasksPage() {
   const router = useRouter();
+  const { message, modal } = App.useApp();
   const [items, setItems] = useState<AdminTaskItemDto[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -121,9 +142,15 @@ export default function AdminTasksPage() {
 
   const taskSeq = useRef(0);
   const runSeq = useRef(0);
+  // 记录当前打开的任务，写操作后只有它还开着才回写详情，避免用户关闭面板后又被重新打开。
+  const detailIdRef = useRef<string | null>(null);
+  // 防重提交：确认框之后、首个 await 之前占位，finally 复位。
+  const inFlight = useRef(false);
+  const [busy, setBusy] = useState(false);
 
   async function openTask(id: string) {
     const seq = ++taskSeq.current;
+    detailIdRef.current = id;
     // 切换任务时让在途的任务/运行请求失效，并清空旧详情，避免「新任务详情 + 旧任务运行」
     runSeq.current++;
     setError('');
@@ -149,6 +176,7 @@ export default function AdminTasksPage() {
     // 递增序号让在途的任务/运行请求失效
     taskSeq.current++;
     runSeq.current++;
+    detailIdRef.current = null;
     setDetail(null);
     setRun(null);
     setTimeline(null);
@@ -198,6 +226,111 @@ export default function AdminTasksPage() {
     }
   }
 
+  // 写操作改变的是任务/运行状态，列表与已打开的详情都要重载；任务已被切走时不再回写。
+  async function refreshAfterAction(taskId: string | null) {
+    await load();
+    if (taskId && detailIdRef.current === taskId) await openTask(taskId);
+  }
+
+  function askCancelRun(r: AdminTaskDetailDto['runs'][number]) {
+    modal.confirm({
+      title: '取消该运行？',
+      content: (
+        <div>
+          <div>运行 {r.id}</div>
+          <div style={{ color: '#8a958f' }}>
+            第 {r.attempt} 次 · {TASK_STATUS_META[r.status].label}
+          </div>
+          <div style={{ color: '#8a958f' }}>
+            排队中的运行会立即取消；运行中的运行会请求停止，已产生的 step 与用量仍会保留。
+          </div>
+        </div>
+      ),
+      okText: '确认取消',
+      cancelText: '返回',
+      onOk: () => submitCancelRun(r),
+    });
+  }
+
+  async function submitCancelRun(r: AdminTaskDetailDto['runs'][number]) {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setBusy(true);
+    setError('');
+    const taskId = detailIdRef.current;
+    const reopenRunId = run?.id ?? null;
+    try {
+      let failed: unknown = null;
+      try {
+        await adminCancelRun(r.id);
+        message.success('取消已受理');
+      } catch (err) {
+        failed = err;
+      }
+      if (failed && (isUnauthorized(failed) || isForbidden(failed))) {
+        handleErr(failed);
+        return;
+      }
+      // 即便失败也刷新：409 等冲突通常意味着页面状态已过期，需要让运营看到真实状态。
+      await refreshAfterAction(taskId);
+      if (reopenRunId && detailIdRef.current === taskId) await openRun(reopenRunId);
+      if (failed) handleErr(failed);
+    } finally {
+      inFlight.current = false;
+      setBusy(false);
+    }
+  }
+
+  function askRetryRun(r: AdminTaskDetailDto['runs'][number]) {
+    modal.confirm({
+      title: '重试该运行？',
+      content: (
+        <div>
+          <div>运行 {r.id}</div>
+          <div style={{ color: '#8a958f' }}>
+            第 {r.attempt} 次 · {TASK_STATUS_META[r.status].label}
+          </div>
+          <div style={{ color: '#8a958f' }}>将基于任务目标创建一次新运行并重新排队。</div>
+        </div>
+      ),
+      okText: '确认重试',
+      cancelText: '返回',
+      onOk: () => submitRetryRun(r),
+    });
+  }
+
+  async function submitRetryRun(r: AdminTaskDetailDto['runs'][number]) {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setBusy(true);
+    setError('');
+    const taskId = detailIdRef.current;
+    const reopenRunId = run?.id ?? null;
+    try {
+      let failed: unknown = null;
+      let retried: RetryRunResultDto | null = null;
+      try {
+        retried = await adminRetryRun(r.id);
+        message.success(`已重试，新运行 attempt ${retried.attempt} 已排队`);
+      } catch (err) {
+        failed = err;
+      }
+      if (failed && (isUnauthorized(failed) || isForbidden(failed))) {
+        handleErr(failed);
+        return;
+      }
+      // 即便失败也刷新：409 等冲突通常意味着页面状态已过期，需要让运营看到真实状态。
+      await refreshAfterAction(taskId);
+      // 重试成功后直接打开新运行，运营可继续查看排队/执行进度；失败则保持原运行卡片。
+      const nextRunId = retried?.runId ?? reopenRunId;
+      if (nextRunId && detailIdRef.current === taskId) await openRun(nextRunId);
+      if (failed) handleErr(failed);
+    } finally {
+      inFlight.current = false;
+      setBusy(false);
+    }
+  }
+
   const columns: TableColumnsType<AdminTaskItemDto> = [
     { title: '任务', dataIndex: 'id', width: 280, ellipsis: true },
     { title: '会话', dataIndex: 'sessionId', width: 240, ellipsis: true },
@@ -206,9 +339,21 @@ export default function AdminTasksPage() {
       title: '状态',
       dataIndex: 'status',
       width: 110,
-      render: (v: string) => <Tag>{v}</Tag>,
+      render: (v: RunStatus) => taskStatusTag(v),
     },
-    { title: '最近运行', dataIndex: 'latestRunStatus', width: 120, render: (v: string | null) => v || '—' },
+    {
+      title: '最近运行',
+      dataIndex: 'latestRunStatus',
+      width: 120,
+      render: (v: RunStatus | null) => taskStatusTag(v),
+    },
+    { title: '尝试次数', dataIndex: 'attempts', width: 90, align: 'right' },
+    {
+      title: '排队时间',
+      dataIndex: 'queuedAt',
+      width: 180,
+      render: (v: string) => (v ? formatTime(v) : '—'),
+    },
     {
       title: '创建时间',
       dataIndex: 'createdAt',
@@ -229,12 +374,17 @@ export default function AdminTasksPage() {
 
   const runColumns: TableColumnsType<AdminTaskDetailDto['runs'][number]> = [
     { title: '运行', dataIndex: 'id', width: 260, ellipsis: true },
-    { title: '状态', dataIndex: 'status', width: 100, render: (v: string) => <Tag>{v}</Tag> },
+    {
+      title: '状态',
+      dataIndex: 'status',
+      width: 100,
+      render: (v: RunStatus) => taskStatusTag(v),
+    },
     {
       title: '开始',
       dataIndex: 'startedAt',
       width: 180,
-      render: (v: string) => formatTime(v),
+      render: (v: string | null) => (v ? formatTime(v) : '—'),
     },
     {
       title: '结束',
@@ -246,11 +396,25 @@ export default function AdminTasksPage() {
     {
       title: '操作',
       key: 'actions',
-      width: 110,
+      width: 230,
       render: (_: unknown, r) => (
-        <Button size="small" onClick={() => void openRun(r.id)}>
-          查看 step
-        </Button>
+        <Space size={4}>
+          <Button size="small" onClick={() => void openRun(r.id)}>
+            查看 step
+          </Button>
+          {/* 只有排队/运行中的运行可取消；已完成类状态不可取消。 */}
+          {r.status === 'running' || r.status === 'queued' ? (
+            <Button size="small" danger disabled={busy} onClick={() => askCancelRun(r)}>
+              取消
+            </Button>
+          ) : null}
+          {/* 只有失败/已取消的运行可重试；运行中或已完成的不允许重复排队。 */}
+          {r.status === 'failed' || r.status === 'canceled' ? (
+            <Button size="small" disabled={busy} onClick={() => askRetryRun(r)}>
+              重试
+            </Button>
+          ) : null}
+        </Space>
       ),
     },
   ];
@@ -281,7 +445,9 @@ export default function AdminTasksPage() {
         <Typography.Title level={4} style={{ margin: 0 }}>
           任务与运行
         </Typography.Title>
-        <Typography.Text type="secondary">只读排障：任务、运行、step 与用量。</Typography.Text>
+        <Typography.Text type="secondary">
+          任务运行排障：查看任务、运行、step 与用量，并可取消或重试运行。
+        </Typography.Text>
       </div>
 
       {error ? <Alert type="error" showIcon message={error} /> : null}
@@ -332,6 +498,7 @@ export default function AdminTasksPage() {
                 { value: 'queued', label: '排队中' },
                 { value: 'done', label: '完成' },
                 { value: 'failed', label: '失败' },
+                { value: 'canceled', label: '已取消' },
               ]}
             />
           </Space>
@@ -344,7 +511,7 @@ export default function AdminTasksPage() {
           loading={loading}
           columns={columns}
           dataSource={items}
-          scroll={{ x: 1200 }}
+          scroll={{ x: 1400 }}
           locale={{ emptyText: '没有匹配的任务' }}
           pagination={{
             current: page,
@@ -375,7 +542,7 @@ export default function AdminTasksPage() {
               size="small"
               columns={runColumns}
               dataSource={detail.runs}
-              scroll={{ x: 900 }}
+              scroll={{ x: 1100 }}
               pagination={false}
               locale={{ emptyText: '暂无运行' }}
             />
@@ -403,14 +570,24 @@ export default function AdminTasksPage() {
               >
                 <Space direction="vertical" size={12} style={{ width: '100%' }}>
                   <Descriptions column={3} size="small" bordered>
-                    <Descriptions.Item label="状态">{run.status}</Descriptions.Item>
+                    <Descriptions.Item label="状态">
+                      {taskStatusTag(run.status)}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="尝试">第 {run.attempt} 次</Descriptions.Item>
+                    <Descriptions.Item label="积分">{run.usage?.credits ?? '—'}</Descriptions.Item>
                     <Descriptions.Item label="输入 tokens">
                       {run.usage?.inputTokens ?? 0}
                     </Descriptions.Item>
                     <Descriptions.Item label="输出 tokens">
                       {run.usage?.outputTokens ?? 0}
                     </Descriptions.Item>
-                    <Descriptions.Item label="积分">{run.usage?.credits ?? '—'}</Descriptions.Item>
+                    <Descriptions.Item label="断点续跑" span={3}>
+                      {run.checkpoint
+                        ? `第 ${run.checkpoint.round} 轮 · seq ${run.checkpoint.seq} · ${formatTime(
+                            run.checkpoint.updatedAt,
+                          )}`
+                        : '—'}
+                    </Descriptions.Item>
                   </Descriptions>
 
                   {timeline ? (
