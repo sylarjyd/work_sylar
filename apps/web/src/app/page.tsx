@@ -14,6 +14,7 @@ import {
   type AttachmentKind,
   type AttachmentRef,
   type ClientModelDto,
+  type RunStatus,
   type SessionSummary,
 } from '@ai-office/shared';
 import { AppShell } from '../components/app-shell';
@@ -30,8 +31,13 @@ import {
   IconX,
 } from '../components/icons';
 import { errorText } from '@ai-office/web-core';
-import { createSseParser } from '../lib/sse-parser';
 import {
+  consumeRunStream,
+  createRunStreamState,
+  type RunStreamHandlers,
+} from '../lib/run-stream';
+import {
+  cancelRun,
   confirmRun,
   createSession,
   deleteAttachment,
@@ -42,6 +48,7 @@ import {
   listAssistants,
   listModels,
   listSessions,
+  streamRun,
   streamTask,
   uploadAttachment,
 } from '../lib/api';
@@ -191,6 +198,9 @@ export default function Home() {
   const [running, setRunning] = useState(false);
   const [error, setError] = useState('');
   const [runId, setRunId] = useState('');
+  const [runStatus, setRunStatus] = useState<RunStatus | null>(null);
+  const [queuePosition, setQueuePosition] = useState<number | null>(null);
+  const [stopping, setStopping] = useState(false);
   const [decisions, setDecisions] = useState<Record<string, boolean>>({});
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [models, setModels] = useState<ClientModelDto[]>([]);
@@ -214,6 +224,8 @@ export default function Home() {
   const objectUrlsRef = useRef(new Set<string>());
   const artifactReqRef = useRef(0);
   const lastUserScrollRef = useRef(0);
+  // 重连游标：seq 从 0 开始，未收到任何 step 时用 -1 从头回放。
+  const lastSeqRef = useRef(-1);
   pendingRef.current = pendingAttachments;
 
   useEffect(() => {
@@ -355,6 +367,8 @@ export default function Home() {
     setSubmittedGoal('');
     setDecisions({});
     setError('');
+    setRunStatus(null);
+    setQueuePosition(null);
     stickToBottomRef.current = true;
     artifactReqRef.current += 1;
     setArtifacts([]);
@@ -480,6 +494,54 @@ export default function Home() {
     setRunning(true);
     setError('');
     setDecisions({});
+    // 新一轮开始：清掉上一轮的运行态与游标，避免停止/重连误挂到旧运行。
+    setRunId('');
+    setRunStatus(null);
+    setQueuePosition(null);
+    setStopping(false);
+    lastSeqRef.current = -1;
+    const st = createRunStreamState();
+    // 事件流只负责推进状态机，React 副作用集中在这里，初连与重连行为一致。
+    const handlers: RunStreamHandlers = {
+      onStep(ev) {
+        lastSeqRef.current = st.lastSeq;
+        if (typeof ev.runId === 'string' && ev.runId) setRunId(ev.runId);
+        // 收到步骤说明已经开始执行，清掉排队提示。
+        setRunStatus((prev) => (prev === 'queued' ? 'running' : prev));
+        setQueuePosition(null);
+        setEvents((prev) => [...prev, ev]);
+        if (ev.type === 'artifact') {
+          setArtifacts((prev) => [
+            {
+              id: '',
+              kind: String(ev.payload.kind ?? 'docx') as ArtifactDto['kind'],
+              filename: String(ev.payload.filename ?? ''),
+              size: Number(ev.payload.size ?? 0),
+              version: 0,
+              createdAt: new Date().toISOString(),
+            },
+            ...prev,
+          ]);
+        }
+      },
+      onStatus(status, position) {
+        if (st.runId) setRunId(st.runId);
+        setRunStatus(status);
+        setQueuePosition(position);
+      },
+      onDone(status) {
+        setRunStatus(status);
+      },
+      onError(message) {
+        setError(message);
+        setRunStatus((prev) => (prev === 'canceled' ? prev : 'failed'));
+        setQueuePosition(null);
+      },
+      onTerminal() {
+        // 终态到达即结束「正在停止…」，不必等 run() 的 finally（重连期间保持禁用）。
+        setStopping(false);
+      },
+    };
     composerRef.current?.focus();
     let sid = sessionId;
     try {
@@ -509,38 +571,7 @@ export default function Home() {
         const detail = await res.text().catch(() => '');
         throw new Error(`stream_failed_${res.status}${detail ? `: ${detail}` : ''}`);
       }
-      if (!res.body) throw new Error('no body');
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      const parse = createSseParser();
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        for (const m of parse(decoder.decode(value, { stream: true }))) {
-          if (m.event === 'step') {
-            const ev = m.data as AgentEvent;
-            setRunId(ev.runId);
-            setEvents((prev) => [...prev, ev]);
-            if (ev.type === 'artifact') {
-              setArtifacts((prev) => [
-                {
-                  id: '',
-                  kind: String(ev.payload.kind ?? 'docx') as ArtifactDto['kind'],
-                  filename: String(ev.payload.filename ?? ''),
-                  size: Number(ev.payload.size ?? 0),
-                  version: 0,
-                  createdAt: new Date().toISOString(),
-                },
-                ...prev,
-              ]);
-            }
-          }
-          if (m.event === 'error') {
-            const d = m.data as { message?: unknown } | null;
-            setError(d && typeof d.message === 'string' ? d.message : JSON.stringify(m.data));
-          }
-        }
-      }
+      await consumeRunStream(res, st, handlers);
     } catch (err) {
       if (isUnauthorized(err)) {
         router.push('/login');
@@ -548,7 +579,49 @@ export default function Home() {
       }
       setError(errorText(err));
     } finally {
+      // 流在没有终态的情况下断开（网络抖动/中间层超时）：本次发送已有 runId 时重连一次，
+      // 用 afterSeq 补回断档事件。历史会话不会走到这里（run() 只在发送时调用）。
+      // 取消也一样重连：终态帧丢失时，由这唯一一次重连回放 status(canceled)+done 收尾。
+      if (!st.terminal && st.runId) {
+        try {
+          const res = await streamRun(st.runId, lastSeqRef.current);
+          if (!res.ok) throw new Error(`stream_failed_${res.status}`);
+          // 重连成功：清掉刚才断线瞬间留下的临时错误，后续若再有 error 事件会重新写入。
+          setError('');
+          await consumeRunStream(res, st, handlers);
+        } catch (err) {
+          if (isUnauthorized(err)) {
+            router.push('/login');
+          } else {
+            setError('连接已断开，可刷新恢复');
+          }
+        }
+      }
+      // 未收到终态时也要解除「正在停止…」，否则按钮会一直卡在禁用态。
       setRunning(false);
+      setStopping(false);
+    }
+  }
+
+  async function stopRun() {
+    if (!runId || stopping) return;
+    setStopping(true);
+    try {
+      // 不本地结束 running：等取消的终态事件到达，由事件流统一收尾。
+      const result = await cancelRun(runId);
+      // 取消已受理但终态帧可能还在路上：保持 stopping，由 onTerminal 或 run() 收尾恢复。
+      if (result.status === 'done' || result.status === 'failed' || result.status === 'canceled') {
+        setRunStatus(result.status);
+      }
+    } catch (err) {
+      if (isUnauthorized(err)) {
+        router.push('/login');
+        setStopping(false);
+        return;
+      }
+      // 取消失败时运行可能仍在继续：恢复按钮，并提示可重试。
+      setStopping(false);
+      setError(errorText(err));
     }
   }
 
@@ -771,6 +844,18 @@ export default function Home() {
           </button>
           <span className="wb-composer-hint">Enter 发送 · Shift + Enter 换行</span>
           <div className="spacer" />
+          {running && runId && (
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => void stopRun()}
+              disabled={stopping}
+              aria-label={stopping ? '正在停止' : '停止执行'}
+              title={stopping ? '正在停止' : '停止执行'}
+            >
+              {stopping ? '正在停止…' : '停止'}
+            </button>
+          )}
           <button
             type="button"
             className="wb-send"
@@ -822,7 +907,16 @@ export default function Home() {
       </div>
 
       <div className="wb-sr-only" role="status" aria-live="polite">
-        {running ? '智能体执行中' : submittedGoal && events.length > 0 ? '执行已结束' : ''}
+        {/* 唯一的读屏播报区：可见状态块只是视觉反馈，不再各自注册 live region，避免重复朗读。 */}
+        {running
+          ? runStatus === 'queued'
+            ? `排队中…${queuePosition !== null ? `（前方 ${queuePosition} 个任务）` : ''}`
+            : '智能体执行中…'
+          : runStatus === 'canceled'
+            ? '已取消'
+            : submittedGoal && events.length > 0
+              ? '执行已结束'
+              : ''}
       </div>
 
       {error && (
@@ -881,8 +975,13 @@ export default function Home() {
                 {running && (
                   <div className="wb-running">
                     <span className="wb-spinner" />
-                    智能体执行中…
+                    {runStatus === 'queued'
+                      ? `排队中…${queuePosition !== null ? `（前方 ${queuePosition} 个任务）` : ''}`
+                      : '智能体执行中…'}
                   </div>
+                )}
+                {!running && runStatus === 'canceled' && (
+                  <div className="wb-running">已取消</div>
                 )}
               </div>
 

@@ -151,6 +151,19 @@ export async function listArtifacts(sessionId: string): Promise<ArtifactDto[]> {
   return (await res.json()) as ArtifactDto[];
 }
 
+/** 取消运行：排队中的直接撤销，执行中的交由控制总线通知；终态 run 幂等返回当前状态。 */
+export async function cancelRun(runId: string): Promise<{ status: string }> {
+  const res = await authFetch(`/api/runs/${runId}/cancel`, { method: 'POST' });
+  if (!res.ok) throw new Error(`cancel_failed_${res.status}`);
+  return (await res.json()) as { status: string };
+}
+
+/** 断线重连的事件流：回放 afterSeq 之后的落库步骤，再接实时事件。 */
+export async function streamRun(runId: string, afterSeq?: number): Promise<Response> {
+  const q = afterSeq !== undefined ? `?afterSeq=${afterSeq}` : '';
+  return authFetch(`/api/runs/${runId}/stream${q}`);
+}
+
 /** 提交确认决策：JWT 走请求头。BFF 经控制总线转交给 runtime，只能确认已受理。 */
 export async function confirmRun(
   runId: string,

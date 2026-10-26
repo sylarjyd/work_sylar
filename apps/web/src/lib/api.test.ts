@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   authErrorMessage,
+  cancelRun,
   confirmRun,
   isUnauthorized,
   listConnectors,
@@ -10,6 +11,7 @@ import {
   getBillingSummary,
   getUsage,
   listModels,
+  streamRun,
   streamTask,
   uploadAttachment,
 } from './api';
@@ -38,6 +40,50 @@ describe('confirmRun', () => {
     const headers = (init.headers ?? {}) as Record<string, string>;
     expect(headers.traceparent).toMatch(/^00-[0-9a-f]{32}-[0-9a-f]{16}-01$/);
     expect(headers['x-request-id']).toMatch(/^[A-Za-z0-9-]{1,64}$/);
+  });
+});
+
+describe('运行控制与断线重连', () => {
+  it('cancelRun 调用取消端点', async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ status: 'canceled' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const out = await cancelRun('r1');
+    expect(out).toEqual({ status: 'canceled' });
+
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toContain('/api/runs/r1/cancel');
+    expect(init.method).toBe('POST');
+  });
+
+  it('cancelRun 失败时抛出可识别的错误码', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 404 })));
+    await expect(cancelRun('r1')).rejects.toThrow('cancel_failed_404');
+  });
+
+  it('streamRun 带上 afterSeq', async () => {
+    const fetchMock = vi.fn(async () => new Response('', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await streamRun('r1', 7);
+    const [url] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(String(url)).toContain('/api/runs/r1/stream?afterSeq=7');
+  });
+
+  it('streamRun 不带 afterSeq 时没有查询串', async () => {
+    const fetchMock = vi.fn(async () => new Response('', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await streamRun('r1');
+    const [url] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toContain('/api/runs/r1/stream');
+    expect(url).not.toContain('afterSeq');
   });
 });
 
