@@ -104,7 +104,14 @@ export class TasksService {
             data: { sessionId, goal, status: 'running' },
           });
           const run = await tx.run.create({
-            data: { id: runId, taskId: task.id, status: 'running', traceId: traceId ?? null },
+            // startedAt 已去掉数据库默认值；过渡期显式写入，Task 9 改为 queued 后由执行器写入。
+            data: {
+              id: runId,
+              taskId: task.id,
+              status: 'running',
+              startedAt: new Date(),
+              traceId: traceId ?? null,
+            },
           });
           // 用当前最大 seq + 1 而不是长度：历史消息删除后 seq 会有空洞。
           const nextSeq = prior.length > 0 ? prior[prior.length - 1].seq + 1 : 0;
