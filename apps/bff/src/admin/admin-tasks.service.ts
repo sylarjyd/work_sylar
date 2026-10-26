@@ -6,6 +6,7 @@ import type {
   AdminTaskDetailDto,
   AdminTaskItemDto,
   PageDto,
+  RunStatus,
 } from '@ai-office/shared';
 import { PrismaService } from '../db/prisma.service';
 import { AuditService } from '../audit/audit.service';
@@ -15,6 +16,15 @@ import { buildTimelineNodes, TIMELINE_STEP_LIMIT } from './run-timeline';
 
 /** 列表/详情中的目标只做预览，避免管理端一次拉回超长 prompt。 */
 const GOAL_PREVIEW_LIMIT = 200;
+
+const RUN_STATUSES = ['queued', 'running', 'done', 'failed', 'canceled'] as const;
+
+/** 数据库 status 是自由字符串；对外契约已收窄，未知历史值归为 failed 以免管理端崩溃。 */
+function asRunStatus(value: string): RunStatus {
+  return (RUN_STATUSES as readonly string[]).includes(value)
+    ? (value as RunStatus)
+    : 'failed';
+}
 
 // 最近一次运行用于列表/详情的状态摘要，只取状态字段。
 const LATEST_RUN_INCLUDE = {
@@ -38,8 +48,12 @@ function toItem(row: TaskWithLatestRun): AdminTaskItemDto {
     sessionId: row.sessionId,
     // 按码点截断，避免切裂 emoji 等代理对。
     goal: Array.from(row.goal).slice(0, GOAL_PREVIEW_LIMIT).join(''),
-    status: row.status,
-    latestRunStatus: row.runs[0]?.status ?? null,
+    status: asRunStatus(row.status),
+    latestRunStatus: row.runs[0] ? asRunStatus(row.runs[0].status) : null,
+    attempts: row.attempts,
+    queuedAt: (row.queuedAt ?? row.createdAt).toISOString(),
+    startedAt: row.startedAt?.toISOString() ?? null,
+    endedAt: row.endedAt?.toISOString() ?? null,
     createdAt: row.createdAt.toISOString(),
   };
 }
@@ -114,7 +128,8 @@ export class AdminTasksService {
       ...toItem(row),
       runs: runs.map((r) => ({
         id: r.id,
-        status: r.status,
+        attempt: r.attempt,
+        status: asRunStatus(r.status),
         startedAt: r.startedAt?.toISOString() ?? null,
         endedAt: r.endedAt?.toISOString() ?? null,
         credits: creditsByRun.get(r.id) ?? null,
@@ -133,6 +148,7 @@ export class AdminTasksService {
       include: {
         steps: { orderBy: { seq: 'asc' }, skip, take },
         _count: { select: { steps: true } },
+        checkpoint: { select: { round: true, seq: true, updatedAt: true } },
       },
     });
     if (!row) throw new NotFoundException('run_not_found');
@@ -150,10 +166,19 @@ export class AdminTasksService {
     return {
       id: row.id,
       taskId: row.taskId,
+      attempt: row.attempt,
       traceId: row.traceId,
-      status: row.status,
+      status: asRunStatus(row.status),
       startedAt: row.startedAt?.toISOString() ?? null,
       endedAt: row.endedAt?.toISOString() ?? null,
+      cancelRequestedAt: row.cancelRequestedAt?.toISOString() ?? null,
+      checkpoint: row.checkpoint
+        ? {
+            round: row.checkpoint.round,
+            seq: row.checkpoint.seq,
+            updatedAt: row.checkpoint.updatedAt.toISOString(),
+          }
+        : null,
       steps: {
         items: row.steps.map((s) => ({
           id: s.id,
