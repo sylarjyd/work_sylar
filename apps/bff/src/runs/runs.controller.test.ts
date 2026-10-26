@@ -2,7 +2,7 @@ import 'reflect-metadata';
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import { Test } from '@nestjs/testing';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
-import { NotFoundException } from '@nestjs/common';
+import { ConflictException, NotFoundException } from '@nestjs/common';
 import type { FastifyReply } from 'fastify';
 import { RunsController } from './runs.controller';
 import { RunsService } from './runs.service';
@@ -11,6 +11,7 @@ import { SessionsService } from '../sessions/sessions.service';
 import { ModelCatalogService } from '../models/model-catalog.service';
 import { PrismaService } from '../db/prisma.service';
 import { RunRelayService } from '../queue/run-relay.service';
+import { QueueFullError } from '../queue/run-queue.service';
 import { RUN_CONTROL_BUS } from '../queue/queue.tokens';
 import { signToken } from '../auth/jwt';
 
@@ -31,6 +32,17 @@ let cancelError: unknown;
 const cancel = vi.fn(async () => {
   if (cancelError) throw cancelError;
   return cancelResult;
+});
+/** 重试服务桩：本文件只验证 HTTP 状态/错误码映射。 */
+let retryResult: { runId: string; taskId: string; attempt: number } = {
+  runId: 'r2',
+  taskId: 'task1',
+  attempt: 2,
+};
+let retryError: unknown;
+const retry = vi.fn(async () => {
+  if (retryError) throw retryError;
+  return retryResult;
 });
 const fakePrisma = {
   user: {
@@ -69,7 +81,7 @@ beforeAll(async () => {
       // SessionsService 依赖模型目录；本文件只验证 run 归属，给一个不会被调用的桩。
       { provide: ModelCatalogService, useValue: { available: async () => ({ models: [], defaultModel: null }) } },
       { provide: RunRelayService, useValue: { attach } },
-      { provide: RunsService, useValue: { cancel } },
+      { provide: RunsService, useValue: { cancel, retry } },
       { provide: RUN_CONTROL_BUS, useValue: { publish: publishControl } },
     ],
   }).compile();
@@ -83,6 +95,9 @@ beforeEach(() => {
   cancelResult = { status: 'canceled' };
   cancelError = undefined;
   cancel.mockClear();
+  retryResult = { runId: 'r2', taskId: 'task1', attempt: 2 };
+  retryError = undefined;
+  retry.mockClear();
   attach.mockClear();
   publishControl.mockReset().mockResolvedValue(undefined);
 });
@@ -293,5 +308,83 @@ describe('RunsController', () => {
 
     expect(res.statusCode).toBe(404);
     expect(res.json()).toEqual({ error: 'run_not_found' });
+  });
+
+  it('retry：成功时返回 202 与新运行信息', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/runs/r1/retry',
+      headers: auth(),
+    });
+
+    expect(res.statusCode).toBe(202);
+    expect(res.json()).toEqual({ runId: 'r2', taskId: 'task1', attempt: 2 });
+    expect(retry).toHaveBeenCalledWith('r1', 't1', 'u1');
+  });
+
+  it('retry：run 不存在或非本人时映射为 404 run_not_found', async () => {
+    retryError = new NotFoundException('run_not_found');
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/runs/r1/retry',
+      headers: auth(),
+    });
+
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toEqual({ error: 'run_not_found' });
+  });
+
+  it('retry：白名单内的冲突码映射为 409', async () => {
+    for (const code of [
+      'run_not_retryable',
+      'task_snapshot_missing',
+      'task_busy',
+      'task_not_retryable',
+    ]) {
+      retryError = new ConflictException(code);
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/runs/r1/retry',
+        headers: auth(),
+      });
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toEqual({ error: code });
+    }
+  });
+
+  it('retry：白名单外的冲突码不按业务码透出，交给默认异常体处理', async () => {
+    retryError = new ConflictException('internal_conflict');
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/runs/r1/retry',
+      headers: auth(),
+    });
+
+    // 未知码不能变成稳定的对外契约 `{error:<code>}`；重新抛出后由默认过滤器渲染。
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).not.toEqual({ error: 'internal_conflict' });
+  });
+
+  it('retry：队列已满映射为 429 queue_full', async () => {
+    retryError = new QueueFullError('t1');
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/runs/r1/retry',
+      headers: auth(),
+    });
+
+    expect(res.statusCode).toBe(429);
+    expect(res.json()).toEqual({ error: 'queue_full' });
+  });
+
+  it('retry：其它异常返回 500', async () => {
+    retryError = new Error('db down');
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/runs/r1/retry',
+      headers: auth(),
+    });
+
+    expect(res.statusCode).toBe(500);
   });
 });

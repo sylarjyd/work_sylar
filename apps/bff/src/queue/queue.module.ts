@@ -30,6 +30,7 @@ import { LocalRunEventBus, RedisRunEventBus, type RunEventBus } from './run-even
 import { RunExecutor } from './run-executor.service';
 import type { RunJob } from './run-job';
 import { RunQueueService } from './run-queue.service';
+import { RunRecoveryService } from './run-recovery.service';
 import { RunRelayService } from './run-relay.service';
 import { RunWorker } from './run-worker';
 
@@ -95,6 +96,8 @@ export class QueueModule implements OnApplicationShutdown {
       RunExecutor,
       RunQueueService,
       RunRelayService,
+      // 启动 + 周期恢复：仅队列模式生效，内部按 config/queue 自行短路。
+      RunRecoveryService,
       RunWorker,
     ];
 

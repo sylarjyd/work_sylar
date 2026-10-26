@@ -7,20 +7,38 @@ import type { RunSnapshot } from '../queue/run-job';
 
 type Row = Record<string, any>;
 
-/** 按 Prisma where 语义匹配内存行：支持等值、in、gte、notIn（仅覆盖本服务用到的操作符）。 */
+/**
+ * 按 Prisma where 语义匹配内存行：支持等值、in、gte、lt、notIn、not。
+ * 多个操作符按「且」组合（如 `{ not: null, lt: before }`）。
+ */
 function matchesWhere(row: Row, where: Row): boolean {
   return Object.entries(where).every(([key, expected]) => {
     const actual = row[key];
     if (expected !== null && typeof expected === 'object' && !Array.isArray(expected)) {
       const op = expected as Record<string, any>;
-      if (Array.isArray(op.in)) return op.in.includes(actual);
-      if ('gte' in op) return actual >= op.gte;
-      if ('notIn' in op) return !op.notIn.includes(actual);
+      if (Array.isArray(op.in) && !op.in.includes(actual)) return false;
+      if ('gte' in op && !(actual >= op.gte)) return false;
+      if ('lt' in op && !(actual != null && actual < op.lt)) return false;
+      if ('notIn' in op && op.notIn.includes(actual)) return false;
+      if ('not' in op && actual === op.not) return false;
       // 关系过滤在本内存实现里不参与匹配。
       return true;
     }
     return actual === expected;
   });
+}
+
+/** 应用 updateMany 的 data：支持 Prisma 的 increment/decrement 原子操作。 */
+function applyData(row: Row, data: Row): void {
+  for (const [key, value] of Object.entries(data)) {
+    if (value !== null && typeof value === 'object' && 'increment' in value) {
+      row[key] = (row[key] ?? 0) + (value as Row).increment;
+    } else if (value !== null && typeof value === 'object' && 'decrement' in value) {
+      row[key] = (row[key] ?? 0) - (value as Row).decrement;
+    } else {
+      row[key] = value;
+    }
+  }
 }
 
 /** 构造一个最小的内存版 Prisma：只实现任务服务用到的方法。 */
@@ -38,6 +56,8 @@ function makeDb() {
     messageCreateCalls: 0,
     runUpdates: [] as Row[],
     taskUpdates: [] as Row[],
+    // 用例可在条件更新前插入钩子，模拟并发写入导致 CAS 落空。
+    hooks: {} as { beforeTaskUpdateMany?: () => void },
   };
 
   const sessionMessages = (sessionId: string) => db.messages.filter((m) => m.sessionId === sessionId);
@@ -80,8 +100,9 @@ function makeDb() {
       },
       // 条件更新：status/runId 等过滤条件按内存行逐项匹配。
       updateMany: async ({ where, data }: any) => {
+        db.hooks.beforeTaskUpdateMany?.();
         const rows = db.tasks.filter((t) => matchesWhere(t, where));
-        for (const row of rows) Object.assign(row, data);
+        for (const row of rows) applyData(row, data);
         return { count: rows.length };
       },
     },
@@ -115,6 +136,29 @@ function makeDb() {
         const rows = db.runs.filter((r) => matchesWhere(r, where));
         for (const row of rows) Object.assign(row, data);
         return { count: rows.length };
+      },
+      // 恢复扫描用：where 过滤 + startedAt/cancelRequestedAt 升序 + take；
+      // select 决定返回列，sessionId 通过 task 关系回填（对齐 Prisma 的形状）。
+      findMany: async ({ where, orderBy, take, select }: any) => {
+        let rows = db.runs.filter((r) => matchesWhere(r, where));
+        const field = orderBy?.startedAt
+          ? 'startedAt'
+          : orderBy?.cancelRequestedAt
+            ? 'cancelRequestedAt'
+            : null;
+        if (field) rows = [...rows].sort((a, b) => a[field] - b[field]);
+        if (typeof take === 'number') rows = rows.slice(0, take);
+        return rows.map((r) => {
+          const row: Row = {};
+          if (!select || select.id) row.id = r.id;
+          if (!select || select.taskId) row.taskId = r.taskId;
+          if (!select || select.startedAt) row.startedAt = r.startedAt ?? null;
+          if (!select || select.cancelRequestedAt) row.cancelRequestedAt = r.cancelRequestedAt ?? null;
+          if (select?.task) {
+            row.task = { sessionId: db.tasks.find((t) => t.id === r.taskId)?.sessionId };
+          }
+          return row;
+        });
       },
     },
     step: {
@@ -663,5 +707,189 @@ describe('TasksService', () => {
     const startedAt = ctx.db.runs[0].startedAt;
     await expect(svc.markRunning('r1', 'task1')).resolves.toBeUndefined();
     expect(ctx.db.runs[0].startedAt).toBe(startedAt);
+  });
+
+  it('createRetryRun 复用快照创建 attempt+1 的 run 并重置任务字段', async () => {
+    ctx.db.tasks.push({
+      id: 'task1',
+      sessionId: 's1',
+      status: 'failed',
+      attempts: 1,
+      input: { goal: '目标', messages: [] },
+      lastError: 'boom',
+      startedAt: new Date('2026-01-01T00:00:00Z'),
+      endedAt: new Date('2026-01-02T00:00:00Z'),
+    });
+
+    const result = await svc.createRetryRun('task1', 'trace-2');
+
+    expect(result).toEqual({ runId: 'run1', taskId: 'task1', sessionId: 's1', attempt: 2 });
+    expect(ctx.db.tasks[0]).toMatchObject({
+      status: 'queued',
+      // attempts 自增而不是重置为 1：重试次数要累计到任务上。
+      attempts: 2,
+      lastError: null,
+      startedAt: null,
+      endedAt: null,
+    });
+    expect(ctx.db.runs[0]).toMatchObject({
+      id: 'run1',
+      taskId: 'task1',
+      attempt: 2,
+      status: 'queued',
+      traceId: 'trace-2',
+    });
+    // 开始时间由执行器在真正启动时写入。
+    expect(ctx.db.runs[0].startedAt).toBeUndefined();
+    // 快照复用原 Task.input，不复制到新 run。
+    expect(ctx.db.tasks[0].input).toEqual({ goal: '目标', messages: [] });
+  });
+
+  it('createRetryRun 同样接受 canceled 任务', async () => {
+    ctx.db.tasks.push({
+      id: 'task1',
+      sessionId: 's1',
+      status: 'canceled',
+      attempts: 0,
+      input: { goal: '目标' },
+    });
+
+    await expect(svc.createRetryRun('task1', null)).resolves.toMatchObject({ attempt: 1 });
+    expect(ctx.db.tasks[0]).toMatchObject({ status: 'queued', attempts: 1 });
+  });
+
+  it('createRetryRun 并发重试 CAS 落空时抛 task_busy，且不新建 run', async () => {
+    ctx.db.tasks.push({
+      id: 'task1',
+      sessionId: 's1',
+      status: 'failed',
+      attempts: 1,
+      input: { goal: '目标' },
+    });
+    // 模拟另一个请求在读到 attempts 之后先完成了重试。
+    ctx.db.hooks.beforeTaskUpdateMany = () => {
+      ctx.db.tasks[0].attempts = 2;
+    };
+
+    await expect(svc.createRetryRun('task1', null)).rejects.toThrow('task_busy');
+    expect(ctx.db.runs).toHaveLength(0);
+  });
+
+  it('createRetryRun 任务缺失或快照为空时抛 task_snapshot_missing', async () => {
+    await expect(svc.createRetryRun('missing', null)).rejects.toThrow('task_snapshot_missing');
+
+    ctx.db.tasks.push({
+      id: 'task1',
+      sessionId: 's1',
+      status: 'failed',
+      attempts: 0,
+      input: null,
+    });
+    await expect(svc.createRetryRun('task1', null)).rejects.toThrow('task_snapshot_missing');
+    expect(ctx.db.runs).toHaveLength(0);
+  });
+
+  it('createRetryRun 只接受 failed/canceled，其它状态抛 task_not_retryable', async () => {
+    for (const status of ['queued', 'running', 'done']) {
+      ctx.db.tasks.push({
+        id: `task-${status}`,
+        sessionId: 's1',
+        status,
+        attempts: 1,
+        input: { goal: '目标' },
+      });
+      await expect(svc.createRetryRun(`task-${status}`, null)).rejects.toThrow(
+        'task_not_retryable',
+      );
+    }
+    expect(ctx.db.runs).toHaveLength(0);
+  });
+
+  it('failStaleRun 抢到 running 时把 run/task 一并收尾为 failed', async () => {
+    ctx.db.runs.push({ id: 'r1', taskId: 'task1', status: 'running' });
+    ctx.db.tasks.push({ id: 'task1', status: 'running' });
+
+    await expect(svc.failStaleRun('r1', 'task1', 'worker_lost')).resolves.toBe(true);
+
+    expect(ctx.db.runs[0]).toMatchObject({ status: 'failed' });
+    expect(ctx.db.runs[0].endedAt).toBeInstanceOf(Date);
+    expect(ctx.db.tasks[0]).toMatchObject({ status: 'failed', lastError: 'worker_lost' });
+    expect(ctx.db.tasks[0].endedAt).toBeInstanceOf(Date);
+  });
+
+  it('failStaleRun 在 run 已终态时返回 false，且不改写已正常结束的 task', async () => {
+    ctx.db.runs.push({ id: 'r1', taskId: 'task1', status: 'done' });
+    ctx.db.tasks.push({ id: 'task1', status: 'running' });
+
+    await expect(svc.failStaleRun('r1', 'task1', 'worker_lost')).resolves.toBe(false);
+    expect(ctx.db.runs[0].status).toBe('done');
+    // 条件更新落空后绝不能再动 task，否则会把并发收尾的结果覆盖成 failed。
+    expect(ctx.db.tasks[0].status).toBe('running');
+    expect(ctx.db.tasks[0].lastError).toBeUndefined();
+  });
+
+  it('failQueuedAttempt 只回收仍排队的 run/task，返回 true', async () => {
+    ctx.db.runs.push({ id: 'r2', taskId: 'task1', status: 'queued' });
+    ctx.db.tasks.push({ id: 'task1', status: 'queued' });
+
+    await expect(svc.failQueuedAttempt('r2', 'task1')).resolves.toBe(true);
+
+    expect(ctx.db.runs[0]).toMatchObject({ status: 'failed' });
+    expect(ctx.db.runs[0].endedAt).toBeInstanceOf(Date);
+    expect(ctx.db.tasks[0]).toMatchObject({ status: 'failed', lastError: 'enqueue_failed' });
+  });
+
+  it('failQueuedAttempt 在 run 已被 worker 接手后返回 false，不改写进行中的行', async () => {
+    ctx.db.runs.push({ id: 'r2', taskId: 'task1', status: 'running' });
+    ctx.db.tasks.push({ id: 'task1', status: 'running' });
+
+    await expect(svc.failQueuedAttempt('r2', 'task1')).resolves.toBe(false);
+    // 入队响应丢失但作业已写入 Redis：worker 可能已在执行或已完成，回滚必须让路。
+    expect(ctx.db.runs[0].status).toBe('running');
+    expect(ctx.db.tasks[0].status).toBe('running');
+    expect(ctx.db.tasks[0].lastError).toBeUndefined();
+  });
+
+  it('listStaleRunningRuns 按 status/startedAt 过滤，升序并受 limit 约束', async () => {
+    const before = new Date('2026-10-26T11:45:00Z');
+    ctx.db.tasks.push(
+      { id: 'task-old', sessionId: 's1' },
+      { id: 'task-old2', sessionId: 's4' },
+      { id: 'task-recent', sessionId: 's2' },
+      { id: 'task-null', sessionId: 's3' },
+    );
+    ctx.db.runs.push(
+      { id: 'r-old2', taskId: 'task-old2', status: 'running', startedAt: new Date('2026-10-26T11:30:00Z') },
+      { id: 'r-old', taskId: 'task-old', status: 'running', startedAt: new Date('2026-10-26T11:00:00Z') },
+      { id: 'r-recent', taskId: 'task-recent', status: 'running', startedAt: new Date('2026-10-26T11:59:00Z') },
+      { id: 'r-null', taskId: 'task-null', status: 'running', startedAt: null },
+      { id: 'r-done', taskId: 'task-old', status: 'done', startedAt: new Date('2026-10-26T10:00:00Z') },
+    );
+
+    await expect(svc.listStaleRunningRuns(before)).resolves.toEqual([
+      { id: 'r-old', taskId: 'task-old', sessionId: 's1', startedAt: new Date('2026-10-26T11:00:00Z') },
+      { id: 'r-old2', taskId: 'task-old2', sessionId: 's4', startedAt: new Date('2026-10-26T11:30:00Z') },
+    ]);
+    // 只取最旧的 limit 条，避免一次扫描打爆数据库。
+    await expect(svc.listStaleRunningRuns(before, 1)).resolves.toEqual([
+      { id: 'r-old', taskId: 'task-old', sessionId: 's1', startedAt: new Date('2026-10-26T11:00:00Z') },
+    ]);
+  });
+
+  it('listStaleCancelRequests 按 status/cancelRequestedAt 过滤，升序并受 limit 约束', async () => {
+    const before = new Date('2026-10-26T12:00:00Z');
+    ctx.db.runs.push(
+      { id: 'r-old2', status: 'running', cancelRequestedAt: new Date('2026-10-26T11:58:00Z') },
+      { id: 'r-old', status: 'running', cancelRequestedAt: new Date('2026-10-26T11:55:00Z') },
+      { id: 'r-recent', status: 'running', cancelRequestedAt: new Date('2026-10-26T12:00:30Z') },
+      { id: 'r-null', status: 'running', cancelRequestedAt: null },
+      { id: 'r-done', status: 'done', cancelRequestedAt: new Date('2026-10-26T10:00:00Z') },
+    );
+
+    await expect(svc.listStaleCancelRequests(before)).resolves.toEqual([
+      { id: 'r-old' },
+      { id: 'r-old2' },
+    ]);
+    await expect(svc.listStaleCancelRequests(before, 1)).resolves.toEqual([{ id: 'r-old' }]);
   });
 });

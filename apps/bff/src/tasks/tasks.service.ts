@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import {
   attachmentKindFor,
@@ -441,6 +441,138 @@ export class TasksService {
     await this.prisma.run.updateMany({
       where: { id: runId, status: { in: ['queued', 'running'] } },
       data: { cancelRequestedAt: new Date() },
+    });
+  }
+
+  /**
+   * 为失败/取消的任务创建一次重试：复用 Task.input 里固化的快照，只新增 Run 行。
+   * 必须在同一事务内完成「重置任务 + 建 run」，否则中途失败会留下 attempts 已加、
+   * 却没有可执行 run 的悬空任务。
+   */
+  async createRetryRun(
+    taskId: string,
+    traceId: string | null,
+  ): Promise<{ runId: string; taskId: string; sessionId: string; attempt: number }> {
+    return this.prisma.$transaction(async (tx) => {
+      const task = await tx.task.findUnique({
+        where: { id: taskId },
+        select: { id: true, attempts: true, status: true, input: true, sessionId: true },
+      });
+      // 快照缺失说明入队不完整或数据被清理，重试没有可执行的输入，必须拒绝。
+      if (!task || task.input == null) throw new ConflictException('task_snapshot_missing');
+      if (task.status !== 'failed' && task.status !== 'canceled') {
+        throw new ConflictException('task_not_retryable');
+      }
+
+      // 在自增前先固定新 attempt 的值：updateMany 之后行对象可能已被改写，
+      // 依赖自增后的内存值会让实现细节（ORM 返回的是快照还是引用）影响结果。
+      const attempt = task.attempts + 1;
+
+      // 用 attempts 做 CAS 而不是无条件 update：用户双击或并发请求会同时读到同一个
+      // attempts，只有先写入者能把 attempts 推进到下一值；后到者 0 行即输掉竞态，
+      // 从而保证「一次重试只建一个 run」。状态条件同时兜住并发收尾导致的非失败态。
+      const reset = await tx.task.updateMany({
+        where: {
+          id: taskId,
+          attempts: task.attempts,
+          status: { in: ['failed', 'canceled'] },
+        },
+        data: {
+          attempts: { increment: 1 },
+          status: 'queued',
+          lastError: null,
+          startedAt: null,
+          endedAt: null,
+        },
+      });
+      if (reset.count !== 1) throw new ConflictException('task_busy');
+
+      const run = await tx.run.create({
+        // startedAt 留给执行器在真正开始时写入，重试入队阶段仍视为未开始。
+        data: { taskId, attempt, status: 'queued', traceId },
+      });
+      return { runId: run.id, taskId, sessionId: task.sessionId, attempt };
+    });
+  }
+
+  /**
+   * 回收已失联的运行：只有抢到 run 的 running→failed 条件更新才算真正收尾。
+   * 若 run 恰好已正常结束，条件更新 0 行，绝不能再去改 task，否则会把刚写好的
+   * done/canceled 覆盖成 failed。task 未同步为 running 属于历史数据不一致，
+   * 这里只跳过而不抛错，日志由调用方负责。
+   */
+  async failStaleRun(runId: string, taskId: string, lastError: string): Promise<boolean> {
+    return this.prisma.$transaction(async (tx) => {
+      const endedAt = new Date();
+      const run = await tx.run.updateMany({
+        where: { id: runId, status: 'running' },
+        data: { status: 'failed', endedAt },
+      });
+      if (run.count === 0) return false;
+      await tx.task.updateMany({
+        where: { id: taskId, status: 'running' },
+        data: { status: 'failed', lastError, endedAt },
+      });
+      return true;
+    });
+  }
+
+  /**
+   * 重试入队失败后的回滚：只回收仍是 queued 的运行。
+   * queue.submit 可能已经写入 Redis、只是响应丢失后报错，此时 worker 仍会执行并正常收尾；
+   * 无条件覆盖会把 done/canceled 改写成 failed，并让客户端误以为可以再次重试。
+   */
+  async failQueuedAttempt(runId: string, taskId: string): Promise<boolean> {
+    return this.prisma.$transaction(async (tx) => {
+      const run = await tx.run.updateMany({
+        where: { id: runId, status: 'queued' },
+        data: { status: 'failed', endedAt: new Date() },
+      });
+      if (run.count === 0) return false;
+      await tx.task.updateMany({
+        where: { id: taskId, status: 'queued' },
+        data: { status: 'failed', lastError: 'enqueue_failed' },
+      });
+      return true;
+    });
+  }
+
+  /**
+   * 列出可能失联的运行，供启动/周期恢复扫描。
+   * 只取 startedAt 非空且早于阈值的行：startedAt 为空表示作业从未被取走，
+   * 不属于 worker 失联，本方法不负责这类排队侧滞留。
+   */
+  async listStaleRunningRuns(
+    before: Date,
+    limit = 100,
+  ): Promise<{ id: string; taskId: string; sessionId: string; startedAt: Date }[]> {
+    const rows = await this.prisma.run.findMany({
+      where: { status: 'running', startedAt: { not: null, lt: before } },
+      orderBy: { startedAt: 'asc' },
+      take: limit,
+      select: {
+        id: true,
+        taskId: true,
+        startedAt: true,
+        task: { select: { sessionId: true } },
+      },
+    });
+    // 查询条件已排除 null，这里断言以保持返回类型精确。
+    return rows.map((r) => ({
+      id: r.id,
+      taskId: r.taskId,
+      sessionId: r.task.sessionId,
+      startedAt: r.startedAt!,
+    }));
+  }
+
+  /** 列出取消请求已过期仍未生效的运行：控制消息可能发布在订阅建立之前，需要重发。 */
+  async listStaleCancelRequests(before: Date, limit = 100): Promise<{ id: string }[]> {
+    return this.prisma.run.findMany({
+      where: { status: 'running', cancelRequestedAt: { not: null, lt: before } },
+      orderBy: { cancelRequestedAt: 'asc' },
+      take: limit,
+      select: { id: true },
     });
   }
 }

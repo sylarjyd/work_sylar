@@ -1,5 +1,6 @@
 import {
   Body,
+  ConflictException,
   Controller,
   Get,
   Headers,
@@ -16,11 +17,24 @@ import type { ConfirmDecision } from '@ai-office/shared';
 import { TasksService } from '../tasks/tasks.service';
 import { RunsService } from './runs.service';
 import { RunRelayService } from '../queue/run-relay.service';
+import { QueueFullError } from '../queue/run-queue.service';
 import { RUN_CONTROL_BUS } from '../queue/queue.tokens';
 import type { RunControlBus } from '../queue/run-control-bus';
 import { JwtGuard } from '../auth/jwt.guard';
 import { CurrentUser } from '../auth/current-user';
 import type { JwtPayload } from '../auth/jwt';
+
+/**
+ * 重试接口允许透出的业务冲突码白名单。
+ * 只把这几类可操作语义固化成稳定的 `{error:<code>}` 契约；其它 ConflictException
+ * 原样上抛交给默认异常过滤器，避免未来新增的内部状态码被无意间变成对外契约。
+ */
+const RETRY_CONFLICT_CODES = new Set([
+  'run_not_retryable',
+  'task_snapshot_missing',
+  'task_busy',
+  'task_not_retryable',
+]);
 
 /**
  * 解析重连游标：只接受可选负号的十进制整数且 >= -1。
@@ -89,6 +103,37 @@ export class RunsController {
         reply.status(404).send({ error: 'run_not_found' });
         return;
       }
+      throw err;
+    }
+  }
+
+  /**
+   * 手动重试失败/取消的运行：新建 run 并入队，返回 202（已受理，尚未开始）。
+   * 归属校验在 RunsService 内先于任何副作用完成；非本人 run 统一 404，不泄露存在性。
+   */
+  @Post(':id/retry')
+  async retry(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') runId: string,
+    @Res() reply: FastifyReply,
+  ): Promise<void> {
+    try {
+      reply.status(202).send(await this.runs.retry(runId, user.tenantId, user.sub));
+    } catch (err) {
+      if (err instanceof NotFoundException) {
+        reply.status(404).send({ error: 'run_not_found' });
+        return;
+      }
+      // 队列已满与建单路径保持一致，客户端可据此提示稍后重试。
+      if (err instanceof QueueFullError) {
+        reply.status(429).send({ error: 'queue_full' });
+        return;
+      }
+      if (err instanceof ConflictException && RETRY_CONFLICT_CODES.has(err.message)) {
+        reply.status(409).send({ error: err.message });
+        return;
+      }
+      // 未知冲突码或其它异常交给默认异常过滤器（非 HttpException 会落 500）。
       throw err;
     }
   }

@@ -1,10 +1,12 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
-import type { CancelRunResultDto, RunStatus } from '@ai-office/shared';
+import { ConflictException, Inject, Injectable, Logger } from '@nestjs/common';
+import type { CancelRunResultDto, RetryRunResultDto, RunStatus } from '@ai-office/shared';
+import { currentTrace } from '@ai-office/telemetry';
 import { TasksService } from '../tasks/tasks.service';
 import { RunQueueService } from '../queue/run-queue.service';
 import { RUN_CONTROL_BUS, RUN_EVENT_BUS } from '../queue/queue.tokens';
 import type { RunControlBus } from '../queue/run-control-bus';
 import type { RunEventBus } from '../queue/run-event-bus';
+import { BFF_METRICS, type BffMetrics } from '../observability/observability.metrics';
 
 /** 已终结的运行不可再取消，重复请求幂等返回当前状态。 */
 function isTerminal(status: string): boolean {
@@ -26,6 +28,7 @@ export class RunsService {
     private readonly queue: RunQueueService,
     @Inject(RUN_CONTROL_BUS) private readonly control: RunControlBus,
     @Inject(RUN_EVENT_BUS) private readonly events: RunEventBus,
+    @Inject(BFF_METRICS) private readonly metrics: BffMetrics,
   ) {}
 
   async cancel(runId: string, tenantId: string, userId: string): Promise<CancelRunResultDto> {
@@ -49,6 +52,54 @@ export class RunsService {
     await this.tasks.markCancelRequested(runId);
     await this.control.publish(runId, { type: 'cancel' });
     return { status: 'running' };
+  }
+
+  /**
+   * 手动重试：在同一个 Task 上新建一个复用原快照的 Run，并把新 run 入队。
+   * 顺序刻意固定为「容量预检 → 建 run → 入队」：容量不足时绝不落新 run，
+   * 入队失败时再回滚刚建的行，避免留下永远无人执行的 queued run。
+   */
+  async retry(runId: string, tenantId: string, userId: string): Promise<RetryRunResultDto> {
+    const run = await this.tasks.findOwnedRun(runId, tenantId, userId);
+    // 只有失败/取消的运行能重试：排队中或运行中的任务已有作业在途，再建一个会重复执行。
+    if (run.status !== 'failed' && run.status !== 'canceled') {
+      throw new ConflictException('run_not_retryable');
+    }
+
+    // 队列模式下的容量预检；QueueFullError 原样上抛，由控制器映射为 429。
+    await this.queue.assertCapacity(tenantId);
+
+    const next = await this.tasks.createRetryRun(
+      run.taskId,
+      currentTrace()?.traceId ?? null,
+    );
+
+    try {
+      await this.queue.submit({
+        runId: next.runId,
+        taskId: next.taskId,
+        sessionId: next.sessionId,
+        tenantId,
+        userId,
+      });
+    } catch (err) {
+      // 作业没能提交：刚建的 run 不会有人执行，必须落库失败，否则前端会一直排队。
+      // 用 queued→failed 条件更新而非无条件覆盖：作业可能已写入 Redis 只是响应丢失，
+      // worker 随后仍会执行；回滚只清理还没人接手的行。
+      // 回滚自身失败只记日志，不能掩盖原始的入队异常（它是给客户端的真正原因）。
+      try {
+        await this.tasks.failQueuedAttempt(next.runId, next.taskId);
+      } catch (finishErr) {
+        this.logger.error(
+          `run ${next.runId} 重试入队失败后标记 failed 失败: ${(finishErr as Error).message}`,
+        );
+      }
+      throw err;
+    }
+
+    // 只有真正入队成功才计数，避免把容量/提交失败也算成一次重试。
+    this.metrics.runsRetried.inc();
+    return { runId: next.runId, taskId: next.taskId, attempt: next.attempt };
   }
 
   /** 终态事件发布失败不影响取消结果：DB 已是权威状态，客户端重连可回放。 */
