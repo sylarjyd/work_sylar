@@ -2722,6 +2722,14 @@ a {
   color: var(--wb-ink-2);
 }
 
+.wb-session-more {
+  flex: 0 0 auto;
+  padding: 8px 10px;
+  font-size: 11.5px;
+  color: var(--wb-ink-2);
+  text-align: center;
+}
+
 .wb-user {
   display: flex;
   flex: 0 0 auto;

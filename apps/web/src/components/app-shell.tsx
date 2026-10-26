@@ -9,6 +9,7 @@ import {
   useState,
   type KeyboardEvent,
   type ReactNode,
+  type UIEvent,
 } from 'react';
 import { Layout, Menu } from 'antd';
 import {
@@ -23,7 +24,7 @@ import {
   SearchOutlined,
   WalletOutlined,
 } from '@ant-design/icons';
-import type { SessionSummary } from '@ai-office/shared';
+import { SESSION_PAGE_SIZE, type SessionSummary } from '@ai-office/shared';
 import {
   clearToken,
   fetchMe,
@@ -48,6 +49,10 @@ interface AppShellProps {
   active: ActiveNav;
   children: ReactNode;
   sessions?: SessionSummary[];
+  /** 由外层管理会话列表时，告诉外壳是否还有下一页/正在加载。 */
+  sessionsHasMore?: boolean;
+  sessionsLoadingMore?: boolean;
+  onLoadMoreSessions?: () => void;
   sessionId?: string;
   onSelectSession?: (id: string) => void;
   onNewSession?: () => void;
@@ -66,6 +71,9 @@ export function AppShell({
   active,
   children,
   sessions,
+  sessionsHasMore,
+  sessionsLoadingMore,
+  onLoadMoreSessions,
   sessionId,
   onSelectSession,
   onNewSession,
@@ -77,6 +85,10 @@ export function AppShell({
   const [email, setEmail] = useState('');
   // 其它页面不传 sessions：由外壳自行拉取，保证最近会话在任意菜单下都能看到。
   const [remoteSessions, setRemoteSessions] = useState<SessionSummary[] | undefined>(undefined);
+  const [remoteCursor, setRemoteCursor] = useState<string | null>(null);
+  const [remoteLoadingMore, setRemoteLoadingMore] = useState(false);
+  // 滚动事件可能在重渲染前连发，用 ref 同步占位防止同一游标被并发请求两次。
+  const remoteLoadingRef = useRef(false);
   const [collapsed, setCollapsed] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -113,10 +125,11 @@ export function AppShell({
     const token = getToken();
     if (!token) return;
     let cancelled = false;
-    listSessions()
-      .then((list) => {
+    listSessions({ limit: SESSION_PAGE_SIZE })
+      .then((page) => {
         if (cancelled || getToken() !== token) return;
-        setRemoteSessions(list);
+        setRemoteSessions(page.items);
+        setRemoteCursor(page.nextCursor);
       })
       .catch((err) => {
         if (cancelled) return;
@@ -149,6 +162,37 @@ export function AppShell({
     () => filterSessions(historySessions ?? [], query),
     [historySessions, query],
   );
+
+  async function loadMoreRemote() {
+    if (remoteLoadingRef.current || remoteCursor === null) return;
+    const token = getToken();
+    if (!token) return;
+    remoteLoadingRef.current = true;
+    setRemoteLoadingMore(true);
+    try {
+      const page = await listSessions({ limit: SESSION_PAGE_SIZE, cursor: remoteCursor });
+      if (getToken() !== token) return;
+      setRemoteSessions((prev) => [...(prev ?? []), ...page.items]);
+      setRemoteCursor(page.nextCursor);
+    } catch (err) {
+      // 翻页失败保留游标，用户再次滑到底时可重试；只有掉登录才需要跳转。
+      if (isUnauthorized(err)) router.replace('/login');
+    } finally {
+      remoteLoadingRef.current = false;
+      setRemoteLoadingMore(false);
+    }
+  }
+
+  const hasMoreSessions = sessions !== undefined ? !!sessionsHasMore : remoteCursor !== null;
+  const loadingMoreSessions = sessions !== undefined ? !!sessionsLoadingMore : remoteLoadingMore;
+  const loadMoreSessions = sessions !== undefined ? onLoadMoreSessions : loadMoreRemote;
+
+  function onSessionListScroll(e: UIEvent<HTMLDivElement>) {
+    const el = e.currentTarget;
+    // 距底 64px 内就预取，避免滚动到底才看到空白等待。
+    if (el.scrollHeight - el.scrollTop - el.clientHeight > 64) return;
+    void loadMoreSessions?.();
+  }
 
   function persistCollapsed(next: boolean) {
     setCollapsed(next);
@@ -313,7 +357,7 @@ export function AppShell({
         {historySessions !== undefined && !collapsed && (
           <div className="wb-recent">
             <div className="wb-recent-label">最近</div>
-            <div className="wb-session-list">
+            <div className="wb-session-list" onScroll={onSessionListScroll}>
               {visibleSessions.length === 0 ? (
                 <div className="wb-side-empty">
                   {query ? '没有匹配的会话' : '暂无会话'}
@@ -333,6 +377,12 @@ export function AppShell({
                     <span className="wb-session-time">{relativeTime(s.createdAt)}</span>
                   </button>
                 ))
+              )}
+              {loadingMoreSessions && (
+                <div className="wb-session-more">加载中…</div>
+              )}
+              {!hasMoreSessions && (historySessions?.length ?? 0) > SESSION_PAGE_SIZE && (
+                <div className="wb-session-more">已加载全部</div>
               )}
             </div>
           </div>

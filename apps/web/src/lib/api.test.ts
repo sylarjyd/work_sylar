@@ -9,8 +9,10 @@ import {
   createSession,
   deleteAttachment,
   getBillingSummary,
+  getSession,
   getUsage,
   listModels,
+  listSessions,
   streamRun,
   streamTask,
   uploadAttachment,
@@ -320,6 +322,56 @@ describe('login 追踪头', () => {
     const headers = init.headers as Record<string, string>;
     expect(headers.traceparent).toMatch(/^00-[0-9a-f]{32}-[0-9a-f]{16}-01$/);
     expect(headers['x-request-id']).toMatch(/^[A-Za-z0-9-]{1,64}$/);
+  });
+});
+
+describe('历史会话分页', () => {
+  it('listSessions 透传 limit 与 cursor 并返回分页结构', async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ items: [{ id: 's1' }], nextCursor: 's1' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const page = await listSessions({ limit: 20, cursor: 'c1' });
+    expect(page.nextCursor).toBe('s1');
+    const [url] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(String(url)).toContain('/api/sessions?limit=20&cursor=c1');
+  });
+
+  it('listSessions 无参数时不带查询串', async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ items: [], nextCursor: null }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await listSessions();
+    const [url] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(String(url)).toContain('/api/sessions');
+    expect(String(url)).not.toContain('?');
+  });
+
+  it('getSession 走单会话摘要端点并编码 id', async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ id: 's 1', title: '旧会话' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const out = await getSession('s 1');
+    expect(out.title).toBe('旧会话');
+    const [url] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(String(url)).toContain('/api/sessions/s%201');
   });
 });
 

@@ -18,6 +18,7 @@ import type {
   MessageDto,
   PlanDto,
   SessionMode,
+  SessionPage,
   SessionSummary,
   UsageAggregateDto,
 } from '@ai-office/shared';
@@ -46,10 +47,24 @@ export {
   setToken,
 } from '@ai-office/web-core';
 
-export async function listSessions(): Promise<SessionSummary[]> {
-  const res = await authFetch('/api/sessions');
+/** 历史会话分页：首屏与下滑翻页同一接口，游标由后端返回。 */
+export async function listSessions(
+  opts: { limit?: number; cursor?: string } = {},
+): Promise<SessionPage> {
+  const params = new URLSearchParams();
+  if (opts.limit !== undefined) params.set('limit', String(opts.limit));
+  if (opts.cursor) params.set('cursor', opts.cursor);
+  const qs = params.toString();
+  const res = await authFetch(`/api/sessions${qs ? `?${qs}` : ''}`);
   if (!res.ok) throw new Error(`sessions_failed_${res.status}`);
-  return (await res.json()) as SessionSummary[];
+  return (await res.json()) as SessionPage;
+}
+
+/** 深链到首屏之外的旧会话时补齐摘要（标题/模型/助手信息）。 */
+export async function getSession(sessionId: string): Promise<SessionSummary> {
+  const res = await authFetch(`/api/sessions/${encodeURIComponent(sessionId)}`);
+  if (!res.ok) throw new Error(`session_failed_${res.status}`);
+  return (await res.json()) as SessionSummary;
 }
 
 /** 历史消息（user / assistant 两角色），用于回看会话。 */

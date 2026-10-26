@@ -4,12 +4,14 @@ import {
   isAssistantPermissionMode,
   isSessionMode,
   normalizeSkills,
+  SESSION_PAGE_SIZE,
   type AssistantPermissionMode,
   type AssistantSkillKey,
   type AttachmentRef,
   type CreateSessionRequest,
   type MessageDto,
   type SessionMode,
+  type SessionPage,
   type SessionSummary,
 } from '@ai-office/shared';
 import { PrismaService } from '../db/prisma.service';
@@ -54,14 +56,37 @@ export class SessionsService {
     private readonly catalog: ModelCatalogService,
   ) {}
 
-  async list(tenantId: string, userId: string): Promise<SessionSummary[]> {
-    // 归档会话对普通用户不可见。
+  async list(
+    tenantId: string,
+    userId: string,
+    opts: { limit?: number; cursor?: string } = {},
+  ): Promise<SessionPage> {
+    const limit = clampLimit(opts.limit);
+    const cursor = opts.cursor?.trim() || undefined;
+    // 归档会话对普通用户不可见。多取一条用于判断是否还有下一页，省掉额外 count。
+    // createdAt 可能重复，排序追加 id 兜底，游标翻页才不重不漏。
     const rows = await this.prisma.session.findMany({
       where: { tenantId, userId, status: { not: 'archived' } },
-      orderBy: { createdAt: 'desc' },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: limit + 1,
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
       include: { assistant: { select: { name: true } } },
     });
-    return rows.map(toSummary);
+    const items = rows.slice(0, limit).map(toSummary);
+    return {
+      items,
+      nextCursor: rows.length > limit ? items[items.length - 1].id : null,
+    };
+  }
+
+  /** 单个会话摘要：深链到首屏之外的旧会话时，前端用它补齐侧栏与选模信息。 */
+  async detail(sessionId: string, tenantId: string, userId: string): Promise<SessionSummary> {
+    const s = await this.prisma.session.findFirst({
+      where: { id: sessionId, tenantId, userId, status: { not: 'archived' } },
+      include: { assistant: { select: { name: true } } },
+    });
+    if (!s) throw new NotFoundException('session_not_found');
+    return toSummary(s);
   }
 
   async create(
@@ -219,4 +244,12 @@ function toSummary(s: {
     assistantName: s.assistant?.name ?? null,
     mode: isSessionMode(s.mode) ? s.mode : 'chat',
   };
+}
+
+/** 每页上限：前端只需要首屏 20 条，放大上限仅用于运维手工排查。 */
+const MAX_PAGE_SIZE = 100;
+
+function clampLimit(value: number | undefined): number {
+  if (value === undefined || !Number.isInteger(value) || value < 1) return SESSION_PAGE_SIZE;
+  return Math.min(value, MAX_PAGE_SIZE);
 }

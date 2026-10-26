@@ -7,6 +7,7 @@ import {
   ATTACHMENT_MAX_PER_MESSAGE,
   SESSION_MODES,
   SESSION_MODE_LABELS,
+  SESSION_PAGE_SIZE,
   attachmentKindLabel,
   type AgentEvent,
   type ArtifactDto,
@@ -45,6 +46,7 @@ import {
   createSession,
   deleteAttachment,
   downloadArtifact,
+  getSession,
   getToken,
   isUnauthorized,
   listArtifacts,
@@ -194,6 +196,11 @@ function EventRow({
 export default function Home() {
   const router = useRouter();
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  // 侧栏分页：首屏 20 条，滚动到底用游标续拉；新建会话只前插，不动游标。
+  const [sessionsCursor, setSessionsCursor] = useState<string | null>(null);
+  const [sessionsLoadingMore, setSessionsLoadingMore] = useState(false);
+  // 滚动事件可能在重渲染前连发，用 ref 同步占位防止同一游标被并发请求两次。
+  const sessionsLoadingRef = useRef(false);
   const [sessionId, setSessionId] = useState<string>('');
   const [goal, setGoal] = useState('');
   const [submittedGoal, setSubmittedGoal] = useState('');
@@ -308,14 +315,30 @@ export default function Home() {
 
   async function refresh(preferred = '') {
     try {
-      const list = await listSessions();
-      setSessions(list);
-      const pick = (preferred && list.find((s) => s.id === preferred)) || list[0];
-      if (pick) {
-        setSessionId(pick.id);
-        if (pick.model) setSelectedModel(pick.model);
+      const page = await listSessions({ limit: SESSION_PAGE_SIZE });
+      setSessions(page.items);
+      setSessionsCursor(page.nextCursor);
+      let pick = preferred ? page.items.find((s) => s.id === preferred) : undefined;
+      if (preferred && !pick) {
+        // 深链的旧会话可能在首屏之外：补拉摘要，避免误开最新会话。
+        try {
+          const fetched = await getSession(preferred);
+          pick = fetched;
+          setSessions((prev) => [fetched, ...prev]);
+        } catch (err) {
+          if (isUnauthorized(err)) {
+            router.push('/login');
+            return;
+          }
+          // 会话已归档或不存在：与历史行为一致，打开最新会话。
+        }
+      }
+      const target = pick ?? page.items[0];
+      if (target) {
+        setSessionId(target.id);
+        if (target.model) setSelectedModel(target.model);
         // 只有显式指定会话（跨页面跳回）才自动展开历史，正常进入仍停在草稿首页。
-        if (preferred === pick.id) void loadHistory(pick.id);
+        if (preferred === target.id) void loadHistory(target.id);
       }
     } catch (err) {
       if (isUnauthorized(err)) {
@@ -323,6 +346,30 @@ export default function Home() {
         return;
       }
       setError(errorText(err));
+    }
+  }
+
+  async function loadMoreSessions() {
+    if (sessionsLoadingRef.current || sessionsCursor === null) return;
+    sessionsLoadingRef.current = true;
+    setSessionsLoadingMore(true);
+    try {
+      const page = await listSessions({ limit: SESSION_PAGE_SIZE, cursor: sessionsCursor });
+      // 深链补拉的旧会话可能也出现在后续分页里，按 id 去重避免侧栏出现两条。
+      setSessions((prev) => {
+        const seen = new Set(prev.map((s) => s.id));
+        return [...prev, ...page.items.filter((s) => !seen.has(s.id))];
+      });
+      setSessionsCursor(page.nextCursor);
+    } catch (err) {
+      if (isUnauthorized(err)) {
+        router.push('/login');
+        return;
+      }
+      setError(errorText(err));
+    } finally {
+      sessionsLoadingRef.current = false;
+      setSessionsLoadingMore(false);
     }
   }
 
@@ -952,6 +999,9 @@ export default function Home() {
     <AppShell
       active="workbench"
       sessions={sessions}
+      sessionsHasMore={sessionsCursor !== null}
+      sessionsLoadingMore={sessionsLoadingMore}
+      onLoadMoreSessions={() => void loadMoreSessions()}
       sessionId={sessionId}
       onSelectSession={handleSelect}
       onNewSession={() => void handleNewSession()}

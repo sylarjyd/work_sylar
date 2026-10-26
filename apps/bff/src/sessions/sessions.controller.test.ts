@@ -44,8 +44,31 @@ const fakePrisma = {
     }),
   },
   session: {
-    findMany: async ({ where }: { where: { tenantId: string; userId: string } }) =>
-      sessions.filter((s) => s.tenantId === where.tenantId && s.userId === where.userId),
+    findMany: async ({
+      where,
+      take,
+      cursor,
+      skip,
+    }: {
+      where: { tenantId: string; userId: string };
+      take?: number;
+      cursor?: { id: string };
+      skip?: number;
+    }) => {
+      let list = sessions
+        .filter((s) => s.tenantId === where.tenantId && s.userId === where.userId)
+        .sort(
+          (a, b) =>
+            b.createdAt.getTime() - a.createdAt.getTime() ||
+            (a.id < b.id ? 1 : a.id > b.id ? -1 : 0),
+        );
+      if (cursor) {
+        const at = list.findIndex((s) => s.id === cursor.id);
+        if (at >= 0) list = list.slice(at + (skip ?? 0));
+      }
+      if (take !== undefined) list = list.slice(0, take);
+      return list;
+    },
     findFirst: async ({ where }: { where: { id: string; tenantId: string; userId: string } }) =>
       sessions.find(
         (s) => s.id === where.id && s.tenantId === where.tenantId && s.userId === where.userId,
@@ -126,9 +149,59 @@ describe('SessionsController', () => {
     });
     expect(created.statusCode).toBe(201);
     const list = await app.inject({ method: 'GET', url: '/api/sessions', headers: auth() });
-    const arr = JSON.parse(list.payload);
-    expect(arr).toHaveLength(1);
-    expect(arr[0].title).toBe('第一个会话');
+    const page = JSON.parse(list.payload);
+    expect(page.items).toHaveLength(1);
+    expect(page.items[0].title).toBe('第一个会话');
+    expect(page.nextCursor).toBeNull();
+  });
+
+  it('按 limit 分页并可用 cursor 续拉', async () => {
+    // createdAt 拉开展示顺序，避免同毫秒导致断言不稳定。
+    for (let i = 0; i < 3; i++) {
+      sessions.push({
+        id: `p${i}`,
+        tenantId,
+        userId,
+        title: `第 ${i} 个`,
+        createdAt: new Date(Date.UTC(2026, 0, 1, 0, 0, i)),
+      });
+    }
+    const first = JSON.parse(
+      (await app.inject({ method: 'GET', url: '/api/sessions?limit=2', headers: auth() })).payload,
+    );
+    expect(first.items.map((s: { id: string }) => s.id)).toEqual(['p2', 'p1']);
+    expect(first.nextCursor).toBe('p1');
+
+    const next = JSON.parse(
+      (
+        await app.inject({
+          method: 'GET',
+          url: `/api/sessions?limit=2&cursor=${first.nextCursor}`,
+          headers: auth(),
+        })
+      ).payload,
+    );
+    expect(next.items.map((s: { id: string }) => s.id)).toEqual(['p0']);
+    expect(next.nextCursor).toBeNull();
+  });
+
+  it('可读取指定会话摘要，他人会话返回 404', async () => {
+    sessions.push({ id: 'p-owned', tenantId, userId, title: '归属会话', createdAt: new Date() });
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/sessions/p-owned',
+      headers: auth(),
+    });
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.payload).title).toBe('归属会话');
+
+    const other = signToken({ sub: 'u2', tenantId: 't2' });
+    const denied = await app.inject({
+      method: 'GET',
+      url: '/api/sessions/p-owned',
+      headers: { authorization: `Bearer ${other}` },
+    });
+    expect(denied.statusCode).toBe(404);
   });
 
   it('可读取自己会话的消息，且按 seq 升序', async () => {

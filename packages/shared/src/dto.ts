@@ -238,6 +238,15 @@ export interface SessionSummary {
   mode: SessionMode;
 }
 
+/** 历史会话列表默认每页条数；侧栏首屏与下滑翻页共用同一口径。 */
+export const SESSION_PAGE_SIZE = 20;
+
+export interface SessionPage {
+  items: SessionSummary[];
+  /** 下一页游标；为空表示已到末尾。 */
+  nextCursor: string | null;
+}
+
 export interface MessageDto {
   id: string;
   role: ChatRole;

@@ -40,7 +40,8 @@ const all = [
     model: 'm1',
     assistantId: 'a1',
     mode: 'task',
-    createdAt: new Date(),
+    // 显式拉开创建时间，列表按 createdAt 降序断言才不会受同毫秒影响。
+    createdAt: new Date('2026-01-03T00:00:00Z'),
   },
   {
     id: 's2',
@@ -51,7 +52,7 @@ const all = [
     model: null,
     assistantId: null,
     mode: 'chat',
-    createdAt: new Date(),
+    createdAt: new Date('2026-01-02T00:00:00Z'),
   },
   {
     id: 's3',
@@ -62,7 +63,7 @@ const all = [
     model: 'm1',
     assistantId: null,
     mode: 'chat',
-    createdAt: new Date(),
+    createdAt: new Date('2026-01-01T00:00:00Z'),
   },
 ];
 
@@ -77,23 +78,42 @@ function makeService(
   models = ['m1', 'm2'],
   defaultModel: string | null = 'm1',
   assistants: AssistantFixture[] = [ASSISTANT],
+  rows = all,
 ) {
   const created: { model?: string; assistantId?: string | null; mode?: string }[] = [];
   const prisma = {
     session: {
       findMany: async ({
         where,
+        take,
+        cursor,
+        skip,
       }: {
         where: { tenantId: string; userId: string; status?: { not: string } };
-      }) =>
-        all
+        take?: number;
+        cursor?: { id: string };
+        skip?: number;
+      }) => {
+        let list = rows
           .filter(
             (s) =>
               s.tenantId === where.tenantId &&
               s.userId === where.userId &&
               (!where.status?.not || s.status !== where.status.not),
           )
-          .map(withAssistant),
+          // 与真实查询同序：createdAt 降序，id 兜底，游标翻页依赖这个顺序。
+          .sort(
+            (a, b) =>
+              b.createdAt.getTime() - a.createdAt.getTime() ||
+              (a.id < b.id ? 1 : a.id > b.id ? -1 : 0),
+          );
+        if (cursor) {
+          const at = list.findIndex((s) => s.id === cursor.id);
+          if (at >= 0) list = list.slice(at + (skip ?? 0));
+        }
+        if (take !== undefined) list = list.slice(0, take);
+        return list.map(withAssistant);
+      },
       findFirst: async ({
         where,
       }: {
@@ -167,7 +187,9 @@ function makeService(
 
 describe('SessionsService 归档语义', () => {
   it('list 不返回归档会话，并带出会话模型与助手名', async () => {
-    const list = await makeService().svc.list('t1', 'u1');
+    const page = await makeService().svc.list('t1', 'u1');
+    const list = page.items;
+    expect(page.nextCursor).toBeNull();
     expect(list.map((s) => s.id)).toEqual(['s1', 's3']);
     expect(list[0].model).toBe('m1');
     expect(list[0].assistantId).toBe('a1');
@@ -179,6 +201,72 @@ describe('SessionsService 归档语义', () => {
 
   it('归档会话对普通用户视为不存在', async () => {
     await expect(makeService().svc.assertOwned('s2', 't1', 'u1')).rejects.toBeInstanceOf(NotFoundException);
+  });
+});
+
+/** 生成按 createdAt 降序排列的会话，用于翻页边界断言。 */
+function makeSessions(count: number) {
+  return Array.from({ length: count }, (_, i) => ({
+    id: `s${String(i).padStart(2, '0')}`,
+    tenantId: 't1',
+    userId: 'u1',
+    title: `会话 ${i}`,
+    status: 'active',
+    model: 'm1',
+    assistantId: null as string | null,
+    mode: 'chat',
+    createdAt: new Date(Date.UTC(2026, 0, 1, 0, 0, count - i)),
+  }));
+}
+
+describe('SessionsService 历史会话分页', () => {
+  it('默认返回最近 20 条，并用游标续拉剩余会话', async () => {
+    const { svc } = makeService(['m1'], 'm1', [ASSISTANT], makeSessions(25));
+    const page = await svc.list('t1', 'u1');
+    expect(page.items).toHaveLength(20);
+    expect(page.items[0].id).toBe('s00');
+    expect(page.items[19].id).toBe('s19');
+    expect(page.nextCursor).toBe('s19');
+
+    const next = await svc.list('t1', 'u1', { cursor: page.nextCursor ?? undefined });
+    expect(next.items.map((s) => s.id)).toEqual(['s20', 's21', 's22', 's23', 's24']);
+    expect(next.nextCursor).toBeNull();
+  });
+
+  it('limit 非法时回落到默认值，超过上限时截断', async () => {
+    const { svc } = makeService(['m1'], 'm1', [ASSISTANT], makeSessions(25));
+    expect((await svc.list('t1', 'u1', { limit: 0 })).items).toHaveLength(20);
+    expect((await svc.list('t1', 'u1', { limit: Number.NaN })).items).toHaveLength(20);
+    const capped = await svc.list('t1', 'u1', { limit: 1000 });
+    expect(capped.items).toHaveLength(25);
+    expect(capped.nextCursor).toBeNull();
+  });
+
+  it('不足一页时不返回游标', async () => {
+    const { svc } = makeService(['m1'], 'm1', [ASSISTANT], makeSessions(3));
+    const page = await svc.list('t1', 'u1', { limit: 20 });
+    expect(page.items.map((s) => s.id)).toEqual(['s00', 's01', 's02']);
+    expect(page.nextCursor).toBeNull();
+  });
+});
+
+describe('SessionsService 单个会话摘要', () => {
+  it('返回指定会话的摘要', async () => {
+    const s = await makeService().svc.detail('s1', 't1', 'u1');
+    expect(s).toMatchObject({
+      id: 's1',
+      title: 'active',
+      model: 'm1',
+      assistantId: 'a1',
+      assistantName: '合同助手',
+      mode: 'task',
+    });
+  });
+
+  it('归档或他人会话一律 404', async () => {
+    const { svc } = makeService();
+    await expect(svc.detail('s2', 't1', 'u1')).rejects.toBeInstanceOf(NotFoundException);
+    await expect(svc.detail('s1', 't2', 'u2')).rejects.toBeInstanceOf(NotFoundException);
   });
 });
 
