@@ -138,7 +138,7 @@ describe('RunsService.cancel', () => {
     expect(inc).not.toHaveBeenCalled();
   });
 
-  it('控制消息发布失败时不计数并原样上抛', async () => {
+  it('控制消息发布失败时仍计数（取消意图已落库）并原样上抛', async () => {
     const { svc, deps, metrics } = makeService({ status: 'running' });
     const inc = vi.spyOn(metrics.runsCanceled, 'inc');
     const busError = new Error('bus down');
@@ -146,7 +146,9 @@ describe('RunsService.cancel', () => {
 
     await expect(svc.cancel('r1', 't1', 'u1')).rejects.toBe(busError);
 
-    expect(inc).not.toHaveBeenCalled();
+    // cancelRequestedAt 已落库，执行器会轮询该字段中止；控制消息只是加速通道，
+    // 发布失败不代表取消失效，指标必须先计。
+    expect(inc).toHaveBeenCalledTimes(1);
   });
 
   it('终态幂等与回查已终态路径均不计取消数', async () => {

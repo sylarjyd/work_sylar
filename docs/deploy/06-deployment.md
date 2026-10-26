@@ -528,7 +528,7 @@ curl -X POST http://localhost:4000/api/billing/admin/credits \
 
 ### 依赖与降级
 
-- **Redis 必需**：`REDIS_URL` 可连且 `RUN_QUEUE_ENABLED` 不为 `0` 时启用 BullMQ 队列；`RUN_QUEUE_ENABLED=0` 可在保留 Redis 的前提下强制内联（故障降级用）。
+- **Redis 必需**：**配置了 `REDIS_URL`**（且 `RUN_QUEUE_ENABLED` 不为 `0`）时按队列模式装配 BullMQ；`RUN_QUEUE_ENABLED=0` 可在保留 Redis 的前提下强制内联（故障降级用）。
 - **未配置 `REDIS_URL`** 时运行在 API 进程内**内联执行**，适合开发/单机；多实例下没有队列分摊，长任务也会占用 HTTP 进程。
 - **注意**：配了 `REDIS_URL` 但 Redis 连不上时，队列仍按启用装配，入队会失败而**不会自动降级**为内联。请用 readiness 探针（`/api/health/ready` 的 Redis 检查）确认连接，而不是靠错误配置“降级”。
 
@@ -539,7 +539,7 @@ curl -X POST http://localhost:4000/api/billing/admin/credits \
 | `RUN_QUEUE_CONCURRENCY` | `4` | 单实例 worker 并发（1–32） |
 | `RUN_QUEUE_PER_TENANT` | `2` | 单租户并发（1–8）；管理端参数页可覆盖（DB 优先） |
 | `RUN_QUEUE_MAX_PER_TENANT` | `50` | 单租户排队上限（1–200），超出返回 429 `queue_full` |
-| `RUN_QUEUE_MAX_ATTEMPTS` | `2` | 执行尝试次数（0–5），耗尽后运行落 failed |
+| `RUN_QUEUE_MAX_ATTEMPTS` | `2` | 执行尝试次数：1–5 是有效次数；0 表示不重试但仍至少执行一次；耗尽后运行落 failed |
 
 ### worker 与扩容
 
@@ -550,14 +550,14 @@ curl -X POST http://localhost:4000/api/billing/admin/credits \
 
 ### 升级步骤
 
-1. 先同步表结构：开发/无迁移历史用 `pnpm --filter @ai-office/bff prisma db push`（或 `db:push`）；生产按 §5.2 用 `prisma migrate deploy`。
+1. 先同步表结构：开发/无迁移历史用 `pnpm --filter @ai-office/bff db:push`；生产用 `pnpm --filter @ai-office/bff exec prisma migrate deploy`（需先生成并提交迁移文件，见 §5.2；仓库当前尚无 `prisma/migrations`）。
 2. 再滚动重启 BFF（worker 随进程一起滚动）。旧实例在关闭前会尽量收尾，新实例继续消费同一队列。
 3. 升级期间旧运行不受影响：执行器从中断前的 `step` checkpoint 续跑；恢复任务每 **5 分钟**扫描一次失联运行（running 但作业已丢失）并补发取消请求，最迟约 15 分钟收敛（10 分钟判定阈值 + 5 分钟扫描间隔）。
 4. 回滚应用版本即可，队列数据在 Redis 中保留；已落库的运行状态以 Postgres 为准。
 
 ### 排障指标
 
-`GET /metrics` 中优先看：`ai_office_run_queue_depth`（等待+延迟）、`ai_office_run_queue_wait_seconds`（入队到开始执行的等待）、`ai_office_runs_canceled_total`、`ai_office_runs_retried_total`、`ai_office_runs_resumed_total`。等待直方图持续落入高桶说明 worker 并发不足或租户并发过低。
+`GET /metrics` 中优先看：`ai_office_run_queue_depth`（等待+延迟）、`ai_office_run_queue_wait_seconds`（运行从入队到本次开始处理的等待时长，含延迟让位与重试）、`ai_office_runs_canceled_total`、`ai_office_runs_retried_total`、`ai_office_runs_resumed_total`。等待直方图持续落入高桶说明 worker 并发不足或租户并发过低。
 
 ### 安全边界（生产必读）
 

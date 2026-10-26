@@ -103,7 +103,7 @@ export function createBffMetrics(
     }),
     runsCanceled: new Counter({
       name: 'ai_office_runs_canceled_total',
-      help: '被取消的运行数',
+      help: '首次受理的取消请求数（排队即时取消或运行中取消）',
       registers: [registry],
     }),
     runsQueueFailures: new Counter({
@@ -123,7 +123,7 @@ export function createBffMetrics(
     }),
     runQueueWait: new Histogram({
       name: 'ai_office_run_queue_wait_seconds',
-      help: '运行从入队到开始执行的等待时长',
+      help: '运行从入队到本次开始处理的等待时长（含延迟让位与重试）',
       buckets: RUN_QUEUE_WAIT_BUCKETS,
       registers: [registry],
     }),
