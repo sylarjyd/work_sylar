@@ -18,6 +18,18 @@ import { JwtGuard } from '../auth/jwt.guard';
 import { CurrentUser } from '../auth/current-user';
 import type { JwtPayload } from '../auth/jwt';
 
+/**
+ * 解析重连游标：只接受可选负号的十进制整数且 >= -1。
+ *
+ * 注意空串与空白必须拒绝——`Number('') === 0` 会被误当成「从 seq 0 之后回放」，
+ * 从而漏掉第一条步骤；任何非法值都回退为 -1（从头回放）。
+ */
+function parseCursor(raw: string | undefined): number {
+  if (raw === undefined || !/^-?\d+$/.test(raw)) return -1;
+  const seq = Number(raw);
+  return Number.isSafeInteger(seq) && seq >= -1 ? seq : -1;
+}
+
 @Controller('api/runs')
 @UseGuards(JwtGuard)
 export class RunsController {
@@ -28,7 +40,8 @@ export class RunsController {
 
   /**
    * 断线可重连的事件流：先回放 afterSeq 之后的落库步骤，再转发实时事件。
-   * 游标优先取 query（浏览器 EventSource 重连会自动带 Last-Event-ID，但首连需显式指定）。
+   * 游标优先取 Last-Event-ID（EventSource 重连时由浏览器自动携带且最新），
+   * 首连没有该 header 时退回 query 的 afterSeq。
    */
   @Get(':id/stream')
   async stream(
@@ -47,10 +60,9 @@ export class RunsController {
       }
       throw err;
     }
-    // query 优先；非法游标回退为从头回放，不能把 NaN/负数当作合法 seq。
-    const raw = afterSeqQuery ?? lastEventId;
-    const parsed = raw === undefined ? -1 : Number(raw);
-    const afterSeq = Number.isInteger(parsed) && parsed >= -1 ? parsed : -1;
+    // Last-Event-ID 是 EventSource 重连时刷新的游标，必须优先于 URL 里可能过期的 query。
+    // 非法 header 直接回退 -1，不能悄悄改用 query，否则会重放用户已看过的步骤尾部。
+    const afterSeq = parseCursor(lastEventId ?? afterSeqQuery);
     await this.relay.attach(runId, reply, { afterSeq });
   }
 

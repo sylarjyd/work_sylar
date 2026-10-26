@@ -20,28 +20,12 @@ import { InsufficientCreditsError, PlanExpiredError } from '../billing/billing.e
 import { parseUsageEvent } from '../billing/usage';
 import { BFF_METRICS, type BffMetrics } from '../observability/observability.metrics';
 import { RunTelemetry } from '../observability/run-telemetry';
+import { errorPayload, type RunErrorCode } from './run-errors';
 
 /** 上游建连超时：只约束 fetch 拿到响应头，不中断已建立的长流。 */
 const UPSTREAM_CONNECT_TIMEOUT_MS = 10_000;
 /** 上游流空闲超时：超过该时长未收到任何 chunk 视为 runtime 卡死。 */
 const UPSTREAM_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
-
-/** error 事件统一负载：前端只读 message，机器码留给日志与客户端分支判断。 */
-const RUN_ERROR_MESSAGES = {
-  plan_expired: '套餐已过期，请续费后重试',
-  insufficient_credits: '积分不足，请充值后重试',
-  run_failed: '本次运行失败，请稍后重试',
-  attachment_unavailable: '附件读取失败，请重新上传',
-  upstream_unreachable: '模型服务不可达，请稍后重试',
-  upstream_error: '模型服务返回错误，请稍后重试',
-  upstream_empty_body: '模型服务返回空响应，请稍后重试',
-} as const;
-
-type RunErrorCode = keyof typeof RUN_ERROR_MESSAGES;
-
-function errorPayload(code: RunErrorCode): { message: string; error: RunErrorCode } {
-  return { message: RUN_ERROR_MESSAGES[code], error: code };
-}
 
 // 项目未启用 DOM lib，`ReadableStreamReadResult` 不存在，从 reader.read 推导。
 type StreamReadResult<T> = Awaited<ReturnType<ReadableStreamDefaultReader<T>['read']>>;

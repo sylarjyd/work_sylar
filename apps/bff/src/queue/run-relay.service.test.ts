@@ -162,7 +162,7 @@ describe('RunRelayService', () => {
     expect(reply.raw.end).toHaveBeenCalled();
     expect(messages(chunks)).toEqual([
       { event: 'step', data: stepRow(0) },
-      { event: 'error', data: { message: 'boom', error: 'run_failed' } },
+      { event: 'error', data: { message: '本次运行失败，请稍后重试', error: 'run_failed' } },
     ]);
   });
 
@@ -175,6 +175,61 @@ describe('RunRelayService', () => {
     expect(messages(chunks)).toEqual([
       { event: 'error', data: { message: '本次运行失败，请稍后重试', error: 'run_failed' } },
     ]);
+  });
+
+  it('failed 终态：未知机器码归一为 run_failed 中文提示', async () => {
+    const { relay } = makeRelay({ status: 'failed', lastError: 'worker_lost' });
+    const { reply, chunks } = fakeReply();
+
+    await relay.attach('r1', reply);
+
+    expect(messages(chunks)).toEqual([
+      { event: 'error', data: { message: '本次运行失败，请稍后重试', error: 'run_failed' } },
+    ]);
+  });
+
+  it('failed 终态：已知机器码透出对应中文与 code', async () => {
+    const { relay } = makeRelay({ status: 'failed', lastError: 'insufficient_credits' });
+    const { reply, chunks } = fakeReply();
+
+    await relay.attach('r1', reply);
+
+    expect(messages(chunks)).toEqual([
+      { event: 'error', data: { message: '积分不足，请充值后重试', error: 'insufficient_credits' } },
+    ]);
+  });
+
+  it('failed 终态：lastError 为空时用通用中文提示', async () => {
+    const { relay } = makeRelay({ status: 'failed', lastError: null });
+    const { reply, chunks } = fakeReply();
+
+    await relay.attach('r1', reply);
+
+    expect(messages(chunks)).toEqual([
+      { event: 'error', data: { message: '本次运行失败，请稍后重试', error: 'run_failed' } },
+    ]);
+  });
+
+  it('实时 status(canceled) 补发 done 收尾，迟到的 done 被忽略', async () => {
+    const { relay, deps } = makeRelay({ status: 'running' });
+    const { reply, chunks } = fakeReply();
+    const done = relay.attach('r1', reply);
+    await untilEvent(chunks, 'status');
+
+    deps.emit({ event: 'status', data: { runId: 'r1', status: 'canceled' } });
+    await done;
+
+    expect(messages(chunks)).toEqual([
+      { event: 'status', data: { runId: 'r1', status: 'running' } },
+      { event: 'status', data: { runId: 'r1', status: 'canceled' } },
+      { event: 'done', data: { runId: 'r1' } },
+    ]);
+    expect(deps.unsubscribe).toHaveBeenCalledTimes(1);
+    expect(reply.raw.end).toHaveBeenCalled();
+
+    // 真实 done 迟到时流已收尾，不能再写第二帧 done。
+    deps.emit({ event: 'done', data: { runId: 'r1' } });
+    expect(messages(chunks).filter((m) => m.event === 'done')).toHaveLength(1);
   });
 
   it('canceled 终态输出 status(canceled) 后补 done', async () => {

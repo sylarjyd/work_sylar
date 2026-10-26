@@ -5,18 +5,10 @@ import { TasksService } from '../tasks/tasks.service';
 import { writeHead } from '../stream/sse-proxy';
 import { RUN_EVENT_BUS } from './queue.tokens';
 import type { RunEventBus } from './run-event-bus';
+import { runErrorMessage } from './run-errors';
 
 /** SSE 心跳：中间层通常在 30–60s 空闲后断开，15s 一次足以保活。 */
 const HEARTBEAT_INTERVAL_MS = 15_000;
-const RUN_FAILED_MESSAGE = '本次运行失败，请稍后重试';
-
-/** 把 task.lastError 归一为前端可展示的 error 负载；机器码统一转中文。 */
-function failedPayload(lastError: string | null): { message: string; error: 'run_failed' } {
-  return {
-    message: lastError && lastError !== 'run_failed' ? lastError : RUN_FAILED_MESSAGE,
-    error: 'run_failed',
-  };
-}
 
 /**
  * SSE 转发器：把一次运行的落库步骤与实时事件拼成一条可重连的流。
@@ -123,11 +115,13 @@ export class RunRelayService {
       }
       write(msg);
       const data = msg.data as { status?: unknown } | null;
-      const terminal =
-        msg.event === 'done' ||
-        msg.event === 'error' ||
-        (msg.event === 'status' && data?.status === 'canceled');
-      if (terminal) {
+      // 取消是终态，但实时路径没有 done 帧；必须补发，前端才能正常结束流。
+      if (msg.event === 'status' && data?.status === 'canceled') {
+        write({ event: 'done', data: { runId } });
+        settle(true);
+        return true;
+      }
+      if (msg.event === 'done' || msg.event === 'error') {
         settle(true);
         return true;
       }
@@ -197,7 +191,7 @@ export class RunRelayService {
     if (run.status === 'done') {
       forward({ event: 'done', data: { runId } });
     } else if (run.status === 'failed') {
-      forward({ event: 'error', data: failedPayload(run.lastError) });
+      forward({ event: 'error', data: runErrorMessage(run.lastError) });
     } else if (run.status === 'canceled') {
       write({ event: 'status', data: { runId, status: 'canceled' } });
       forward({ event: 'done', data: { runId } });

@@ -140,24 +140,48 @@ describe('RunsController', () => {
     expect(attach).not.toHaveBeenCalled();
   });
 
-  it('stream：query 优先于 Last-Event-ID，非法游标回退为 -1', async () => {
-    const query = await app.inject({
+  it('stream：Last-Event-ID 优先于 query（重连时 header 更新）', async () => {
+    const res = await app.inject({
       method: 'GET',
       url: '/api/runs/r1/stream?afterSeq=5',
-      headers: { ...auth(), 'last-event-id': '3' },
-    });
-    expect(query.statusCode).toBe(200);
-    expect(attach).toHaveBeenLastCalledWith('r1', expect.anything(), { afterSeq: 5 });
-
-    const header = await app.inject({
-      method: 'GET',
-      url: '/api/runs/r1/stream',
       headers: { ...auth(), 'last-event-id': '7' },
     });
-    expect(header.statusCode).toBe(200);
+    expect(res.statusCode).toBe(200);
     expect(attach).toHaveBeenLastCalledWith('r1', expect.anything(), { afterSeq: 7 });
+  });
 
-    for (const bad of ['abc', '-5', '1.5']) {
+  it('stream：无 header 时使用 query 游标', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/runs/r1/stream?afterSeq=5',
+      headers: auth(),
+    });
+    expect(res.statusCode).toBe(200);
+    expect(attach).toHaveBeenLastCalledWith('r1', expect.anything(), { afterSeq: 5 });
+  });
+
+  it('stream：非法 header 回退 -1，不回落到 query', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/runs/r1/stream?afterSeq=5',
+      headers: { ...auth(), 'last-event-id': 'abc' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(attach).toHaveBeenLastCalledWith('r1', expect.anything(), { afterSeq: -1 });
+  });
+
+  it('stream：空/空白/非法游标回退为 -1', async () => {
+    // 空 query 会被 Number('') 解析成 0，绝不能当成 from 0（会漏掉 seq 0）。
+    for (const url of [
+      '/api/runs/r1/stream?afterSeq=',
+      '/api/runs/r1/stream?afterSeq=%20',
+    ]) {
+      const res = await app.inject({ method: 'GET', url, headers: auth() });
+      expect(res.statusCode).toBe(200);
+      expect(attach).toHaveBeenLastCalledWith('r1', expect.anything(), { afterSeq: -1 });
+    }
+
+    for (const bad of ['abc', '-5', '1.5', 'NaN']) {
       const res = await app.inject({
         method: 'GET',
         url: `/api/runs/r1/stream?afterSeq=${bad}`,
@@ -165,6 +189,22 @@ describe('RunsController', () => {
       });
       expect(res.statusCode).toBe(200);
       expect(attach).toHaveBeenLastCalledWith('r1', expect.anything(), { afterSeq: -1 });
+    }
+  });
+
+  it('stream：合法游标（含 -1 与 0）原样透传', async () => {
+    for (const [cursor, expected] of [
+      ['-1', -1],
+      ['0', 0],
+      ['12', 12],
+    ] as const) {
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/runs/r1/stream?afterSeq=${cursor}`,
+        headers: auth(),
+      });
+      expect(res.statusCode).toBe(200);
+      expect(attach).toHaveBeenLastCalledWith('r1', expect.anything(), { afterSeq: expected });
     }
   });
 
