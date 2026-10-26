@@ -61,6 +61,15 @@ export const SETTING_SPECS = {
   codeExecTimeoutMs: { type: 'number', min: 100, max: 60000, fallback: 5000, env: 'CODE_EXEC_TIMEOUT_MS' },
   kbChunkSize: { type: 'number', min: 100, max: 4000, fallback: 800, env: 'KB_CHUNK_SIZE' },
   kbChunkOverlap: { type: 'number', min: 0, max: 1000, fallback: 150, env: 'KB_CHUNK_OVERLAP' },
+  queueMaxAttempts: { type: 'number', min: 0, max: 5, fallback: 2, env: 'RUN_QUEUE_MAX_ATTEMPTS' },
+  queuePerTenantConcurrency: {
+    type: 'number',
+    min: 1,
+    max: 8,
+    fallback: 2,
+    env: 'RUN_QUEUE_PER_TENANT',
+  },
+  queueMaxPerTenant: { type: 'number', min: 1, max: 200, fallback: 50, env: 'RUN_QUEUE_MAX_PER_TENANT' },
   alertsEnabled: { type: 'boolean', fallback: true, env: 'ALERTS_ENABLED' },
   alertWebhookUrl: {
     type: 'string',
@@ -128,6 +137,20 @@ export class SettingsService {
         ? overlap
         : Math.min(SETTING_SPECS.kbChunkOverlap.fallback, Math.max(0, size - 1));
     return { chunkSize: size, chunkOverlap };
+  }
+
+  /** 任务队列读取生效参数：最大尝试次数、单租户并发与单租户排队上限。 */
+  async getQueueConfig(): Promise<{
+    maxAttempts: number;
+    perTenantConcurrency: number;
+    maxPerTenant: number;
+  }> {
+    const [maxAttempts, perTenantConcurrency, maxPerTenant] = await Promise.all([
+      this.resolveNumber('queueMaxAttempts'),
+      this.resolveNumber('queuePerTenantConcurrency'),
+      this.resolveNumber('queueMaxPerTenant'),
+    ]);
+    return { maxAttempts, perTenantConcurrency, maxPerTenant };
   }
 
   /** 告警任务读取生效配置；secret 仅在此处解密后的进程内使用，不进入日志。 */

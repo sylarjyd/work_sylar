@@ -82,6 +82,8 @@ export function adminErrorText(err: unknown): string {
   const map: Record<string, string> = {
     unauthorized: '登录已失效，请重新登录',
     forbidden: '当前账号没有管理权限',
+    'admin_failed_429_queue_full': '排队任务过多，请稍后重试',
+    'admin_failed_429_rate_limited': '操作过于频繁，请稍后重试',
     'admin_failed_400_cannot_modify_self': '不能修改自己的角色或状态',
     'admin_failed_400_last_admin': '系统必须保留至少一个启用的管理员',
     'admin_failed_400_free_not_deactivatable': '免费套餐不可停用',

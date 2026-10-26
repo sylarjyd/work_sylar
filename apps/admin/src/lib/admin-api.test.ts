@@ -124,6 +124,15 @@ describe('admin-api', () => {
     );
   });
 
+  it('队列满有专门文案，其余 429 走通用提示', () => {
+    expect(adminErrorText(new Error('admin_failed_429_queue_full'))).toBe(
+      '排队任务过多，请稍后重试',
+    );
+    expect(adminErrorText(new Error('admin_failed_429_rate_limited'))).toBe(
+      '操作过于频繁，请稍后重试',
+    );
+  });
+
   it('5xx 不提示检查输入', () => {
     expect(adminErrorText(new Error('admin_failed_500_Internal server error'))).toBe(
       '服务暂时不可用，请稍后重试',

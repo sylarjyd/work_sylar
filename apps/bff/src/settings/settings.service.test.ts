@@ -139,6 +139,15 @@ describe('SettingsService', () => {
     await expect(svc.getKbConfig()).resolves.toEqual({ chunkSize: 800, chunkOverlap: 150 });
   });
 
+  it('getQueueConfig 返回三个队列参数', async () => {
+    const { svc } = makeService();
+    await expect(svc.getQueueConfig()).resolves.toEqual({
+      maxAttempts: 2,
+      perTenantConcurrency: 2,
+      maxPerTenant: 50,
+    });
+  });
+
   it('按类型解析布尔、字符串与 secret，且不泄露明文', async () => {
     const { svc } = makeService();
     process.env.ALERTS_ENABLED = 'false';
