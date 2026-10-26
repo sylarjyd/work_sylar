@@ -237,22 +237,7 @@ describe('admin-api', () => {
     );
   });
 
-  it('取消/重试调用管理端点', async () => {
-    stubWindow();
-    const fetchMock = vi.fn(
-      async () =>
-        new Response(JSON.stringify({}), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        }),
-    );
-    vi.stubGlobal('fetch', fetchMock);
-    await adminCancelRun('r1');
-    await adminRetryRun('r1');
-    expect(urls(fetchMock)).toEqual(['/api/admin/runs/r1/cancel', '/api/admin/runs/r1/retry']);
-  });
-
-  it('取消/重试路径参数做 URL 编码并发送空对象请求体', async () => {
+  it('取消/重试调用管理端点、对路径编码并发送空对象请求体', async () => {
     stubWindow();
     const fetchMock = vi.fn(
       async () =>
@@ -276,13 +261,17 @@ describe('admin-api', () => {
     expect(calls[1][1].body).toBe('{}');
   });
 
-  it('运行取消/重试的 409 冲突有专门文案', () => {
-    expect(adminErrorText(new Error('admin_failed_409_run_not_retryable'))).toBe(
-      '该运行当前状态不可重试',
-    );
-    expect(adminErrorText(new Error('admin_failed_409_task_busy'))).toBe(
-      '该任务已有新的运行，请刷新',
-    );
+  it('运行取消/重试的冲突有专门文案', () => {
+    const texts: Array<[string, string]> = [
+      ['admin_failed_409_run_not_retryable', '该运行当前状态不可重试'],
+      ['admin_failed_409_task_busy', '该任务已有新的运行，请刷新'],
+      ['admin_failed_409_task_snapshot_missing', '任务原始输入缺失，无法重试'],
+      ['admin_failed_409_task_not_retryable', '任务当前状态不可重试'],
+      ['admin_failed_404_run_not_found', '运行不存在或已被清理'],
+    ];
+    for (const [code, text] of texts) {
+      expect(adminErrorText(new Error(code))).toBe(text);
+    }
   });
 
   it('运行时间线路径参数做 URL 编码', async () => {

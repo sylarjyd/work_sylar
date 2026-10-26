@@ -43,6 +43,11 @@ import {
   timelineStatusLabel,
   timelineStatusTone,
 } from '../../../lib/run-timeline';
+import {
+  canCancelRun,
+  canRetryRun,
+  TASK_STATUS_META,
+} from '../../../lib/task-status';
 
 const PAGE_SIZE = 20;
 const STEP_PAGE_SIZE = 100;
@@ -52,15 +57,6 @@ const TIMELINE_COLOR: Record<'ok' | 'bad' | 'warn' | 'active', string> = {
   bad: 'red',
   warn: 'orange',
   active: 'blue',
-};
-
-// 任务状态与最近运行状态共用同一套文案/颜色，避免同一含义在不同列显示不一致。
-const TASK_STATUS_META: Record<RunStatus, { label: string; color: string }> = {
-  queued: { label: '排队中', color: 'gold' },
-  running: { label: '运行中', color: 'processing' },
-  done: { label: '完成', color: 'success' },
-  failed: { label: '失败', color: 'error' },
-  canceled: { label: '已取消', color: 'default' },
 };
 
 function formatTime(value: string): string {
@@ -90,6 +86,8 @@ export default function AdminTasksPage() {
   const [taskLoading, setTaskLoading] = useState(false);
   const [runLoading, setRunLoading] = useState(false);
   const [error, setError] = useState('');
+  // 写操作成功但刷新失败时必须明确提示，否则运营会以为页面状态就是最新的而重复提交。
+  const [notice, setNotice] = useState('');
   const [loading, setLoading] = useState(true);
 
   const handleErr = useCallback(
@@ -148,7 +146,8 @@ export default function AdminTasksPage() {
   const inFlight = useRef(false);
   const [busy, setBusy] = useState(false);
 
-  async function openTask(id: string) {
+  // 返回是否拿到最新数据：写操作后的刷新要据此决定是否提示「刷新失败」。
+  async function openTask(id: string): Promise<boolean> {
     const seq = ++taskSeq.current;
     detailIdRef.current = id;
     // 切换任务时让在途的任务/运行请求失效，并清空旧详情，避免「新任务详情 + 旧任务运行」
@@ -162,11 +161,14 @@ export default function AdminTasksPage() {
     setTaskLoading(true);
     try {
       const data = await getAdminTask(id);
-      if (seq !== taskSeq.current) return;
+      // 过期请求不算失败，避免把「用户已切走」误报成刷新失败。
+      if (seq !== taskSeq.current) return true;
       setDetail(data);
+      return true;
     } catch (err) {
-      if (seq !== taskSeq.current) return;
+      if (seq !== taskSeq.current) return true;
       handleErr(err);
+      return false;
     } finally {
       if (seq === taskSeq.current) setTaskLoading(false);
     }
@@ -185,7 +187,7 @@ export default function AdminTasksPage() {
     setRunLoading(false);
   }
 
-  async function openRun(id: string) {
+  async function openRun(id: string): Promise<boolean> {
     const seq = ++runSeq.current;
     setError('');
     setTimeline(null);
@@ -197,20 +199,23 @@ export default function AdminTasksPage() {
         getAdminRun(id, { stepPage: 1, stepPageSize: STEP_PAGE_SIZE }),
         getAdminRunTimeline(id),
       ]);
-      if (seq !== runSeq.current) return;
+      if (seq !== runSeq.current) return true;
       if (runResult.status === 'rejected') {
         handleErr(runResult.reason);
-        return;
+        return false;
       }
       setRun(runResult.value);
       if (timelineResult.status === 'fulfilled') {
         setTimeline(timelineResult.value);
       } else {
+        // 时间线失败不影响运行详情是否新鲜；错误已单独展示。
         handleErr(timelineResult.reason);
       }
+      return true;
     } catch (err) {
-      if (seq !== runSeq.current) return;
+      if (seq !== runSeq.current) return true;
       handleErr(err);
+      return false;
     } finally {
       if (seq === runSeq.current) setRunLoading(false);
     }
@@ -227,9 +232,55 @@ export default function AdminTasksPage() {
   }
 
   // 写操作改变的是任务/运行状态，列表与已打开的详情都要重载；任务已被切走时不再回写。
-  async function refreshAfterAction(taskId: string | null) {
-    await load();
-    if (taskId && detailIdRef.current === taskId) await openTask(taskId);
+  async function refreshAfterAction(taskId: string | null): Promise<boolean> {
+    const listOk = await load();
+    if (taskId && detailIdRef.current === taskId) {
+      const detailOk = await openTask(taskId);
+      return listOk && detailOk;
+    }
+    return listOk;
+  }
+
+  /**
+   * 取消/重试共用的提交壳：防重、鉴权跳转、失败也刷新、刷新失败提示。
+   * refresh 在写操作之后执行，用来回写列表与当前打开的任务/运行。
+   */
+  async function runAction(
+    action: () => Promise<void>,
+    refresh: (taskId: string | null) => Promise<boolean>,
+  ): Promise<void> {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setBusy(true);
+    setError('');
+    setNotice('');
+    const taskId = detailIdRef.current;
+    try {
+      let failed: unknown = null;
+      try {
+        await action();
+      } catch (err) {
+        failed = err;
+      }
+      if (failed && (isUnauthorized(failed) || isForbidden(failed))) {
+        handleErr(failed);
+        return;
+      }
+      // 即便失败也刷新：409 等冲突通常意味着页面状态已过期，需要让运营看到真实状态。
+      const refreshed = await refresh(taskId);
+      // 写操作的错误必须最后展示：刷新流程内部会清空 error。
+      if (failed) handleErr(failed);
+      if (!refreshed) {
+        setNotice(
+          failed
+            ? '操作失败，且数据刷新失败；请手动刷新页面确认当前状态。'
+            : '操作已成功，但数据刷新失败，请勿重复提交；稍后可刷新页面确认。',
+        );
+      }
+    } finally {
+      inFlight.current = false;
+      setBusy(false);
+    }
   }
 
   function askCancelRun(r: AdminTaskDetailDto['runs'][number]) {
@@ -247,41 +298,30 @@ export default function AdminTasksPage() {
         </div>
       ),
       okText: '确认取消',
+      okType: 'danger',
       cancelText: '返回',
-      onOk: () => submitCancelRun(r),
+      onOk: () =>
+        runAction(
+          async () => {
+            await adminCancelRun(r.id);
+            message.success('取消已受理');
+          },
+          async (taskId) => {
+            const refreshed = await refreshAfterAction(taskId);
+            // 已打开的运行详情状态/用量已变，需要重新拉取，避免停留在旧状态。
+            const reopenRunId = run?.id ?? null;
+            if (reopenRunId && detailIdRef.current === taskId) {
+              const runOk = await openRun(reopenRunId);
+              return refreshed && runOk;
+            }
+            return refreshed;
+          },
+        ),
     });
   }
 
-  async function submitCancelRun(r: AdminTaskDetailDto['runs'][number]) {
-    if (inFlight.current) return;
-    inFlight.current = true;
-    setBusy(true);
-    setError('');
-    const taskId = detailIdRef.current;
-    const reopenRunId = run?.id ?? null;
-    try {
-      let failed: unknown = null;
-      try {
-        await adminCancelRun(r.id);
-        message.success('取消已受理');
-      } catch (err) {
-        failed = err;
-      }
-      if (failed && (isUnauthorized(failed) || isForbidden(failed))) {
-        handleErr(failed);
-        return;
-      }
-      // 即便失败也刷新：409 等冲突通常意味着页面状态已过期，需要让运营看到真实状态。
-      await refreshAfterAction(taskId);
-      if (reopenRunId && detailIdRef.current === taskId) await openRun(reopenRunId);
-      if (failed) handleErr(failed);
-    } finally {
-      inFlight.current = false;
-      setBusy(false);
-    }
-  }
-
   function askRetryRun(r: AdminTaskDetailDto['runs'][number]) {
+    let retried: RetryRunResultDto | null = null;
     modal.confirm({
       title: '重试该运行？',
       content: (
@@ -295,40 +335,24 @@ export default function AdminTasksPage() {
       ),
       okText: '确认重试',
       cancelText: '返回',
-      onOk: () => submitRetryRun(r),
+      onOk: () =>
+        runAction(
+          async () => {
+            retried = await adminRetryRun(r.id);
+            message.success(`已重试，新运行 attempt ${retried.attempt} 已排队`);
+          },
+          async (taskId) => {
+            const refreshed = await refreshAfterAction(taskId);
+            // 成功后直接打开新运行，运营可继续查看排队/执行进度；失败则保持原运行卡片。
+            const nextRunId = retried?.runId ?? run?.id ?? null;
+            if (nextRunId && detailIdRef.current === taskId) {
+              const runOk = await openRun(nextRunId);
+              return refreshed && runOk;
+            }
+            return refreshed;
+          },
+        ),
     });
-  }
-
-  async function submitRetryRun(r: AdminTaskDetailDto['runs'][number]) {
-    if (inFlight.current) return;
-    inFlight.current = true;
-    setBusy(true);
-    setError('');
-    const taskId = detailIdRef.current;
-    const reopenRunId = run?.id ?? null;
-    try {
-      let failed: unknown = null;
-      let retried: RetryRunResultDto | null = null;
-      try {
-        retried = await adminRetryRun(r.id);
-        message.success(`已重试，新运行 attempt ${retried.attempt} 已排队`);
-      } catch (err) {
-        failed = err;
-      }
-      if (failed && (isUnauthorized(failed) || isForbidden(failed))) {
-        handleErr(failed);
-        return;
-      }
-      // 即便失败也刷新：409 等冲突通常意味着页面状态已过期，需要让运营看到真实状态。
-      await refreshAfterAction(taskId);
-      // 重试成功后直接打开新运行，运营可继续查看排队/执行进度；失败则保持原运行卡片。
-      const nextRunId = retried?.runId ?? reopenRunId;
-      if (nextRunId && detailIdRef.current === taskId) await openRun(nextRunId);
-      if (failed) handleErr(failed);
-    } finally {
-      inFlight.current = false;
-      setBusy(false);
-    }
   }
 
   const columns: TableColumnsType<AdminTaskItemDto> = [
@@ -402,14 +426,12 @@ export default function AdminTasksPage() {
           <Button size="small" onClick={() => void openRun(r.id)}>
             查看 step
           </Button>
-          {/* 只有排队/运行中的运行可取消；已完成类状态不可取消。 */}
-          {r.status === 'running' || r.status === 'queued' ? (
+          {canCancelRun(r.status) ? (
             <Button size="small" danger disabled={busy} onClick={() => askCancelRun(r)}>
               取消
             </Button>
           ) : null}
-          {/* 只有失败/已取消的运行可重试；运行中或已完成的不允许重复排队。 */}
-          {r.status === 'failed' || r.status === 'canceled' ? (
+          {canRetryRun(r.status) ? (
             <Button size="small" disabled={busy} onClick={() => askRetryRun(r)}>
               重试
             </Button>
@@ -451,6 +473,7 @@ export default function AdminTasksPage() {
       </div>
 
       {error ? <Alert type="error" showIcon message={error} /> : null}
+      {notice ? <Alert type="info" showIcon message={notice} /> : null}
 
       <Card
         title={

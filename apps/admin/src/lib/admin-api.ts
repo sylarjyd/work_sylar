@@ -136,6 +136,9 @@ export function adminErrorText(err: unknown): string {
     'admin_failed_404_alert_rule_not_found': '告警规则不存在',
     'admin_failed_409_run_not_retryable': '该运行当前状态不可重试',
     'admin_failed_409_task_busy': '该任务已有新的运行，请刷新',
+    'admin_failed_409_task_snapshot_missing': '任务原始输入缺失，无法重试',
+    'admin_failed_409_task_not_retryable': '任务当前状态不可重试',
+    'admin_failed_404_run_not_found': '运行不存在或已被清理',
   };
   if (map[msg]) return map[msg];
   const failed = /^admin_failed_(\d{3})(?:_(.*))?$/.exec(msg);
