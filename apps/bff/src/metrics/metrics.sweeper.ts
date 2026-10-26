@@ -226,13 +226,15 @@ export class MetricsSweeper implements OnModuleInit, OnModuleDestroy {
     const tools = unwrapSettled(toolsR);
     const prices = unwrapSettled(pricesR);
 
-    const startRows: RunStartRow[] = starts.map((row) => ({
-      tenantId: row.task.session.tenantId,
-      startedAt: row.startedAt,
-    }));
+    // where 已按 startedAt 过滤，这里再判空只为收窄类型。
+    const startRows: RunStartRow[] = starts.flatMap((row) =>
+      row.startedAt
+        ? [{ tenantId: row.task.session.tenantId, startedAt: row.startedAt }]
+        : [],
+    );
     const endRows: RunEndRow[] = [];
     for (const row of ends) {
-      if (!row.endedAt) continue;
+      if (!row.endedAt || !row.startedAt) continue;
       endRows.push({
         tenantId: row.task.session.tenantId,
         status: row.status,

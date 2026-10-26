@@ -115,7 +115,7 @@ export class AdminTasksService {
       runs: runs.map((r) => ({
         id: r.id,
         status: r.status,
-        startedAt: r.startedAt.toISOString(),
+        startedAt: r.startedAt?.toISOString() ?? null,
         endedAt: r.endedAt?.toISOString() ?? null,
         credits: creditsByRun.get(r.id) ?? null,
       })),
@@ -152,7 +152,7 @@ export class AdminTasksService {
       taskId: row.taskId,
       traceId: row.traceId,
       status: row.status,
-      startedAt: row.startedAt.toISOString(),
+      startedAt: row.startedAt?.toISOString() ?? null,
       endedAt: row.endedAt?.toISOString() ?? null,
       steps: {
         items: row.steps.map((s) => ({
@@ -184,6 +184,8 @@ export class AdminTasksService {
       include: {
         steps: { orderBy: { seq: 'asc' }, take: TIMELINE_STEP_LIMIT },
         _count: { select: { steps: true } },
+        // 队列中尚未开始的运行没有 startedAt，时间线以任务入队时间兜底。
+        task: { select: { queuedAt: true } },
       },
     });
     if (!row) throw new NotFoundException('run_not_found');
@@ -195,8 +197,9 @@ export class AdminTasksService {
       targetId: id,
     });
 
+    const startedAt = row.startedAt ?? row.task.queuedAt;
     const { nodes, truncated } = buildTimelineNodes(
-      row,
+      { id: row.id, status: row.status, startedAt, endedAt: row.endedAt },
       row.steps.map((step) => ({
         id: step.id,
         seq: step.seq,
@@ -211,10 +214,10 @@ export class AdminTasksService {
       runId: row.id,
       status: row.status,
       traceId: row.traceId,
-      startedAt: row.startedAt.toISOString(),
+      startedAt: startedAt.toISOString(),
       endedAt: row.endedAt?.toISOString() ?? null,
       durationMs: row.endedAt
-        ? Math.max(0, row.endedAt.getTime() - row.startedAt.getTime())
+        ? Math.max(0, row.endedAt.getTime() - startedAt.getTime())
         : null,
       nodes,
       truncated,
