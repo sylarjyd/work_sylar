@@ -5,10 +5,16 @@ import { TasksService } from '../tasks/tasks.service';
 import { writeHead } from '../stream/sse-proxy';
 import { RUN_EVENT_BUS } from './queue.tokens';
 import type { RunEventBus } from './run-event-bus';
-import { runErrorMessage } from './run-errors';
+import { relayErrorPayload, runErrorMessage } from './run-errors';
 
 /** SSE 心跳：中间层通常在 30–60s 空闲后断开，15s 一次足以保活。 */
 const HEARTBEAT_INTERVAL_MS = 15_000;
+
+/** 慢客户端暂停期间允许积压的最大消息数；超过即主动断开，避免无界内存增长。 */
+export const MAX_PENDING_MESSAGES = 1000;
+
+/** 慢客户端暂停期间 socket 缓冲的字节上限，超过即主动断开。 */
+export const MAX_PENDING_BYTES = 8 * 1024 * 1024;
 
 /**
  * SSE 转发器：把一次运行的落库步骤与实时事件拼成一条可重连的流。
@@ -53,6 +59,10 @@ export class RunRelayService {
     let heartbeat: NodeJS.Timeout | undefined;
     let off: (() => void) | undefined;
     const buffered: SseMessage[] = [];
+    /** socket 写满后暂停；暂停期间非终态消息进入 pending，保持原有顺序。 */
+    let paused = false;
+    const pending: SseMessage[] = [];
+    let drainHandler: (() => void) | undefined;
 
     let resolveSettled!: () => void;
     const settled = new Promise<void>((resolve) => {
@@ -78,10 +88,20 @@ export class RunRelayService {
       }
     };
 
+    const clearPending = (): void => {
+      pending.length = 0;
+    };
+
     const settle = (endStream: boolean): void => {
       // 收尾只做一次：实时终止事件与客户端 close 可能先后到达。
       if (finalized) return;
       finalized = true;
+      clearPending();
+      if (drainHandler) {
+        reply.raw.off('drain', drainHandler);
+        drainHandler = undefined;
+      }
+      paused = false;
       detach();
       if (endStream) {
         try {
@@ -93,14 +113,61 @@ export class RunRelayService {
       resolveSettled();
     };
 
-    const write = (msg: SseMessage): void => {
-      // checkpoint 是 BFF 内部续跑事件，不下发浏览器；收尾后不再写。
-      if (finalized || msg.event === 'checkpoint') return;
+    /** 真正写 socket；返回 false 表示内核/用户态缓冲已满，需要暂停生产。 */
+    const writeRaw = (msg: SseMessage): boolean => {
       try {
-        reply.raw.write(encodeSse(msg));
+        return reply.raw.write(encodeSse(msg));
       } catch {
         // 客户端已断开；close 处理器会负责退订与清理。
+        return true;
       }
+    };
+
+    const flushPending = (): void => {
+      while (!finalized && pending.length > 0) {
+        const msg = pending.shift()!;
+        if (!writeRaw(msg)) {
+          startPause();
+          return;
+        }
+      }
+    };
+
+    const startPause = (): void => {
+      if (paused || finalized) return;
+      paused = true;
+      drainHandler = () => {
+        drainHandler = undefined;
+        paused = false;
+        flushPending();
+      };
+      reply.raw.once('drain', drainHandler);
+    };
+
+    const enqueue = (msg: SseMessage): void => {
+      pending.push(msg);
+      // 慢客户端积压超过上限时，继续缓冲会无限占用进程内存（工具结果可能很大）。
+      // 主动断开优于 OOM：客户端会带 afterSeq 重连，由 DB 回放补齐历史。
+      if (
+        pending.length > MAX_PENDING_MESSAGES ||
+        reply.raw.writableLength > MAX_PENDING_BYTES
+      ) {
+        settle(true);
+      }
+    };
+
+    /**
+     * 所有出站帧的唯一入口：统一做 checkpoint 过滤、收尾抑制与背压排队。
+     * force 用于终态帧：即使 socket 已饱和也必须写出，否则客户端会永久挂起。
+     */
+    const write = (msg: SseMessage, force = false): void => {
+      // checkpoint 是 BFF 内部续跑事件，不下发浏览器；收尾后不再写。
+      if (finalized || msg.event === 'checkpoint') return;
+      if (paused && !force) {
+        enqueue(msg);
+        return;
+      }
+      if (!writeRaw(msg)) startPause();
     };
 
     /** 写入一条实时事件；收到终止事件时立即收尾并返回 true。 */
@@ -113,11 +180,18 @@ export class RunRelayService {
           lastSeq = seq;
         }
       }
-      write(msg);
       const data = msg.data as { status?: unknown } | null;
+      const canceled = msg.event === 'status' && data?.status === 'canceled';
+      const terminal = canceled || msg.event === 'done' || msg.event === 'error';
+      if (terminal) {
+        // 终态帧必须送达（暂停中也强制写）；排队中的非终态消息直接丢弃，
+        // 客户端重连后会通过 afterSeq 从 DB 回放补齐。
+        clearPending();
+      }
+      write(msg, terminal);
       // 取消是终态，但实时路径没有 done 帧；必须补发，前端才能正常结束流。
-      if (msg.event === 'status' && data?.status === 'canceled') {
-        write({ event: 'done', data: { runId } });
+      if (canceled) {
+        write({ event: 'done', data: { runId } }, true);
         settle(true);
         return true;
       }
@@ -144,10 +218,7 @@ export class RunRelayService {
       });
     } catch (err) {
       this.logger.error(`run ${runId} 订阅实时事件失败: ${(err as Error).message}`);
-      write({
-        event: 'error',
-        data: { message: '事件订阅失败，请重试', error: 'event_bus_unavailable' },
-      });
+      write({ event: 'error', data: relayErrorPayload('event_bus_unavailable') }, true);
       settle(true);
       return settled;
     }
@@ -168,10 +239,7 @@ export class RunRelayService {
       }
     } catch (err) {
       this.logger.error(`run ${runId} 回放步骤失败: ${(err as Error).message}`);
-      write({
-        event: 'error',
-        data: { message: '历史步骤读取失败，请重试', error: 'steps_unavailable' },
-      });
+      write({ event: 'error', data: relayErrorPayload('steps_unavailable') }, true);
       settle(true);
       return settled;
     }
@@ -188,18 +256,39 @@ export class RunRelayService {
 
     // 回放期间运行可能已经终结（缓冲中已处理则此处跳过）。
     if (finalized) return settled;
-    if (run.status === 'done') {
+
+    // 订阅已生效、回放与缓冲都冲齐后再重读 run：首次快照可能已过期。
+    // 运行状态先于终态事件落库，因此此处的读值是权威的；若终态事件在订阅后
+    // 才发布，它会实时送达并已收尾（上面的 finalized 检查会拦下）。DB 抖动时
+    // 沿用首次快照，避免把瞬时故障变成断流。
+    let status = run.status;
+    let lastError = run.lastError;
+    try {
+      const latest = await this.tasks.findRun(runId);
+      status = latest.status;
+      lastError = latest.lastError;
+    } catch (err) {
+      this.logger.warn(
+        `run ${runId} 重读状态失败，沿用首次快照: ${(err as Error).message}`,
+      );
+    }
+    // 重读等待期间实时终态事件可能已经收尾。
+    if (finalized) return settled;
+
+    if (status === 'done') {
       forward({ event: 'done', data: { runId } });
-    } else if (run.status === 'failed') {
-      forward({ event: 'error', data: runErrorMessage(run.lastError) });
-    } else if (run.status === 'canceled') {
-      write({ event: 'status', data: { runId, status: 'canceled' } });
+    } else if (status === 'failed') {
+      forward({ event: 'error', data: runErrorMessage(lastError) });
+    } else if (status === 'canceled') {
+      // 终态帧：即使 socket 已饱和也必须写出，否则前端拿不到取消状态。
+      write({ event: 'status', data: { runId, status: 'canceled' } }, true);
       forward({ event: 'done', data: { runId } });
     } else {
       // queued/running：先告知当前状态，再靠心跳与实时事件维持长连接。
-      write({ event: 'status', data: { runId, status: run.status } });
+      write({ event: 'status', data: { runId, status } });
       heartbeat = setInterval(() => {
-        if (finalized) return;
+        // socket 已饱和时跳过心跳：继续写只会让缓冲继续膨胀。
+        if (finalized || paused) return;
         try {
           reply.raw.write(': ping\n\n');
         } catch {

@@ -16,8 +16,29 @@ export const RUN_ERROR_MESSAGES = {
 
 export type RunErrorCode = keyof typeof RUN_ERROR_MESSAGES;
 
+/**
+ * SSE 转发链路自身的系统级错误码（订阅/回放失败）。
+ *
+ * 与运行失败码分开放置：它们不会被落库到 task.lastError，也不应被
+ * runErrorMessage 当作运行失败码映射，但同样遵循 T6 的
+ * `{ message: <中文展示文案>, error: <机器码> }` 约定。
+ */
+export const RELAY_ERROR_MESSAGES = {
+  event_bus_unavailable: '事件订阅失败，请重试',
+  steps_unavailable: '历史步骤读取失败，请重试',
+} as const;
+
+export type RelayErrorCode = keyof typeof RELAY_ERROR_MESSAGES;
+
 export function errorPayload(code: RunErrorCode): { message: string; error: RunErrorCode } {
   return { message: RUN_ERROR_MESSAGES[code], error: code };
+}
+
+export function relayErrorPayload(code: RelayErrorCode): {
+  message: string;
+  error: RelayErrorCode;
+} {
+  return { message: RELAY_ERROR_MESSAGES[code], error: code };
 }
 
 /**
