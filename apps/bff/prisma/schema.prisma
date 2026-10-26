@@ -116,32 +116,60 @@ model Attachment {
 }
 
 model Task {
-  id        String   @id @default(uuid())
-  sessionId String
-  goal      String
-  status    String   @default("queued")
-  createdAt DateTime @default(now())
-  session   Session  @relation(fields: [sessionId], references: [id])
-  runs      Run[]
+  id         String    @id @default(uuid())
+  sessionId  String
+  goal       String
+  status     String    @default("queued")
+  /// 入队时的运行快照：消息历史、助手配置、会话模型、traceId；重试复用。
+  input      Json?
+  /// 已创建的运行次数（含重试）。
+  attempts   Int       @default(0)
+  lastError  String?
+  queuedAt   DateTime  @default(now())
+  startedAt  DateTime?
+  endedAt    DateTime?
+  createdAt  DateTime  @default(now())
+  session    Session   @relation(fields: [sessionId], references: [id])
+  runs       Run[]
 
   @@index([sessionId])
+  @@index([status, queuedAt])
 }
 
 model Run {
-  id        String    @id @default(uuid())
-  taskId    String
-  status    String    @default("running")
-  startedAt DateTime  @default(now())
-  endedAt   DateTime?
-  // 发起本次运行的前端/BFF traceId；历史数据允许为空。
-  traceId   String?
-  task      Task      @relation(fields: [taskId], references: [id])
-  steps     Step[]
-  artifacts Artifact[]
+  id                String    @id @default(uuid())
+  taskId            String
+  attempt           Int       @default(1)
+  status            String    @default("queued")
+  startedAt         DateTime?
+  endedAt           DateTime?
+  cancelRequestedAt DateTime?
+  traceId           String?
+  task              Task      @relation(fields: [taskId], references: [id])
+  steps             Step[]
+  artifacts         Artifact[]
+  checkpoint        RunCheckpoint?
 
   @@index([taskId])
+  @@index([status, startedAt])
   @@index([traceId])
   @@index([startedAt])
+}
+
+/// 最后完整轮次的状态快照；仅保留每 run 一行。
+model RunCheckpoint {
+  runId       String   @id
+  /// 下一轮起始下标（已完成 round+1 轮）。
+  round       Int
+  /// 下一事件序号（已落库步骤的最大 seq + 1）。
+  seq         Int
+  /// 自上次 checkpoint 以来新增的 assistant/tool 消息增量，避免重复存储附件内容。
+  deltas      Json
+  usage       Json
+  /// 已落库的产物 ID；恢复时删除未列入的记录，避免半轮产物重复。
+  artifactIds Json
+  updatedAt   DateTime @updatedAt
+  run         Run      @relation(fields: [runId], references: [id], onDelete: Cascade)
 }
 
 model Step {
