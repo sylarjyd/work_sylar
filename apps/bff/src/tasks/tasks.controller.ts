@@ -177,10 +177,13 @@ export class TasksController {
       }
     }
 
-    // 预占额度并做限流；失败在 hijack 之前返回，Nest 可正常写响应。
+    // 准入与预占；失败在 hijack 之前返回，Nest 可正常写响应。
+    // RPM 在准入处消耗（beginRun 已不再计数）；Task 9 会把准入迁至入队路径，届时删除这里的调用。
+    // 两类错误共用下方映射，避免重复实现 429/402。
     const runId = randomUUID();
     let billing: RunBilling;
     try {
+      await this.billing.admitRun(user.tenantId);
       billing = await this.billing.beginRun(runId, user.tenantId);
     } catch (err) {
       if (err instanceof RateLimitedError) {

@@ -1,7 +1,7 @@
 import 'reflect-metadata';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { BillingService } from './billing.service';
-import { InsufficientCreditsError, RateLimitedError } from './billing.errors';
+import { InsufficientCreditsError, PlanExpiredError, RateLimitedError } from './billing.errors';
 import { PrismaService } from '../db/prisma.service';
 
 type Row = Record<string, any>;
@@ -286,6 +286,56 @@ describe('BillingService', () => {
   it('admitRun 命中限流抛 RateLimitedError', async () => {
     const admitted = makeService({ rateLimited: true });
     await expect(admitted.admitRun('t1')).rejects.toBeInstanceOf(RateLimitedError);
+  });
+
+  it('admitRun 可用余额不足时抛 InsufficientCreditsError 且不预占', async () => {
+    const admitted = makeService();
+    // 先懒建订阅拿到 500 积分，再把额度全部占满，构造 balance-reserved = 0。
+    await admitted.summary('t1');
+    ctx.db.credits[0].balance = 100;
+    ctx.db.credits[0].reserved = 100;
+
+    await expect(admitted.admitRun('t1')).rejects.toBeInstanceOf(InsufficientCreditsError);
+    expect(ctx.db.holds).toHaveLength(0);
+    expect(ctx.prisma.creditHold.create).not.toHaveBeenCalled();
+    expect(ctx.prisma.tenantCredit.update).not.toHaveBeenCalled();
+  });
+
+  it('admitRun 套餐过期抛 PlanExpiredError', async () => {
+    const admitted = makeService();
+    ctx.db.plans.push({
+      id: 'pro',
+      name: '专业版',
+      priceCents: 990,
+      monthlyBaseCredits: 10000,
+      monthlyBonusCredits: 0,
+      maxCreditsPerRun: 200,
+      rpm: 60,
+      allowedModels: ['mock'],
+      active: true,
+    });
+    // 付费套餐已过 periodEnd：ensureSubscription 将其标记 expired 后由准入拒绝。
+    ctx.db.subs.push({
+      id: 'sub1',
+      tenantId: 't1',
+      planId: 'pro',
+      status: 'active',
+      periodStart: new Date('2026-09-01T00:00:00Z'),
+      periodEnd: new Date('2026-09-30T00:00:00Z'),
+    });
+
+    await expect(admitted.admitRun('t1')).rejects.toBeInstanceOf(PlanExpiredError);
+    expect(ctx.db.holds).toHaveLength(0);
+  });
+
+  it('admitRun 允许模型缺价格时拒绝', async () => {
+    const admitted = makeService();
+    ctx.db.plans[0].allowedModels = ['mock', 'unknown'];
+
+    await expect(admitted.admitRun('t1')).rejects.toThrow('model_price_missing:unknown');
+    expect(ctx.db.holds).toHaveLength(0);
+    expect(ctx.prisma.creditHold.create).not.toHaveBeenCalled();
+    expect(ctx.prisma.tenantCredit.update).not.toHaveBeenCalled();
   });
 
   it('beginRun 不再消耗 RPM', async () => {

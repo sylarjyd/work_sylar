@@ -68,6 +68,8 @@ const session = { id: 's1', tenantId: 't1', userId: 'u1', title: 'x', model: 'mo
 const billingCalls: unknown[][] = [];
 let beginRunError: unknown = null;
 const fakeBilling = {
+  // 准入在创建路径上调用；RPM 与退款边界由 billing.service 单测覆盖，这里只需保证调用通过。
+  admitRun: async (_tenantId: string) => undefined,
   beginRun: async (runId: string, tenantId: string) => {
     billingCalls.push(['begin', runId, tenantId]);
     if (beginRunError) throw beginRunError;
