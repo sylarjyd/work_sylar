@@ -1,11 +1,15 @@
 import 'reflect-metadata';
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import { Test } from '@nestjs/testing';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
 import * as argon2 from 'argon2';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { PrismaService } from '../db/prisma.service';
+
+// argon2 默认参数的哈希/校验在跑全量套件时会因 CPU 争用超过默认 5s 超时；
+// 只放宽本文件，不牺牲其他用例对挂起的敏感度。
+vi.setConfig({ testTimeout: 15_000 });
 
 // 极简内存假库：只实现 AuthService 用到的两个方法（键统一小写，模拟大小写不敏感查询）。
 interface FakeUser {
