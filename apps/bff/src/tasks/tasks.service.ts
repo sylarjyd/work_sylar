@@ -4,6 +4,7 @@ import { attachmentKindFor, type AgentEvent } from '@ai-office/shared';
 import { PrismaService } from '../db/prisma.service';
 import { SessionsService, type SessionRef } from '../sessions/sessions.service';
 import type { PreparedAttachment, PreparedMessage } from '../attachments/attachments.service';
+import type { RunSnapshot } from '../queue/run-job';
 
 /** 并发抢占同一 seq 时的最大尝试次数（首次 + 最多 4 次重试）。 */
 const MAX_SEQ_ATTEMPTS = 5;
@@ -55,8 +56,8 @@ export class TasksService {
   }
 
   /**
-   * 建 task/run、落用户消息并绑定附件，回传喂给模型的完整历史（尚未读取附件字节）。
-   * runId 由控制器预生成（计费预占键）；附件在事务内原子认领，并发重复发送只会有一次成功。
+   * 建 task/run、落用户消息、绑定附件，并把喂给模型的完整历史补进入队快照。
+   * runId 由控制器预生成（队列作业键）；附件在事务内原子认领，并发重复发送只会有一次成功。
    */
   async prepare(
     sessionId: string,
@@ -64,15 +65,10 @@ export class TasksService {
     userId: string,
     goal: string,
     runId: string,
-    traceId?: string | null,
-    attachmentIds: string[] = [],
-  ): Promise<{
-    taskId: string;
-    runId: string;
-    tenantId: string;
-    userId: string;
-    messages: PreparedMessage[];
-  }> {
+    traceId: string | null,
+    attachmentIds: string[],
+    snapshot: RunSnapshot,
+  ): Promise<{ taskId: string; runId: string; tenantId: string; userId: string }> {
     await this.sessions.assertOwned(sessionId, tenantId, userId);
     const ids = [...new Set(attachmentIds)];
 
@@ -101,15 +97,19 @@ export class TasksService {
             },
           });
           const task = await tx.task.create({
-            data: { sessionId, goal, status: 'running' },
+            data: {
+              sessionId,
+              goal,
+              status: 'queued',
+              input: snapshot as unknown as Prisma.InputJsonValue,
+            },
           });
           const run = await tx.run.create({
-            // startedAt 已去掉数据库默认值；过渡期显式写入，Task 9 改为 queued 后由执行器写入。
+            // startedAt 由执行器在真正开始执行时写入。
             data: {
               id: runId,
               taskId: task.id,
-              status: 'running',
-              startedAt: new Date(),
+              status: 'queued',
               traceId: traceId ?? null,
             },
           });
@@ -157,7 +157,12 @@ export class TasksService {
             })),
             { role: 'user', content: goal, attachments: current },
           ];
-          return { taskId: task.id, runId: run.id, tenantId, userId, messages };
+          // 完整历史写回快照：执行器只读 Task.input，无需在开始执行时再查一次历史。
+          await tx.task.update({
+            where: { id: task.id },
+            data: { input: { ...snapshot, messages } as unknown as Prisma.InputJsonValue },
+          });
+          return { taskId: task.id, runId: run.id, tenantId, userId };
         });
       } catch (err) {
         // 非 seq 唯一键冲突（如 runId 主键冲突）重试也不会成功，立即抛出。

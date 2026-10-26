@@ -100,6 +100,15 @@ export class RunExecutor {
       return;
     }
 
+    // 历史会话在首次成功预占后固化模型；失败只记日志，不影响本次运行。
+    if (snapshot.model == null) {
+      try {
+        await this.tasks.bindModel(sessionId, snapshot.resolution.selectedModel);
+      } catch (err) {
+        this.logger.warn(`run ${runId} 回填会话模型失败: ${(err as Error).message}`);
+      }
+    }
+
     // 附件字节在事务外读取；读取失败时 task/run 已存在，必须失败收尾并归还预占。
     let messages: ChatMessage[];
     try {

@@ -1,16 +1,15 @@
 import 'reflect-metadata';
-import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import { Test } from '@nestjs/testing';
-import { BaseExceptionFilter } from '@nestjs/core';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
-import type { ArgumentsHost } from '@nestjs/common';
-import { createServer, type Server } from 'node:http';
-import { encodeSse } from '@ai-office/shared';
+import { NotFoundException } from '@nestjs/common';
+import type { FastifyReply } from 'fastify';
+import { toolsForSkills } from '@ai-office/shared';
+import { initTelemetry, shutdownTelemetry } from '@ai-office/telemetry';
+import pino from 'pino';
 import { TasksController } from './tasks.controller';
 import { TasksService } from './tasks.service';
 import { AttachmentsService } from '../attachments/attachments.service';
-import { ArtifactService } from '../artifacts/artifacts.service';
-import { ARTIFACT_STORAGE } from '../artifacts/storage';
 import { SessionsController } from '../sessions/sessions.controller';
 import { SessionsService } from '../sessions/sessions.service';
 import { PrismaService } from '../db/prisma.service';
@@ -20,77 +19,67 @@ import { SettingsService } from '../settings/settings.service';
 import { ModelCatalogService } from '../models/model-catalog.service';
 import { ModelUnavailableError } from '../models/model.errors';
 import { InsufficientCreditsError, PlanExpiredError, RateLimitedError } from '../billing/billing.errors';
-import { initTelemetry, shutdownTelemetry } from '@ai-office/telemetry';
-import pino from 'pino';
-import { BFF_METRICS } from '../observability/observability.metrics';
-import { createBffMetrics } from '../observability/observability.metrics';
+import { BFF_METRICS, createBffMetrics } from '../observability/observability.metrics';
 import { registerRequestTelemetry } from '../observability/request-telemetry';
+import { QueueFullError, RunQueueService } from '../queue/run-queue.service';
+import { RunRelayService } from '../queue/run-relay.service';
+import type { RunJob, RunSnapshot } from '../queue/run-job';
 
-let upstream: Server;
 let app: NestFastifyApplication;
 let baseUrl: string;
-let runtimeUrl: string;
-// 上游收到的最近一次 traceparent，供断言 BFF 透传 W3C 追踪头。
-let lastTraceparent = '';
-// 上游收到的最近一次 /runs 请求体原文，供断言 BFF 透传的字段（如 userId）。
-let lastRunsBody = '';
-// 上游行为开关：正常流 / 中途发 error 事件 / 不发 usage / 慢速流（用于断连排空）/ 非 2xx。
-let upstreamMode: 'ok' | 'error' | 'nousage' | 'slow' | 'fail502' = 'ok';
-// 落库故障注入开关：用于验证控制器在写库失败时的落 failed / 不挂起行为。
-// 这些开关必须能被各用例独立置位，否则「修复被回退」时用例依旧会通过。
-let failStepCreate = false;
-let failRunUpdate = false;
-let failTaskCreate = false;
-// 配置读取故障注入：非空时 getRunConfig 抛错，用于验证「配置失败不留预占/不建 task」。
+let prepareSpy: any;
+// 配置读取故障注入：非空时 getRunConfig 抛错，用于验证「配置失败不预占/不入队」。
 let getRunConfigError: unknown = null;
 
 const stored: {
-  steps: unknown[];
   messages: unknown[];
-  runCreates: unknown[];
-  runUpdates: unknown[];
-  taskUpdates: unknown[];
-  artifacts: unknown[];
+  runCreates: any[];
+  runUpdates: any[];
+  taskCreates: any[];
+  taskUpdates: any[];
   sessionModelUpdates: unknown[];
 } = {
-  steps: [],
   messages: [],
   runCreates: [],
   runUpdates: [],
+  taskCreates: [],
   taskUpdates: [],
-  artifacts: [],
   sessionModelUpdates: [],
 };
 
-const session = { id: 's1', tenantId: 't1', userId: 'u1', title: 'x', model: 'mock' as string | null, createdAt: new Date() };
+const session = {
+  id: 's1',
+  tenantId: 't1',
+  userId: 'u1',
+  title: 'x',
+  model: 'mock' as string | null,
+  assistantId: null as string | null,
+  assistant: null as null | {
+    id: string;
+    name: string;
+    systemPrompt: string;
+    permissionMode: string;
+    skills: string[];
+    kbIds: string[];
+  },
+  createdAt: new Date(),
+};
 
-// 计费调用记录与故障注入：用例据此断言预占/记录/结算/释放的顺序与结果。
+// 计费调用记录：创建路径只应调用 admitRun，额度预占由执行器负责。
 const billingCalls: unknown[][] = [];
-let beginRunError: unknown = null;
+let admitRunError: unknown = null;
 const fakeBilling = {
-  // 准入在创建路径上调用；RPM 与退款边界由 billing.service 单测覆盖，这里只需保证调用通过。
-  admitRun: async (_tenantId: string) => undefined,
-  beginRun: async (runId: string, tenantId: string) => {
-    billingCalls.push(['begin', runId, tenantId]);
-    if (beginRunError) throw beginRunError;
-    return {
-      maxCredits: 50,
-      allowedModels: ['mock'],
-      prices: { mock: { inputMilliCreditsPer1k: 100, outputMilliCreditsPer1k: 300 } },
-    };
+  admitRun: async (tenantId: string) => {
+    billingCalls.push(['admit', tenantId]);
+    if (admitRunError) throw admitRunError;
   },
-  recordUsage: async (...args: unknown[]) => {
-    billingCalls.push(['record', ...args]);
-  },
-  settle: async (runId: string) => {
-    billingCalls.push(['settle', runId]);
-  },
-  releaseHold: async (runId: string) => {
-    billingCalls.push(['release', runId]);
+  beginRun: async (...args: unknown[]) => {
+    billingCalls.push(['begin', ...args]);
+    return { maxCredits: 50, allowedModels: ['mock'], prices: {} };
   },
 } as unknown as BillingService;
 
-// 模型目录调用记录与故障注入：断言运行前解析到的会话模型与错误分支。
+// 模型目录：断言运行前解析到的会话模型与错误分支。
 const catalogCalls: unknown[][] = [];
 let resolveForRunError: unknown = null;
 let selectedModalities: string[] = ['text', 'image', 'audio', 'video'];
@@ -118,34 +107,47 @@ const fakeCatalog = {
   },
 } as unknown as ModelCatalogService;
 
-// 附件预检与水合：无附件的用例返回空；附件用例按需注入记录。
+// 附件预检：无附件的用例返回空；附件用例按需注入记录。
 const attachmentCalls: unknown[][] = [];
 let ownedAttachments: unknown[] = [];
-let hydrateError: unknown = null;
 const fakeAttachments = {
   listOwnedUnclaimed: async (ids: string[], tenantId: string, userId: string) => {
     attachmentCalls.push(['list', ids, tenantId, userId]);
     return ownedAttachments;
   },
-  hydrateForRun: async (messages: unknown[]) => {
-    attachmentCalls.push(['hydrate', messages]);
-    if (hydrateError) throw hydrateError;
-    return messages;
+  hydrateForRun: async () => {
+    // 创建路径不再读取附件字节，改由执行器按快照水合。
+    attachmentCalls.push(['hydrate']);
+    throw new Error('controller must not hydrate attachments');
   },
 } as unknown as AttachmentsService;
 
-// 逃逸到 Nest 异常处理器的异常会被登记在这里。
-// 存在的意义：Nest 的 BaseExceptionFilter 在 reply 已 hijack 时会兜底
-// 调用 reply.raw.end()，因此「客户端是否挂起」无法区分 safeFinish 守卫是否在位；
-// 真正能判别的信号是「落库异常有没有冒泡出控制器」。守卫在位 → 不冒泡；守卫被删
-// → 异常冒泡到此数组，对应用例随即失败。
-const escapedErrors: unknown[] = [];
-class RecordingExceptionFilter extends BaseExceptionFilter {
-  catch(exception: unknown, host: ArgumentsHost): void {
-    escapedErrors.push(exception);
-    super.catch(exception, host);
-  }
-}
+// 入队与流挂接：创建路径只负责提交作业并把回复交给转发器。
+const queueCalls: RunJob[] = [];
+let submitError: unknown = null;
+const fakeQueue = {
+  submit: async (job: RunJob) => {
+    queueCalls.push(job);
+    if (submitError) throw submitError;
+    return 'inline' as const;
+  },
+} as unknown as RunQueueService;
+
+const relayCalls: string[] = [];
+let attachError: unknown = null;
+const fakeRelay = {
+  attach: async (runId: string, reply: FastifyReply) => {
+    relayCalls.push(runId);
+    if (attachError) throw attachError;
+    reply.hijack();
+    reply.raw.writeHead(200, {
+      'content-type': 'text/event-stream',
+      'cache-control': 'no-cache',
+      connection: 'keep-alive',
+    });
+    reply.raw.end(`event: done\ndata: ${JSON.stringify({ runId })}\n\n`);
+  },
+} as unknown as RunRelayService;
 
 const fakePrisma = {
   user: {
@@ -162,7 +164,7 @@ const fakePrisma = {
       where.id === session.id && where.tenantId === session.tenantId && where.userId === session.userId
         ? session
         : null,
-    updateMany: async (args: { where: { id: string; model: null }; data: { model: string } }) => {
+    updateMany: async (args: unknown) => {
       stored.sessionModelUpdates.push(args);
       return { count: 1 };
     },
@@ -170,7 +172,6 @@ const fakePrisma = {
   message: {
     findMany: async () => [],
     findFirst: async () => null,
-    count: async () => 1,
     create: async ({ data }: { data: unknown }) => {
       stored.messages.push(data);
       return data;
@@ -184,7 +185,7 @@ const fakePrisma = {
   },
   task: {
     create: async ({ data }: { data: unknown }) => {
-      if (failTaskCreate) throw new Error('injected task.create failure');
+      stored.taskCreates.push(data);
       return { id: 'task1', ...(data as object) };
     },
     update: async (args: unknown) => {
@@ -195,26 +196,11 @@ const fakePrisma = {
   run: {
     create: async ({ data }: { data: unknown }) => {
       stored.runCreates.push(data);
-      return { id: (data as { id?: string }).id ?? 'run1', ...(data as object) };
+      return { ...(data as object) };
     },
     update: async (args: unknown) => {
-      if (failRunUpdate) throw new Error('injected run.update failure');
       stored.runUpdates.push(args);
       return {};
-    },
-  },
-  step: {
-    create: async ({ data }: { data: unknown }) => {
-      if (failStepCreate) throw new Error('injected step.create failure');
-      stored.steps.push(data);
-      return data;
-    },
-  },
-  artifact: {
-    aggregate: async () => ({ _max: { version: null } }),
-    create: async ({ data }: { data: unknown }) => {
-      stored.artifacts.push(data);
-      return data;
     },
   },
   // 测试不需要事务隔离，直接把同一个 fake 交给回调。
@@ -225,64 +211,11 @@ beforeAll(async () => {
   initTelemetry({ serviceName: 'bff-task-test', serviceVersion: '1' });
   process.env.JWT_SECRET = 'test-secret';
 
-  upstream = createServer((req, res) => {
-    // 读出请求体：供断言 BFF 把 userId 透传到 /runs（其余用例不读该变量）。
-    let reqBody = '';
-    req.on('data', (chunk) => (reqBody += chunk));
-    req.on('end', () => {
-      lastRunsBody = reqBody;
-      lastTraceparent = String(req.headers.traceparent ?? '');
-      // runId 由 BFF 预生成：上游事件与产物 storageKey 必须使用请求体里的真实值，
-      // 否则 ArtifactService 的前缀校验会拒绝落库。
-      const runId = (JSON.parse(reqBody) as { runId?: string }).runId ?? 'run1';
-      if (upstreamMode === 'fail502') {
-        // 非 2xx：控制器应释放预占、不结算，并把状态码与响应体原样回显。
-        res.writeHead(502, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ error: 'upstream_boom' }));
-        return;
-      }
-      res.writeHead(200, { 'content-type': 'text/event-stream' });
-      res.write(encodeSse({ event: 'step', data: { runId, seq: 0, type: 'think', payload: { text: '想' }, ts: 1 } }));
-      if (upstreamMode === 'error') {
-        // 上游中途报错：控制器应把本次 run 记为 failed。
-        res.write(encodeSse({ event: 'error', data: { message: 'boom' } }));
-        res.end();
-        return;
-      }
-      if (upstreamMode === 'nousage') {
-        // 无 usage：控制器应只释放预占、不结算。
-        res.write(encodeSse({ event: 'done', data: { runId } }));
-        res.end();
-        return;
-      }
-      if (upstreamMode === 'slow') {
-        // 首帧已在上方写出；延迟发出 usage + done，给客户端留出中途断开的时间窗。
-        setTimeout(() => {
-          res.write(encodeSse({ event: 'usage', data: { input: 1, output: 1, models: [{ model: 'mock', input: 1, output: 1 }] } }));
-          res.write(encodeSse({ event: 'done', data: { runId } }));
-          res.end();
-        }, 100);
-        return;
-      }
-      res.write(encodeSse({ event: 'step', data: { runId, seq: 1, type: 'tool_call', payload: { tool: 'web.search' }, ts: 2 } }));
-      res.write(encodeSse({ event: 'step', data: { runId, seq: 2, type: 'artifact', payload: { kind: 'pptx', filename: 'a.pptx', storageKey: `artifacts/t1/${runId}/x-a.pptx`, size: 3 }, ts: 3 } }));
-      res.write(encodeSse({ event: 'usage', data: { input: 1, output: 1, models: [{ model: 'mock', input: 1, output: 1 }] } }));
-      res.write(encodeSse({ event: 'done', data: { runId } }));
-      res.end();
-    });
-  });
-  await new Promise<void>((r) => upstream.listen(0, r));
-  const addr = upstream.address();
-  if (!addr || typeof addr === 'string') throw new Error('no port');
-  runtimeUrl = `http://127.0.0.1:${addr.port}`;
-  process.env.AGENT_RUNTIME_URL = runtimeUrl;
-
   const moduleRef = await Test.createTestingModule({
     controllers: [SessionsController, TasksController],
     providers: [
       SessionsService,
       TasksService,
-      ArtifactService,
       { provide: BillingService, useValue: fakeBilling },
       {
         provide: SettingsService,
@@ -300,15 +233,14 @@ beforeAll(async () => {
       { provide: PrismaService, useValue: fakePrisma },
       { provide: ModelCatalogService, useValue: fakeCatalog },
       { provide: AttachmentsService, useValue: fakeAttachments },
+      { provide: RunQueueService, useValue: fakeQueue },
+      { provide: RunRelayService, useValue: fakeRelay },
       { provide: BFF_METRICS, useValue: createBffMetrics({ defaultMetrics: false }) },
-      { provide: ARTIFACT_STORAGE, useValue: { getObjectStream: async () => { throw new Error('unused'); } } },
     ],
   }).compile();
   app = moduleRef.createNestApplication<NestFastifyApplication>(new FastifyAdapter());
-  // 记录逃逸异常（行为与内置 BaseExceptionFilter 一致，仅多一次登记）。
-  app.useGlobalFilters(new RecordingExceptionFilter(app.getHttpAdapter()));
   await app.init();
-  // 与 main.ts 一致：先建请求 span，控制器里的 currentTrace() 才有值可写入 run.traceId。
+  // 与 main.ts 一致：先建请求 span，控制器里的 currentTrace() 才有值可写入快照。
   registerRequestTelemetry(
     app.getHttpAdapter().getInstance(),
     app.get(BFF_METRICS),
@@ -320,41 +252,44 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
-  // stored 是模块级共享对象：不清空会让上一条用例的 step/message 泄进下一条，
-  // 断言 toHaveLength(2) 会随执行顺序变成假阳性。
-  stored.steps.length = 0;
   stored.messages.length = 0;
   stored.runCreates.length = 0;
   stored.runUpdates.length = 0;
+  stored.taskCreates.length = 0;
   stored.taskUpdates.length = 0;
-  stored.artifacts.length = 0;
   stored.sessionModelUpdates.length = 0;
-  // 恢复上游行为、注入开关与地址，避免用例间互相污染。
-  upstreamMode = 'ok';
-  failStepCreate = false;
-  failRunUpdate = false;
-  failTaskCreate = false;
   getRunConfigError = null;
   billingCalls.length = 0;
-  beginRunError = null;
+  admitRunError = null;
   catalogCalls.length = 0;
   resolveForRunError = null;
   selectedModalities = ['text', 'image', 'audio', 'video'];
   attachmentCalls.length = 0;
   ownedAttachments = [];
-  hydrateError = null;
+  queueCalls.length = 0;
+  submitError = null;
+  relayCalls.length = 0;
+  attachError = null;
   session.model = 'mock';
-  escapedErrors.length = 0;
-  lastRunsBody = '';
-  lastTraceparent = '';
-  process.env.AGENT_RUNTIME_URL = runtimeUrl;
+  session.assistantId = null;
+  session.assistant = null;
+  prepareSpy = vi.spyOn(TasksService.prototype, 'prepare');
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 afterAll(async () => {
   await app.close();
-  await new Promise<void>((r) => upstream.close(() => r()));
   await shutdownTelemetry();
 });
+
+/** 从落库的 task.update 中取出 prepare 补全后的最终快照。 */
+function finalTaskInput(): RunSnapshot {
+  const update = stored.taskUpdates.find((u) => u.data?.input) as any;
+  return update.data.input as RunSnapshot;
+}
 
 describe('TasksController', () => {
   it('未鉴权返回 401', async () => {
@@ -364,102 +299,6 @@ describe('TasksController', () => {
       payload: { goal: 'g' },
     });
     expect(res.statusCode).toBe(401);
-  });
-
-  it('透传 SSE 且把 step 落库', async () => {
-    const token = signToken({ sub: 'u1', tenantId: 't1' });
-    const res = await fetch(`${baseUrl}/api/sessions/s1/tasks`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
-      body: JSON.stringify({ goal: '查竞品' }),
-    });
-    expect(res.headers.get('content-type')).toContain('text/event-stream');
-    const text = await res.text();
-    expect(text).toContain('event: step');
-    expect(text).toContain('event: done');
-    // usage 透传但不落库
-    expect(stored.steps).toHaveLength(3);
-  });
-
-  it('把 JWT 的 sub 作为 userId 透传给 runtime', async () => {
-    const token = signToken({ sub: 'u1', tenantId: 't1' });
-    const res = await app.inject({
-      method: 'POST',
-      url: '/api/sessions/s1/tasks',
-      headers: { authorization: `Bearer ${token}` },
-      payload: { goal: '查一下' },
-    });
-    expect(res.statusCode).toBe(200);
-    expect(JSON.parse(lastRunsBody).userId).toBe('u1');
-    expect(JSON.parse(lastRunsBody).config).toEqual({
-      maxRounds: 3,
-      confirmTimeoutMs: 1000,
-      codeExecTimeoutMs: 1234,
-    });
-    const body = JSON.parse(lastRunsBody);
-    expect(body.billing.selectedModel).toBe('mock');
-    expect(body.modelRoutes).toBeUndefined();
-  });
-
-  it('SSE 里的 artifact step 触发产物落库', async () => {
-    const token = signToken({ sub: 'u1', tenantId: 't1' });
-    const res = await fetch(`${baseUrl}/api/sessions/s1/tasks`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
-      body: JSON.stringify({ goal: '生成 PPT' }),
-    });
-    await res.text();
-    expect(stored.artifacts).toHaveLength(1);
-    expect(stored.artifacts[0]).toMatchObject({ filename: 'a.pptx', kind: 'pptx' });
-  });
-
-  it('流结束后把 assistant 消息（拼接的 think 文本）落库', async () => {
-    const token = signToken({ sub: 'u1', tenantId: 't1' });
-    const res = await fetch(`${baseUrl}/api/sessions/s1/tasks`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
-      body: JSON.stringify({ goal: '查竞品' }),
-    });
-    await res.text();
-    const assistant = stored.messages.find((m) => (m as { role?: string }).role === 'assistant');
-    expect(assistant).toMatchObject({ role: 'assistant', content: '想' });
-  });
-
-  it('上游发 error 事件时 run/task 落 failed', async () => {
-    upstreamMode = 'error';
-    const token = signToken({ sub: 'u1', tenantId: 't1' });
-    const res = await fetch(`${baseUrl}/api/sessions/s1/tasks`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
-      body: JSON.stringify({ goal: 'g' }),
-    });
-    await res.text();
-    expect(stored.runUpdates.at(-1)).toMatchObject({ data: { status: 'failed' } });
-    expect(stored.taskUpdates.at(-1)).toMatchObject({ data: { status: 'failed' } });
-  });
-
-  it('上游不可达时返回 502 且 run/task 落 failed', async () => {
-    // 取一个刚关闭的空闲端口，连接必被拒绝 → fetch 抛错 → 传输层失败分支。
-    const deadPort = await new Promise<number>((resolve) => {
-      const probe = createServer();
-      probe.listen(0, '127.0.0.1', () => {
-        const addr = probe.address();
-        const port = typeof addr === 'object' && addr ? addr.port : 0;
-        probe.close(() => resolve(port));
-      });
-    });
-    process.env.AGENT_RUNTIME_URL = `http://127.0.0.1:${deadPort}`;
-
-    const token = signToken({ sub: 'u1', tenantId: 't1' });
-    const res = await fetch(`${baseUrl}/api/sessions/s1/tasks`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
-      body: JSON.stringify({ goal: 'g' }),
-    });
-    expect(res.status).toBe(502);
-    expect(await res.json()).toEqual({ error: 'upstream_unreachable' });
-    expect(stored.runUpdates.at(-1)).toMatchObject({ data: { status: 'failed' } });
-    expect(stored.taskUpdates.at(-1)).toMatchObject({ data: { status: 'failed' } });
   });
 
   it('goal 非字符串或为空时返回 400，且不建 task/run', async () => {
@@ -475,241 +314,7 @@ describe('TasksController', () => {
       expect(res.json()).toEqual({ error: 'invalid_goal' });
     }
     expect(stored.messages).toHaveLength(0);
-  });
-
-  it('非本用户会话返回 404（hijack 必须晚于归属校验，否则请求挂起）', async () => {
-    // s2 不在 fake store 里，assertOwned 抛 NotFoundException。
-    // 走真实 socket：若控制器在校验前就 hijack，Nest 异常过滤器无法写响应，
-    // 该请求将一直挂起（fetch 直到超时），拿不到 404。
-    const token = signToken({ sub: 'u1', tenantId: 't1' });
-    const res = await fetch(`${baseUrl}/api/sessions/s2/tasks`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
-      body: JSON.stringify({ goal: 'g' }),
-    });
-    expect(res.status).toBe(404);
-  });
-
-  it('落库 step 抛错时把 run 记为 failed（非真空：删掉循环 catch 会记成 done）', async () => {
-    // 让循环里的 recordStep 落库失败：读/解析/落库任一环抛错都必须把本次 run
-    // 记为 failed。若控制器循环外没有 try/catch，控制流会带着初始的 'done'
-    // 进 finally，run.update 便落成 'done'——本用例随即失败。
-    failStepCreate = true;
-    const token = signToken({ sub: 'u1', tenantId: 't1' });
-    const res = await fetch(`${baseUrl}/api/sessions/s1/tasks`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
-      body: JSON.stringify({ goal: 'g' }),
-    });
-    await res.text();
-    expect(stored.runUpdates.at(-1)).toMatchObject({ data: { status: 'failed' } });
-  });
-
-  it('finish 落库失败也不挂起客户端（非真空：去掉 safeFinish 守卫会抛回 Nest）', async () => {
-    // 让收尾的 run.update 抛错：safeFinish 必须吞掉异常，保证 reply.raw.end()
-    // 无条件执行、响应照常终止。
-    // 判别点不在「客户端是否挂起」：Nest 的 BaseExceptionFilter 在 reply 已 hijack
-    // 时会兜底 end 掉响应，所以即便守卫被删，fetch 也照样会返回。真正的判别信号是
-    // 落库异常有没有冒泡出控制器——守卫被回退成直接 await tasks.finish() 时，异常
-    // 会逃逸到 Nest 异常处理器，被 RecordingExceptionFilter 记下，末尾断言随即失败。
-    // AbortController 作兜底超时，防止任何意外挂起阻塞整个套件。
-    failRunUpdate = true;
-    const token = signToken({ sub: 'u1', tenantId: 't1' });
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 3000);
-    try {
-      const res = await fetch(`${baseUrl}/api/sessions/s1/tasks`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
-        body: JSON.stringify({ goal: 'g' }),
-        signal: controller.signal,
-      });
-      const text = await res.text();
-      // 响应体照常送达（含 step/done）说明请求已正常终止，没有挂起。
-      expect(text).toContain('event: step');
-      expect(text).toContain('event: done');
-    } finally {
-      clearTimeout(timer);
-    }
-    expect(escapedErrors).toHaveLength(0);
-  });
-
-  it('收到 usage 后记录并结算预占', async () => {
-    const token = signToken({ sub: 'u1', tenantId: 't1' });
-    const res = await fetch(`${baseUrl}/api/sessions/${session.id}/tasks`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
-      body: JSON.stringify({ goal: '写个总结' }),
-    });
-    await res.text();
-    const begin = billingCalls.find((c) => c[0] === 'begin');
-    const record = billingCalls.find((c) => c[0] === 'record');
-    const settle = billingCalls.find((c) => c[0] === 'settle');
-    expect(begin).toBeDefined();
-    // record 的参数：runId 与 begin 一致；meta 与登录用户一致；usage 为上游事件内容。
-    expect(record?.[1]).toBe(begin?.[1]);
-    expect(record?.[2]).toEqual({ tenantId: 't1', userId: 'u1', sessionId: session.id });
-    expect(record?.[3]).toEqual({ input: 1, output: 1, models: [{ model: 'mock', input: 1, output: 1 }] });
-    expect(settle?.[1]).toBe(begin?.[1]);
-  });
-
-  it('prepare 失败时归还预占', async () => {
-    // 预占成功后建 task 抛错：必须 release，不能记录/结算用量。
-    failTaskCreate = true;
-    const token = signToken({ sub: 'u1', tenantId: 't1' });
-    const res = await fetch(`${baseUrl}/api/sessions/${session.id}/tasks`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
-      body: JSON.stringify({ goal: 'g' }),
-    });
-    expect(res.status).toBe(500);
-    expect(billingCalls.some((c) => c[0] === 'release')).toBe(true);
-    expect(billingCalls.some((c) => c[0] === 'record')).toBe(false);
-    expect(billingCalls.some((c) => c[0] === 'settle')).toBe(false);
-  });
-
-  it('上游非 2xx 时释放预占且不结算', async () => {
-    upstreamMode = 'fail502';
-    const token = signToken({ sub: 'u1', tenantId: 't1' });
-    const res = await fetch(`${baseUrl}/api/sessions/${session.id}/tasks`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
-      body: JSON.stringify({ goal: 'g' }),
-    });
-    expect(res.status).toBe(502);
-    expect(res.headers.get('content-type')).toContain('application/json');
-    expect(await res.json()).toEqual({ error: 'upstream_boom' });
-    expect(billingCalls.some((c) => c[0] === 'release')).toBe(true);
-    expect(billingCalls.some((c) => c[0] === 'record')).toBe(false);
-    expect(billingCalls.some((c) => c[0] === 'settle')).toBe(false);
-  });
-
-  it('上游无 usage 时只释放预占', async () => {
-    upstreamMode = 'nousage';
-    const token = signToken({ sub: 'u1', tenantId: 't1' });
-    const res = await fetch(`${baseUrl}/api/sessions/${session.id}/tasks`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
-      body: JSON.stringify({ goal: '写个总结' }),
-    });
-    await res.text();
-    expect(billingCalls.some((c) => c[0] === 'settle')).toBe(false);
-    expect(billingCalls.some((c) => c[0] === 'release')).toBe(true);
-  });
-
-  it('读取运行参数失败时不预占、不建 task/run', async () => {
-    getRunConfigError = new Error('injected settings failure');
-    const token = signToken({ sub: 'u1', tenantId: 't1' });
-    // 配置读取发生在 hijack/BEGIN 之前，因此可以走 inject 拿到正常的 JSON 错误响应。
-    const res = await app.inject({
-      method: 'POST',
-      url: '/api/sessions/s1/tasks',
-      headers: { authorization: `Bearer ${token}` },
-      payload: { goal: 'g' },
-    });
-    expect(res.statusCode).toBe(500);
-    // 预占必须尚未发生（既无 begin 也无 release）。
-    expect(billingCalls).toHaveLength(0);
-    expect(stored.messages).toHaveLength(0);
-    expect(stored.artifacts).toHaveLength(0);
-    expect(lastRunsBody).toBe('');
-  });
-
-  it('可用积分不足返回 402', async () => {
-    beginRunError = new InsufficientCreditsError();
-    const token = signToken({ sub: 'u1', tenantId: 't1' });
-    const res = await fetch(`${baseUrl}/api/sessions/${session.id}/tasks`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
-      body: JSON.stringify({ goal: '写个总结' }),
-    });
-    expect(res.status).toBe(402);
-    expect(await res.json()).toEqual({ error: 'insufficient_credits' });
-    // 预占失败发生在 hijack 之前，不应建 task/run。
-    expect(stored.messages).toHaveLength(0);
-  });
-
-  it('套餐过期返回 402，限流返回 429', async () => {
-    const token = signToken({ sub: 'u1', tenantId: 't1' });
-    beginRunError = new PlanExpiredError();
-    const r1 = await fetch(`${baseUrl}/api/sessions/${session.id}/tasks`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
-      body: JSON.stringify({ goal: '写个总结' }),
-    });
-    expect(r1.status).toBe(402);
-    expect(await r1.json()).toEqual({ error: 'plan_expired' });
-
-    beginRunError = new RateLimitedError(30);
-    const r2 = await fetch(`${baseUrl}/api/sessions/${session.id}/tasks`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
-      body: JSON.stringify({ goal: '写个总结' }),
-    });
-    expect(r2.status).toBe(429);
-    expect(r2.headers.get('retry-after')).toBe('30');
-    expect(await r2.json()).toEqual({ error: 'rate_limited', retryAfter: 30 });
-  });
-
-  it('客户端断开后仍继续排空上游并结算', async () => {
-    upstreamMode = 'slow';
-    const token = signToken({ sub: 'u1', tenantId: 't1' });
-    const ac = new AbortController();
-    const res = await fetch(`${baseUrl}/api/sessions/${session.id}/tasks`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
-      body: JSON.stringify({ goal: '长任务' }),
-      signal: ac.signal,
-    });
-    const reader = res.body!.getReader();
-    await reader.read(); // 至少收到首帧后再断开
-    ac.abort();
-    // 排空是异步的：用轮询等待结算，避免固定 sleep 在慢机器上偶发假失败。
-    await vi.waitFor(() => expect(billingCalls.some((c) => c[0] === 'settle')).toBe(true), { timeout: 2000 });
-  });
-
-  it('向上游注入合法 W3C traceparent', async () => {
-    const token = signToken({ sub: 'u1', tenantId: 't1' });
-    const res = await app.inject({
-      method: 'POST',
-      url: '/api/sessions/s1/tasks',
-      headers: { authorization: `Bearer ${token}` },
-      payload: { goal: 'g' },
-    });
-    expect(res.statusCode).toBe(200);
-    // 无上游父 span 时应新建 root span：version=00、32 位 traceId、16 位 spanId、采样位=01。
-    expect(lastTraceparent).toMatch(/^00-[0-9a-f]{32}-[0-9a-f]{16}-01$/);
-  });
-
-  it('run 落库当前请求的 traceId', async () => {
-    const token = signToken({ sub: 'u1', tenantId: 't1' });
-    const traceId = '0af7651916cd43dd8448eb211c80319c';
-    const res = await app.inject({
-      method: 'POST',
-      url: '/api/sessions/s1/tasks',
-      headers: {
-        authorization: `Bearer ${token}`,
-        traceparent: `00-${traceId}-b7ad6b7169203331-01`,
-      },
-      payload: { goal: 'g' },
-    });
-    expect(res.statusCode).toBe(200);
-    expect(stored.runCreates[0]).toMatchObject({ traceId });
-  });
-
-  it('模型解析失败时不预占、不建 task，并返回明确状态码', async () => {
-    resolveForRunError = new ModelUnavailableError();
-    const token = signToken({ sub: 'u1', tenantId: 't1' });
-    const res = await app.inject({
-      method: 'POST',
-      url: '/api/sessions/s1/tasks',
-      headers: { authorization: `Bearer ${token}` },
-      payload: { goal: 'g' },
-    });
-    expect(res.statusCode).toBe(409);
-    expect(JSON.parse(res.payload)).toEqual({ error: 'model_unavailable' });
     expect(billingCalls).toEqual([]);
-    expect(stored.runCreates).toHaveLength(0);
   });
 
   it('附件 id 结构非法或数量超限时在预占前返回 400', async () => {
@@ -736,7 +341,227 @@ describe('TasksController', () => {
     expect(billingCalls).toEqual([]);
   });
 
-  it('纯附件消息允许空目标；模型不支持的模态在预占前拒绝', async () => {
+  it('非本用户会话返回 404（hijack 必须晚于归属校验，否则请求挂起）', async () => {
+    // s2 不在 fake store 里，assertOwned 抛 NotFoundException。
+    const token = signToken({ sub: 'u1', tenantId: 't1' });
+    const res = await fetch(`${baseUrl}/api/sessions/s2/tasks`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+      body: JSON.stringify({ goal: 'g' }),
+    });
+    expect(res.status).toBe(404);
+    expect(billingCalls).toEqual([]);
+    expect(queueCalls).toEqual([]);
+  });
+
+  it('读取运行参数失败时不预占、不入队', async () => {
+    getRunConfigError = new Error('injected settings failure');
+    const token = signToken({ sub: 'u1', tenantId: 't1' });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/sessions/s1/tasks',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { goal: 'g' },
+    });
+    expect(res.statusCode).toBe(500);
+    expect(billingCalls).toEqual([]);
+    expect(stored.messages).toHaveLength(0);
+    expect(queueCalls).toEqual([]);
+  });
+
+  it('模型解析失败时不预占、不建 task，并返回明确状态码', async () => {
+    resolveForRunError = new ModelUnavailableError();
+    const token = signToken({ sub: 'u1', tenantId: 't1' });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/sessions/s1/tasks',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { goal: 'g' },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(JSON.parse(res.payload)).toEqual({ error: 'model_unavailable' });
+    expect(billingCalls).toEqual([]);
+    expect(stored.runCreates).toHaveLength(0);
+  });
+
+  it('可用积分不足返回 402', async () => {
+    admitRunError = new InsufficientCreditsError();
+    const token = signToken({ sub: 'u1', tenantId: 't1' });
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/sessions/${session.id}/tasks`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { goal: '写个总结' },
+    });
+    expect(res.statusCode).toBe(402);
+    expect(JSON.parse(res.payload)).toEqual({ error: 'insufficient_credits' });
+    // 准入失败发生在建 task/run 之前。
+    expect(stored.messages).toHaveLength(0);
+    expect(queueCalls).toEqual([]);
+  });
+
+  it('套餐过期返回 402，限流返回 429', async () => {
+    const token = signToken({ sub: 'u1', tenantId: 't1' });
+    const headers = { authorization: `Bearer ${token}` };
+
+    admitRunError = new PlanExpiredError();
+    const r1 = await app.inject({
+      method: 'POST',
+      url: `/api/sessions/${session.id}/tasks`,
+      headers,
+      payload: { goal: '写个总结' },
+    });
+    expect(r1.statusCode).toBe(402);
+    expect(JSON.parse(r1.payload)).toEqual({ error: 'plan_expired' });
+
+    admitRunError = new RateLimitedError(30);
+    const r2 = await app.inject({
+      method: 'POST',
+      url: `/api/sessions/${session.id}/tasks`,
+      headers,
+      payload: { goal: '写个总结' },
+    });
+    expect(r2.statusCode).toBe(429);
+    expect(r2.headers['retry-after']).toBe('30');
+    expect(JSON.parse(r2.payload)).toEqual({ error: 'rate_limited', retryAfter: 30 });
+  });
+
+  it('准入后把运行快照入队并挂接事件流', async () => {
+    session.assistantId = 'as1';
+    session.assistant = {
+      id: 'as1',
+      name: '写作助手',
+      systemPrompt: ' 你是写作助手 ',
+      permissionMode: 'readonly',
+      skills: ['web'],
+      kbIds: ['kb1'],
+    };
+    const traceId = '0af7651916cd43dd8448eb211c80319c';
+    const token = signToken({ sub: 'u1', tenantId: 't1' });
+    const res = await fetch(`${baseUrl}/api/sessions/s1/tasks`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${token}`,
+        traceparent: `00-${traceId}-b7ad6b7169203331-01`,
+      },
+      body: JSON.stringify({ goal: '查竞品' }),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain('event: done');
+
+    // 创建路径只做准入，不再预占；预占由执行器在真正执行时完成。
+    expect(billingCalls).toEqual([['admit', 't1']]);
+    expect(billingCalls.some((c) => c[0] === 'begin')).toBe(false);
+
+    expect(prepareSpy).toHaveBeenCalledTimes(1);
+    const args = prepareSpy.mock.calls[0];
+    expect(args.slice(0, 7)).toEqual(['s1', 't1', 'u1', '查竞品', expect.any(String), traceId, []]);
+    const runId = args[4] as string;
+    const snapshot = args[7] as RunSnapshot;
+    expect(snapshot).toEqual({
+      goal: '查竞品',
+      model: 'mock',
+      resolution: { selectedModel: 'mock', modelRoutes: [] },
+      config: { maxRounds: 3, confirmTimeoutMs: 1000, codeExecTimeoutMs: 1234 },
+      traceId,
+      assistant: {
+        systemPrompt: '你是写作助手',
+        enabledTools: toolsForSkills(['web']),
+        permissionMode: 'readonly',
+        kbIds: ['kb1'],
+      },
+      messages: [],
+    });
+
+    // 入队作业只带标识，执行细节全部来自快照。
+    expect(queueCalls).toEqual([
+      { runId, taskId: 'task1', sessionId: 's1', tenantId: 't1', userId: 'u1' },
+    ]);
+    expect(relayCalls).toEqual([runId]);
+
+    expect(stored.runCreates[0]).toMatchObject({
+      id: runId,
+      taskId: 'task1',
+      status: 'queued',
+      traceId,
+    });
+    expect(stored.runCreates[0].startedAt).toBeUndefined();
+    // prepare 把「历史 + 本次用户消息」写回快照。
+    expect(finalTaskInput().messages).toEqual([
+      { role: 'user', content: '查竞品', attachments: [] },
+    ]);
+    // 会话模型回填已移到执行器，创建路径不写会话。
+    expect(stored.sessionModelUpdates).toHaveLength(0);
+  });
+
+  it('会话无模型时快照记录 null，由执行器在运行时回填', async () => {
+    session.model = null;
+    const token = signToken({ sub: 'u1', tenantId: 't1' });
+    const res = await fetch(`${baseUrl}/api/sessions/s1/tasks`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+      body: JSON.stringify({ goal: 'g' }),
+    });
+    expect(res.status).toBe(200);
+    await res.text();
+
+    const snapshot = prepareSpy.mock.calls[0][7] as RunSnapshot;
+    expect(snapshot.model).toBeNull();
+    expect(snapshot.resolution.selectedModel).toBe('mock');
+    expect(stored.sessionModelUpdates).toHaveLength(0);
+  });
+
+  it('排队已满时标记刚创建的任务失败并返回 429', async () => {
+    submitError = new QueueFullError('t1');
+    const token = signToken({ sub: 'u1', tenantId: 't1' });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/sessions/s1/tasks',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { goal: 'g' },
+    });
+
+    expect(res.statusCode).toBe(429);
+    expect(JSON.parse(res.payload)).toEqual({ error: 'queue_full' });
+    expect(queueCalls).toHaveLength(1);
+    expect(relayCalls).toEqual([]);
+    expect(stored.runUpdates.at(-1)).toMatchObject({ data: { status: 'failed' } });
+    expect(stored.taskUpdates.at(-1)).toMatchObject({ data: { status: 'failed' } });
+  });
+
+  it('入队其他异常时同样标记失败并返回 500', async () => {
+    submitError = new Error('redis down');
+    const token = signToken({ sub: 'u1', tenantId: 't1' });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/sessions/s1/tasks',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { goal: 'g' },
+    });
+
+    expect(res.statusCode).toBe(500);
+    expect(queueCalls).toHaveLength(1);
+    expect(relayCalls).toEqual([]);
+    expect(stored.runUpdates.at(-1)).toMatchObject({ data: { status: 'failed' } });
+    expect(stored.taskUpdates.at(-1)).toMatchObject({ data: { status: 'failed' } });
+  });
+
+  it('挂接时 run 已被删除返回 404，不影响入队后的响应', async () => {
+    attachError = new NotFoundException('run_not_found');
+    const token = signToken({ sub: 'u1', tenantId: 't1' });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/sessions/s1/tasks',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { goal: 'g' },
+    });
+    expect(res.statusCode).toBe(404);
+    expect(JSON.parse(res.payload)).toEqual({ error: 'run_not_found' });
+    expect(queueCalls).toHaveLength(1);
+  });
+
+  it('附件预检在准入前拒绝不支持的模态，放行时把附件写入快照', async () => {
     const token = signToken({ sub: 'u1', tenantId: 't1' });
     const headers = { authorization: `Bearer ${token}` };
     ownedAttachments = [
@@ -767,55 +592,17 @@ describe('TasksController', () => {
     expect(stored.runCreates).toHaveLength(0);
 
     selectedModalities = ['text', 'image'];
-    const ok = await app.inject({
+    const ok = await fetch(`${baseUrl}/api/sessions/s1/tasks`, {
       method: 'POST',
-      url: '/api/sessions/s1/tasks',
-      headers,
-      payload: { goal: '', attachmentIds: ['a1'] },
+      headers: { 'content-type': 'application/json', ...headers },
+      body: JSON.stringify({ goal: '', attachmentIds: ['a1'] }),
     });
-    expect(ok.statusCode).toBe(200);
-    // 附件元数据随 messages 下发给 runtime；纯附件消息是唯一的 user 消息。
-    const body = JSON.parse(lastRunsBody) as { messages: { attachments?: unknown[] }[] };
-    expect(body.messages.at(-1)?.attachments).toHaveLength(1);
-  });
-
-  it('附件读取失败时归还预占并把 run 标记 failed', async () => {
-    ownedAttachments = [
-      {
-        id: 'a1',
-        kind: 'text',
-        filename: 'a.txt',
-        mime: 'text/plain',
-        size: 3,
-        storageKey: 'k1',
-      },
-    ];
-    hydrateError = new Error('storage down');
-    const token = signToken({ sub: 'u1', tenantId: 't1' });
-    const res = await app.inject({
-      method: 'POST',
-      url: '/api/sessions/s1/tasks',
-      headers: { authorization: `Bearer ${token}` },
-      payload: { goal: '看附件', attachmentIds: ['a1'] },
-    });
-
-    expect(res.statusCode).toBe(502);
-    expect(JSON.parse(res.payload)).toEqual({ error: 'attachment_unavailable' });
-    expect(billingCalls).toContainEqual(['release', expect.any(String)]);
-    expect(stored.runUpdates.at(-1)).toMatchObject({ data: { status: 'failed' } });
-  });
-
-  it('历史会话首次运行成功后回填模型', async () => {
-    session.model = null;
-    const token = signToken({ sub: 'u1', tenantId: 't1' });
-    const res = await fetch(`${baseUrl}/api/sessions/s1/tasks`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
-      body: JSON.stringify({ goal: 'g' }),
-    });
-    await res.text();
-    expect(stored.sessionModelUpdates).toEqual([
-      { where: { id: 's1', model: null }, data: { model: 'mock' } },
-    ]);
+    expect(ok.status).toBe(200);
+    await ok.text();
+    // 纯附件消息是唯一的 user 消息，附件元数据随快照落库供执行器水合。
+    const messages = finalTaskInput().messages;
+    expect(messages.at(-1)?.attachments).toHaveLength(1);
+    // 创建路径不读取附件字节。
+    expect(attachmentCalls.some((c) => c[0] === 'hydrate')).toBe(false);
   });
 });

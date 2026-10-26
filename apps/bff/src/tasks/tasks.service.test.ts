@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NotFoundException } from '@nestjs/common';
 import { TasksService } from './tasks.service';
 import type { PrismaService } from '../db/prisma.service';
+import type { RunSnapshot } from '../queue/run-job';
 
 type Row = Record<string, any>;
 
@@ -129,12 +130,75 @@ function p2002(target: string[] = ['sessionId', 'seq']): Error {
   return err;
 }
 
+function snapshot(overrides: Partial<RunSnapshot> = {}): RunSnapshot {
+  return {
+    goal: '目标',
+    messages: [],
+    model: 'm1',
+    resolution: { selectedModel: 'm1', modelRoutes: [] },
+    config: { maxRounds: 3, confirmTimeoutMs: 1000, codeExecTimeoutMs: 5000 },
+    traceId: null,
+    assistant: null,
+    ...overrides,
+  };
+}
+
 describe('TasksService', () => {
+  it('prepare 落 queued 状态并保存快照', async () => {
+    ctx.db.messages.push({ id: 'm0', sessionId: 's1', role: 'user', content: '旧消息', seq: 0 });
+
+    const result = await svc.prepare(
+      's1',
+      't1',
+      'u1',
+      '写周报',
+      'r1',
+      'trace',
+      [],
+      snapshot({ goal: '写周报', traceId: 'trace' }),
+    );
+
+    expect(ctx.db.tasks[0]).toMatchObject({ sessionId: 's1', goal: '写周报', status: 'queued' });
+    // 入队快照被补全为「历史 + 本次用户消息」，执行器无需再查历史。
+    expect(ctx.db.tasks[0].input).toMatchObject({
+      goal: '写周报',
+      traceId: 'trace',
+      messages: [
+        { role: 'user', content: '旧消息', attachments: [] },
+        { role: 'user', content: '写周报', attachments: [] },
+      ],
+    });
+    expect(ctx.db.runs[0]).toMatchObject({
+      id: 'r1',
+      taskId: ctx.db.tasks[0].id,
+      status: 'queued',
+      traceId: 'trace',
+    });
+    // startedAt 由执行器在真正开始执行时写入，创建路径不能提前写。
+    expect(ctx.db.runs[0].startedAt).toBeUndefined();
+    // 返回值只带标识，消息历史已经随快照落库。
+    expect(result).toEqual({
+      taskId: ctx.db.tasks[0].id,
+      runId: 'r1',
+      tenantId: 't1',
+      userId: 'u1',
+    });
+  });
+
   it('prepare 遇到 P2002 后重试，消息序号取当前最大值 +1', async () => {
     ctx.db.messages.push({ id: 'm0', sessionId: 's1', role: 'user', content: '旧消息', seq: 0 });
     ctx.db.messageCreateErrors.push(p2002());
 
-    const result = await svc.prepare('s1', 't1', 'u1', '新目标', 'run1');
+    const result = await svc.prepare(
+      's1',
+      't1',
+      'u1',
+      '新目标',
+      'run1',
+      null,
+      [],
+      snapshot({ goal: '新目标' }),
+    );
 
     // 首次 create 被注入 P2002 异常后重试成功，仍写 seq 1，不出现空洞或重复。
     expect(result.taskId).toBeTruthy();
@@ -142,7 +206,11 @@ describe('TasksService', () => {
     expect(ctx.db.messageCreateCalls).toBe(2);
     expect(ctx.db.messages.filter((m) => m.role === 'user').map((m) => m.seq)).toEqual([0, 1]);
     expect(ctx.db.messages.find((m) => m.role === 'user' && m.seq === 1)?.content).toBe('新目标');
-    expect(result.messages.at(-1)).toEqual({ role: 'user', content: '新目标', attachments: [] });
+    expect(ctx.db.tasks[0].input.messages.at(-1)).toEqual({
+      role: 'user',
+      content: '新目标',
+      attachments: [],
+    });
     // 首次事务已回滚：重试成功后不应残留第一次创建的 task/run 孤儿。
     expect(ctx.db.tasks).toHaveLength(1);
     expect(ctx.db.runs).toHaveLength(1);
@@ -154,14 +222,18 @@ describe('TasksService', () => {
     err.code = 'P2003';
     ctx.db.messageCreateErrors.push(err);
 
-    await expect(svc.prepare('s1', 't1', 'u1', '目标', 'run1')).rejects.toMatchObject({ code: 'P2003' });
+    await expect(
+      svc.prepare('s1', 't1', 'u1', '目标', 'run1', null, [], snapshot()),
+    ).rejects.toMatchObject({ code: 'P2003' });
     expect(ctx.db.messageCreateCalls).toBe(1);
   });
 
   it('prepare 重试耗尽后抛出，且所有事务均已回滚', async () => {
     for (let i = 0; i < 5; i++) ctx.db.messageCreateErrors.push(p2002());
 
-    await expect(svc.prepare('s1', 't1', 'u1', '目标', 'run1')).rejects.toMatchObject({ code: 'P2002' });
+    await expect(
+      svc.prepare('s1', 't1', 'u1', '目标', 'run1', null, [], snapshot()),
+    ).rejects.toMatchObject({ code: 'P2002' });
     expect(ctx.db.messageCreateCalls).toBe(5);
     expect(ctx.db.tasks).toHaveLength(0);
     expect(ctx.db.runs).toHaveLength(0);
@@ -170,7 +242,9 @@ describe('TasksService', () => {
   it('prepare 对 runId 等非 seq 的 P2002 不重试，直接抛出', async () => {
     ctx.db.messageCreateErrors.push(p2002(['id']));
 
-    await expect(svc.prepare('s1', 't1', 'u1', '目标', 'run1')).rejects.toMatchObject({ code: 'P2002' });
+    await expect(
+      svc.prepare('s1', 't1', 'u1', '目标', 'run1', null, [], snapshot()),
+    ).rejects.toMatchObject({ code: 'P2002' });
     expect(ctx.db.messageCreateCalls).toBe(1);
     expect(ctx.db.tasks).toHaveLength(0);
     expect(ctx.db.runs).toHaveLength(0);
@@ -199,14 +273,14 @@ describe('TasksService', () => {
   });
 
   it('prepare 持久化 traceId，未提供时写 null', async () => {
-    await svc.prepare('s1', 't1', 'u1', '目标', 'run1', 'trace-1');
+    await svc.prepare('s1', 't1', 'u1', '目标', 'run1', 'trace-1', [], snapshot({ traceId: 'trace-1' }));
     expect(ctx.db.runs[0]).toMatchObject({ id: 'run1', traceId: 'trace-1' });
 
-    await svc.prepare('s1', 't1', 'u1', '目标', 'run2');
+    await svc.prepare('s1', 't1', 'u1', '目标', 'run2', null, [], snapshot());
     expect(ctx.db.runs[1].traceId).toBeNull();
   });
 
-  it('prepare 原子认领附件并按入参顺序回传，历史附件一并带上', async () => {
+  it('prepare 原子认领附件并按入参顺序写入快照，历史附件一并带上', async () => {
     ctx.db.messages.push({
       id: 'm0',
       sessionId: 's1',
@@ -229,15 +303,26 @@ describe('TasksService', () => {
       { id: 'a2', tenantId: 't1', userId: 'u1', sessionId: null, messageId: null, kind: 'image', filename: 'b.png', mime: 'image/png', size: 4, storageKey: 'k2' },
     );
 
-    const result = await svc.prepare('s1', 't1', 'u1', '看附件', 'run1', null, ['a2', 'a1', 'a2']);
+    const result = await svc.prepare(
+      's1',
+      't1',
+      'u1',
+      '看附件',
+      'run1',
+      null,
+      ['a2', 'a1', 'a2'],
+      snapshot({ goal: '看附件' }),
+    );
 
     // 去重后按调用方给的顺序（a2、a1）返回，便于前端/模型看到稳定顺序。
-    expect(result.messages.at(-1)?.attachments.map((a) => a.id)).toEqual(['a2', 'a1']);
-    expect(result.messages[0].attachments.map((a) => a.id)).toEqual(['a-old']);
+    const messages = ctx.db.tasks[0].input.messages as Row[];
+    expect(messages.at(-1)?.attachments.map((a: Row) => a.id)).toEqual(['a2', 'a1']);
+    expect(messages[0].attachments.map((a: Row) => a.id)).toEqual(['a-old']);
     expect(ctx.db.attachments).toMatchObject([
       { id: 'a1', sessionId: 's1', messageId: 'm2' },
       { id: 'a2', sessionId: 's1', messageId: 'm2' },
     ]);
+    expect(result).not.toHaveProperty('messages');
   });
 
   it('prepare 认领数量不符时整体回滚，不留下消息/任务/绑定', async () => {
@@ -245,9 +330,9 @@ describe('TasksService', () => {
       { id: 'a1', tenantId: 't1', userId: 'u2', sessionId: null, messageId: null, kind: 'text', filename: 'a.txt', mime: 'text/plain', size: 3, storageKey: 'k1' },
     );
 
-    await expect(svc.prepare('s1', 't1', 'u1', '看附件', 'run1', null, ['a1'])).rejects.toThrow(
-      'attachment_not_found',
-    );
+    await expect(
+      svc.prepare('s1', 't1', 'u1', '看附件', 'run1', null, ['a1'], snapshot({ goal: '看附件' })),
+    ).rejects.toThrow('attachment_not_found');
 
     expect(ctx.db.messages).toHaveLength(0);
     expect(ctx.db.tasks).toHaveLength(0);

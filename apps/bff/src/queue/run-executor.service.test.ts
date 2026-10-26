@@ -16,6 +16,7 @@ interface ExecutorDeps {
   tasks: {
     loadSnapshot: ReturnType<typeof vi.fn>;
     recordStep: ReturnType<typeof vi.fn>;
+    bindModel: ReturnType<typeof vi.fn>;
     finish: ReturnType<typeof vi.fn>;
   };
   attachments: { hydrateForRun: ReturnType<typeof vi.fn> };
@@ -65,6 +66,7 @@ function makeExecutor(): { executor: RunExecutor; deps: ExecutorDeps } {
     tasks: {
       loadSnapshot: vi.fn().mockResolvedValue(snapshot()),
       recordStep: vi.fn().mockResolvedValue(undefined),
+      bindModel: vi.fn().mockResolvedValue(undefined),
       finish: vi.fn().mockResolvedValue(undefined),
     },
     attachments: {
@@ -221,6 +223,34 @@ describe('RunExecutor', () => {
       message: '套餐已过期，请续费后重试',
       error: 'plan_expired',
     });
+  });
+
+  it('会话无模型时执行器回填模型，已有模型时跳过', async () => {
+    const { executor, deps } = makeExecutor();
+    deps.tasks.loadSnapshot.mockResolvedValue({ ...snapshot(), model: null });
+    deps.fetch.mockResolvedValue(sseResponse([{ event: 'done', data: { runId: 'r1' } }]));
+
+    await executor.execute(job());
+
+    expect(deps.billing.beginRun).toHaveBeenCalledWith('r1', 't1');
+    expect(deps.tasks.bindModel).toHaveBeenCalledWith('s1', 'm1');
+
+    const second = makeExecutor();
+    second.deps.fetch.mockResolvedValue(sseResponse([{ event: 'done', data: { runId: 'r1' } }]));
+    await second.executor.execute(job());
+    expect(second.deps.tasks.bindModel).not.toHaveBeenCalled();
+  });
+
+  it('回填模型失败不影响执行', async () => {
+    const { executor, deps } = makeExecutor();
+    deps.tasks.loadSnapshot.mockResolvedValue({ ...snapshot(), model: null });
+    deps.tasks.bindModel.mockRejectedValue(new Error('db down'));
+    deps.fetch.mockResolvedValue(sseResponse([{ event: 'done', data: { runId: 'r1' } }]));
+
+    await expect(executor.execute(job())).resolves.toBeUndefined();
+
+    expect(deps.fetch).toHaveBeenCalled();
+    expect(deps.tasks.finish).toHaveBeenCalledWith('r1', 't1', 'done', '', 's1');
   });
 
   it('附件 hydrate 失败时释放预占、标记 failed 并发布 error', async () => {
