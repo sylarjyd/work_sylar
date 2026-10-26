@@ -20,6 +20,7 @@ import { AdminTasksService } from './admin-tasks.service';
 import { AuditService } from '../audit/audit.service';
 import { SettingsService } from '../settings/settings.service';
 import { PrismaService } from '../db/prisma.service';
+import { QueueFullError } from '../queue/run-queue.service';
 import { signToken } from '../auth/jwt';
 
 /** 用户查询桩：管理员（id=admin）与普通成员（其余 id）共用。 */
@@ -331,7 +332,15 @@ describe('�������澯��ʱ���߽ӿڼ�Ȩ', () => {
       notifiedAt: null,
     }),
   };
-  const tasksStub = { runTimeline: async () => ({ runId: 'r1', nodes: [] }) };
+  let retryError: Error | null = null;
+  const tasksStub = {
+    runTimeline: async () => ({ runId: 'r1', nodes: [] }),
+    cancelRun: async () => ({ status: 'canceled' }),
+    retryRun: async () => {
+      if (retryError) throw retryError;
+      return { runId: 'r2', taskId: 'task1', attempt: 2 };
+    },
+  };
 
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({
@@ -363,6 +372,8 @@ describe('�������澯��ʱ���߽ӿڼ�Ȩ', () => {
     { method: 'GET', url: '/api/admin/alert-events' },
     { method: 'POST', url: '/api/admin/alert-rules/r1/test' },
     { method: 'GET', url: '/api/admin/runs/r1/timeline' },
+    { method: 'POST', url: '/api/admin/runs/r1/cancel' },
+    { method: 'POST', url: '/api/admin/runs/r1/retry' },
   ];
 
   it('��ͨ��Ա���������ӿ�ȫ������ 403', async () => {
@@ -398,5 +409,37 @@ describe('�������澯��ʱ���߽ӿڼ�Ȩ', () => {
     });
     expect(timelineRes.statusCode).toBe(200);
     expect(JSON.parse(timelineRes.payload)).toMatchObject({ runId: 'r1' });
+
+    const cancelRes = await adminApp.inject({
+      method: 'POST',
+      url: '/api/admin/runs/r1/cancel',
+      headers,
+    });
+    expect(cancelRes.statusCode).toBe(200);
+    expect(JSON.parse(cancelRes.payload)).toEqual({ status: 'canceled' });
+
+    const retryRes = await adminApp.inject({
+      method: 'POST',
+      url: '/api/admin/runs/r1/retry',
+      headers,
+    });
+    expect(retryRes.statusCode).toBe(202);
+    expect(JSON.parse(retryRes.payload)).toMatchObject({ runId: 'r2', attempt: 2 });
+  });
+
+  it('重试遇到队列已满映射为 429 queue_full', async () => {
+    retryError = new QueueFullError('t1');
+    try {
+      const res = await adminApp.inject({
+        method: 'POST',
+        url: '/api/admin/runs/r1/retry',
+        headers: { authorization: `Bearer ${signToken({ sub: 'admin', tenantId: 't1' })}` },
+      });
+      expect(res.statusCode).toBe(429);
+      expect(JSON.parse(res.payload)).toMatchObject({ message: 'queue_full' });
+    } finally {
+      // 断言失败也必须复位，避免污染后续用例。
+      retryError = null;
+    }
   });
 });

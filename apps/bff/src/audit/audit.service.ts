@@ -25,6 +25,14 @@ export class AuditService {
     await tx.adminAuditLog.create({ data: toData(actor, entry) });
   }
 
+  /**
+   * 非事务写操作审计：业务已产生队列/总线等外部副作用、无法与业务写入同事务时使用。
+   * 与 bestEffort 不同，写失败直接上抛，保证必审操作不会静默丢审计。
+   */
+  async record(actor: AdminActor, entry: AuditEntry): Promise<void> {
+    await this.prisma.adminAuditLog.create({ data: toData(actor, entry) });
+  }
+
   /** 敏感查看审计：读取成功后调用；写失败只记日志，不阻断读取。 */
   async bestEffort(actor: AdminActor, entry: AuditEntry): Promise<void> {
     try {

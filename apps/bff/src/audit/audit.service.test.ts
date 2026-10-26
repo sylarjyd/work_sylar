@@ -70,6 +70,16 @@ describe('AuditService', () => {
     ).resolves.toBeUndefined();
   });
 
+  it('record 与 bestEffort 不同：写失败必须上抛', async () => {
+    const svc = makeService(async () => {
+      throw new Error('db down');
+    });
+    // 必审操作不能静默丢审计，否则调用方无法感知“操作成功但没留痕”。
+    await expect(
+      svc.record(actor, { action: 'run.cancel', targetType: 'run', targetId: 'r1' }),
+    ).rejects.toThrow('db down');
+  });
+
   it('list 返回分页与 ISO 时间', async () => {
     const svc = makeService(async () => ({}));
     const page = await svc.list({ page: '1', pageSize: '20', action: 'user.update' });

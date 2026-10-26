@@ -5,12 +5,15 @@ import type {
   AdminRunTimelineDto,
   AdminTaskDetailDto,
   AdminTaskItemDto,
+  CancelRunResultDto,
   PageDto,
+  RetryRunResultDto,
   RunStatus,
 } from '@ai-office/shared';
 import { PrismaService } from '../db/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import type { AdminActor } from '../audit/audit.types';
+import { RunsService } from '../runs/runs.service';
 import { optionalString, parsePage } from './admin.util';
 import { buildTimelineNodes, TIMELINE_STEP_LIMIT } from './run-timeline';
 
@@ -37,9 +40,11 @@ const LATEST_RUN_INCLUDE = {
 
 type TaskWithLatestRun = Prisma.TaskGetPayload<{ include: typeof LATEST_RUN_INCLUDE }>;
 
-/** TasksService 写 running/done/failed；queued 是 schema 默认值，留给队列期。 */
-function isTaskStatus(v: unknown): v is 'queued' | 'running' | 'done' | 'failed' {
-  return v === 'queued' || v === 'running' || v === 'done' || v === 'failed';
+/** TasksService 写 running/done/failed/canceled；queued 是 schema 默认值，留给队列期。 */
+function isTaskStatus(v: unknown): v is 'queued' | 'running' | 'done' | 'failed' | 'canceled' {
+  return (
+    v === 'queued' || v === 'running' || v === 'done' || v === 'failed' || v === 'canceled'
+  );
 }
 
 function toItem(row: TaskWithLatestRun): AdminTaskItemDto {
@@ -64,6 +69,7 @@ export class AdminTasksService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly runs: RunsService,
   ) {}
 
   async list(query: Record<string, unknown>): Promise<PageDto<AdminTaskItemDto>> {
@@ -254,6 +260,52 @@ export class AdminTasksService {
             models: usage.models,
           }
         : null,
+    };
+  }
+
+  /** 管理端取消运行：先解析目标归属，再以该租户/用户调用领域服务，避免绕过归属校验。 */
+  async cancelRun(runId: string, actor: AdminActor): Promise<CancelRunResultDto> {
+    const owner = await this.runOwner(runId);
+    const result = await this.runs.cancel(runId, owner.tenantId, owner.userId);
+    await this.audit.record(actor, {
+      action: 'run.cancel',
+      targetType: 'run',
+      targetId: runId,
+      summary: { status: result.status, attempt: owner.attempt },
+    });
+    return result;
+  }
+
+  /** 管理端手动重试：新 run 已入队，审计记录新 attempt 便于追溯。 */
+  async retryRun(runId: string, actor: AdminActor): Promise<RetryRunResultDto> {
+    const owner = await this.runOwner(runId);
+    const result = await this.runs.retry(runId, owner.tenantId, owner.userId);
+    await this.audit.record(actor, {
+      action: 'run.retry',
+      targetType: 'run',
+      targetId: runId,
+      // 目标仍是原 run，但新 run 的 id 必须记下：只写 targetId 时无法追溯这次重试生成了哪一行。
+      summary: { status: 'queued', attempt: result.attempt, runId: result.runId },
+    });
+    return result;
+  }
+
+  /** run -> task -> session 解析归属租户/用户；run 不存在统一 404 run_not_found。 */
+  private async runOwner(
+    runId: string,
+  ): Promise<{ tenantId: string; userId: string; attempt: number }> {
+    const row = await this.prisma.run.findUnique({
+      where: { id: runId },
+      select: {
+        attempt: true,
+        task: { select: { session: { select: { tenantId: true, userId: true } } } },
+      },
+    });
+    if (!row) throw new NotFoundException('run_not_found');
+    return {
+      tenantId: row.task.session.tenantId,
+      userId: row.task.session.userId,
+      attempt: row.attempt,
     };
   }
 }

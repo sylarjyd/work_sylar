@@ -5,6 +5,7 @@ import { AdminTasksService } from './admin-tasks.service';
 import type { AuditService } from '../audit/audit.service';
 import type { PrismaService } from '../db/prisma.service';
 import type { AdminActor } from '../audit/audit.types';
+import type { RunsService } from '../runs/runs.service';
 
 const actor: AdminActor = { id: 'a1', email: 'admin@test.local' };
 
@@ -22,6 +23,8 @@ interface RunSeed {
   status: string;
   startedAt: Date;
   endedAt: Date | null;
+  attempt?: number;
+  cancelRequestedAt?: Date | null;
   traceId?: string | null;
   steps: StepSeed[];
 }
@@ -32,6 +35,10 @@ interface TaskSeed {
   goal: string;
   status: string;
   createdAt: Date;
+  attempts?: number;
+  queuedAt?: Date;
+  startedAt?: Date | null;
+  endedAt?: Date | null;
 }
 
 interface UsageSeed {
@@ -69,6 +76,8 @@ const defaultRun: RunSeed = {
   status: 'done',
   startedAt: new Date('2026-10-01T00:00:00Z'),
   endedAt: new Date('2026-10-01T00:01:00Z'),
+  attempt: 1,
+  cancelRequestedAt: null,
   traceId: '0af7651916cd43dd8448eb211c80319c',
   steps: [
     { id: 'st1', seq: 0, type: 'think', payload: { text: 'hi' }, ts: new Date('2026-10-01T00:00:01Z') },
@@ -130,14 +139,21 @@ function makeService(fixtures: Fixtures = {}) {
     },
     run: {
       findMany: async ({ where }: any) => runsOfTask(where.taskId),
-      findUnique: async ({ where, include }: any) => {
+      findUnique: async ({ where, include, select }: any) => {
         const run = runs.find((r) => r.id === where.id);
         if (!run) return null;
+        // runOwner 只 select attempt 与 task.session，不需要整行与步骤。
+        if (select) {
+          const task = tasks.find((t) => t.id === run.taskId);
+          const session = task ? sessions[task.sessionId] : undefined;
+          return { attempt: run.attempt ?? 1, task: { session } };
+        }
         const ordered = [...run.steps].sort((a, b) => a.seq - b.seq);
         const skip = include?.steps?.skip ?? 0;
         const take = include?.steps?.take ?? ordered.length;
         return {
           ...run,
+          attempt: run.attempt ?? 1,
           steps: ordered.slice(skip, skip + take),
           _count: { steps: ordered.length },
         };
@@ -156,8 +172,27 @@ function makeService(fixtures: Fixtures = {}) {
     bestEffort: async (_actor: AdminActor, entry: unknown) => {
       audits.push(entry);
     },
+    record: async (_actor: AdminActor, entry: unknown) => {
+      audits.push(entry);
+    },
   } as unknown as AuditService;
-  return { svc: new AdminTasksService(db, audit), audits };
+
+  const runCalls: {
+    cancel: Array<{ runId: string; tenantId: string; userId: string }>;
+    retry: Array<{ runId: string; tenantId: string; userId: string }>;
+  } = { cancel: [], retry: [] };
+  const runsService = {
+    cancel: async (runId: string, tenantId: string, userId: string) => {
+      runCalls.cancel.push({ runId, tenantId, userId });
+      return { status: 'canceled' as const };
+    },
+    retry: async (runId: string, tenantId: string, userId: string) => {
+      runCalls.retry.push({ runId, tenantId, userId });
+      return { runId: 'r2', taskId: 'task1', attempt: 2 };
+    },
+  } as unknown as RunsService;
+
+  return { svc: new AdminTasksService(db, audit, runsService), audits, runCalls };
 }
 
 describe('AdminTasksService', () => {
@@ -309,5 +344,95 @@ describe('AdminTasksService', () => {
   it('runTimeline 不存在抛 404', async () => {
     const { svc } = makeService();
     await expect(svc.runTimeline('missing', actor)).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('列表支持 queued/canceled 并可返回 attempts 与排队时间', async () => {
+    const queuedAt = new Date('2026-10-02T00:00:00Z');
+    const { svc } = makeService({
+      tasks: [
+        {
+          ...defaultTask,
+          id: 'task-queued',
+          status: 'queued',
+          attempts: 1,
+          queuedAt,
+          startedAt: null,
+          endedAt: null,
+        },
+        {
+          ...defaultTask,
+          id: 'task-canceled',
+          status: 'canceled',
+          attempts: 2,
+          queuedAt,
+          endedAt: new Date('2026-10-02T00:05:00Z'),
+        },
+      ],
+      runs: [
+        { ...defaultRun, id: 'r-queued', taskId: 'task-queued', status: 'queued' },
+        { ...defaultRun, id: 'r-canceled', taskId: 'task-canceled', status: 'canceled' },
+      ],
+      usage: [],
+    });
+
+    const queued = await svc.list({ status: 'queued' });
+    expect(queued.items[0]).toMatchObject({
+      status: 'queued',
+      latestRunStatus: 'queued',
+      attempts: 1,
+      queuedAt: queuedAt.toISOString(),
+      startedAt: null,
+      endedAt: null,
+    });
+
+    const canceled = await svc.list({ status: 'canceled' });
+    expect(canceled.items[0]).toMatchObject({
+      status: 'canceled',
+      attempts: 2,
+      latestRunStatus: 'canceled',
+    });
+  });
+
+  it('取消/重试前解析 run 归属，run 不存在抛 404 且不触发副作用', async () => {
+    const { svc, runCalls, audits } = makeService();
+    await expect(svc.cancelRun('missing', actor)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(svc.retryRun('missing', actor)).rejects.toBeInstanceOf(NotFoundException);
+    expect(runCalls.cancel).toHaveLength(0);
+    expect(runCalls.retry).toHaveLength(0);
+    expect(audits).toHaveLength(0);
+  });
+
+  it('取消运行以目标归属调用领域服务并写审计', async () => {
+    const { svc, audits, runCalls } = makeService({
+      runs: [{ ...defaultRun, attempt: 4 }],
+    });
+    const result = await svc.cancelRun('r1', actor);
+
+    expect(result).toEqual({ status: 'canceled' });
+    expect(runCalls.cancel[0]).toEqual({ runId: 'r1', tenantId: 't1', userId: 'u1' });
+    expect(audits).toContainEqual(
+      expect.objectContaining({
+        action: 'run.cancel',
+        targetType: 'run',
+        targetId: 'r1',
+        summary: { status: 'canceled', attempt: 4 },
+      }),
+    );
+  });
+
+  it('重试运行写审计并返回新 attempt', async () => {
+    const { svc, audits, runCalls } = makeService();
+    const result = await svc.retryRun('r1', actor);
+
+    expect(result).toEqual({ runId: 'r2', taskId: 'task1', attempt: 2 });
+    expect(runCalls.retry[0]).toEqual({ runId: 'r1', tenantId: 't1', userId: 'u1' });
+    expect(audits).toContainEqual(
+      expect.objectContaining({
+        action: 'run.retry',
+        targetType: 'run',
+        targetId: 'r1',
+        summary: { status: 'queued', attempt: 2, runId: 'r2' },
+      }),
+    );
   });
 });
