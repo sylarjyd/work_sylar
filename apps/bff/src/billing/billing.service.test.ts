@@ -354,6 +354,20 @@ describe('BillingService', () => {
     await expect(svc.beginRun('r2', 't1')).rejects.toBeInstanceOf(InsufficientCreditsError);
   });
 
+  it('同一 runId 重复 beginRun 幂等：复用旧 hold，不重复预占', async () => {
+    await svc.summary('t1');
+    const first = await svc.beginRun('r1', 't1');
+    // 模拟 worker 崩溃后 BullMQ 重投：同一个 runId 再次 beginRun。
+    const second = await svc.beginRun('r1', 't1');
+
+    expect(second.maxCredits).toBe(first.maxCredits);
+    expect(second.allowedModels).toEqual(first.allowedModels);
+    // 只能有一笔 hold、只累加一次 reserved，否则重投会重复占用额度或直接 P2002。
+    expect(ctx.db.holds).toHaveLength(1);
+    expect(ctx.prisma.creditHold.create).toHaveBeenCalledTimes(1);
+    expect(ctx.db.credits[0].reserved).toBe(first.maxCredits);
+  });
+
   it('settle 按用量扣费、写 consume 流水并释放预占；重复调用幂等', async () => {
     await svc.summary('t1');
     await svc.beginRun('r1', 't1');

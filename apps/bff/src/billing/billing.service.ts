@@ -232,6 +232,23 @@ export class BillingService implements OnModuleDestroy {
     return this.prisma.$transaction(async (tx) => {
       await tx.tenantCredit.upsert({ where: { tenantId }, create: { tenantId }, update: {} });
       await this.lockCredit(tx, tenantId);
+      // 崩溃重投必须复用同一笔预占：CreditHold.runId 是主键，旧 hold 仍在时若再次 create
+      // 会触发 P2002，或先因 available < 1 被判成 run_failed 而丢弃断点，续跑永远走不到。
+      // 锁行之后再查，保证并发 beginRun 串行化，后到者能看到先到者的 hold。
+      const existingHold = await tx.creditHold.findUnique({ where: { runId } });
+      if (existingHold) {
+        const prices = await this.loadPrices(tx);
+        // 复用 hold 也要保持价格校验：漏配模型同样要让入口失败，而不是按 0 计费。
+        for (const model of plan.allowedModels) {
+          if (!prices[model]) throw new Error(`model_price_missing:${model}`);
+        }
+        return {
+          maxCredits: existingHold.amount,
+          allowedModels: plan.allowedModels,
+          prices,
+        };
+      }
+
       await this.expireDueLots(tx, tenantId, now);
       const credit = await tx.tenantCredit.findUnique({ where: { tenantId } });
       const available = (credit?.balance ?? 0) - (credit?.reserved ?? 0);

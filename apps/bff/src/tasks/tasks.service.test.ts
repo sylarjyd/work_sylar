@@ -7,6 +7,22 @@ import type { RunSnapshot } from '../queue/run-job';
 
 type Row = Record<string, any>;
 
+/** 按 Prisma where 语义匹配内存行：支持等值、in、gte、notIn（仅覆盖本服务用到的操作符）。 */
+function matchesWhere(row: Row, where: Row): boolean {
+  return Object.entries(where).every(([key, expected]) => {
+    const actual = row[key];
+    if (expected !== null && typeof expected === 'object' && !Array.isArray(expected)) {
+      const op = expected as Record<string, any>;
+      if (Array.isArray(op.in)) return op.in.includes(actual);
+      if ('gte' in op) return actual >= op.gte;
+      if ('notIn' in op) return !op.notIn.includes(actual);
+      // 关系过滤在本内存实现里不参与匹配。
+      return true;
+    }
+    return actual === expected;
+  });
+}
+
 /** 构造一个最小的内存版 Prisma：只实现任务服务用到的方法。 */
 function makeDb() {
   const db = {
@@ -14,6 +30,9 @@ function makeDb() {
     tasks: [] as Row[],
     runs: [] as Row[],
     attachments: [] as Row[],
+    artifacts: [] as Row[],
+    steps: [] as Row[],
+    runCheckpoints: [] as Row[],
     // 预先排队的 message.create 异常，用来模拟并发唯一键冲突等故障。
     messageCreateErrors: [] as unknown[],
     messageCreateCalls: 0,
@@ -61,9 +80,7 @@ function makeDb() {
       },
       // 条件更新：status/runId 等过滤条件按内存行逐项匹配。
       updateMany: async ({ where, data }: any) => {
-        const rows = db.tasks.filter((t) =>
-          Object.entries(where).every(([k, v]) => k === 'id' || t[k] === v),
-        );
+        const rows = db.tasks.filter((t) => matchesWhere(t, where));
         for (const row of rows) Object.assign(row, data);
         return { count: rows.length };
       },
@@ -95,11 +112,30 @@ function makeDb() {
         return row ?? { id: where.id, ...data };
       },
       updateMany: async ({ where, data }: any) => {
-        const rows = db.runs.filter((r) =>
-          Object.entries(where).every(([k, v]) => k === 'id' || r[k] === v),
-        );
+        const rows = db.runs.filter((r) => matchesWhere(r, where));
         for (const row of rows) Object.assign(row, data);
         return { count: rows.length };
+      },
+    },
+    step: {
+      deleteMany: async ({ where }: any) => {
+        const rows = db.steps.filter((s) => matchesWhere(s, where));
+        db.steps = db.steps.filter((s) => !rows.includes(s));
+        return { count: rows.length };
+      },
+    },
+    runCheckpoint: {
+      findUnique: async ({ where }: any) =>
+        db.runCheckpoints.find((c) => c.runId === where.runId) ?? null,
+      upsert: async ({ where, create, update }: any) => {
+        const row = db.runCheckpoints.find((c) => c.runId === where.runId);
+        if (row) {
+          Object.assign(row, update);
+          return row;
+        }
+        const created = { runId: where.runId, ...create, updatedAt: new Date() };
+        db.runCheckpoints.push(created);
+        return created;
       },
     },
     attachment: {
@@ -117,10 +153,22 @@ function makeDb() {
         for (const row of rows) Object.assign(row, data);
         return { count: rows.length };
       },
-      findMany: async ({ where }: any) => db.attachments.filter((a) => a.messageId === where.messageId),
+      findMany: async ({ where }: any) =>
+        db.attachments.filter((a) => a.messageId === where.messageId),
     },
-    // 模拟事务回滚：回调抛错时恢复进入事务前的数据快照。
-    $transaction: async (fn: any) => {
+    artifact: {
+      findMany: async ({ where }: any) =>
+        db.artifacts.filter((a) => a.runId === where.runId).map((a) => ({ id: a.id })),
+      deleteMany: async ({ where }: any) => {
+        const rows = db.artifacts.filter((a) => matchesWhere(a, where));
+        db.artifacts = db.artifacts.filter((a) => !rows.includes(a));
+        return { count: rows.length };
+      },
+    },
+    // 模拟事务：数组形式直接并行执行（调用方已把操作构造成 Promise）；
+    // 回调形式在抛错时恢复进入事务前的数据快照。
+    $transaction: async (arg: any) => {
+      if (Array.isArray(arg)) return Promise.all(arg);
       const snapshot = {
         messages: [...db.messages],
         // 深度克隆：updateMany 会就地改写行对象，浅拷贝无法还原回滚。
@@ -129,7 +177,7 @@ function makeDb() {
         attachments: db.attachments.map((a) => ({ ...a })),
       };
       try {
-        return await fn(client);
+        return await arg(client);
       } catch (err) {
         db.messages = snapshot.messages;
         db.tasks = snapshot.tasks;
@@ -471,15 +519,29 @@ describe('TasksService', () => {
     expect(ctx.db.tasks[0].status).toBe('running');
   });
 
-  it('markCancelRequested 只标记仍在 running 的 run，0 行不抛错', async () => {
+  it('markCancelRequested 接受 queued 与 running，忽略已终态的 run', async () => {
+    // 执行器可能已取走作业但还没写 running：只匹配 running 会静默丢弃这次取消。
     const updateMany = vi.fn().mockResolvedValue({ count: 0 });
     const conditional = new TasksService({ run: { updateMany } } as any, sessions as any);
 
     await expect(conditional.markCancelRequested('r1')).resolves.toBeUndefined();
     expect(updateMany).toHaveBeenCalledWith({
-      where: { id: 'r1', status: 'running' },
+      where: { id: 'r1', status: { in: ['queued', 'running'] } },
       data: { cancelRequestedAt: expect.any(Date) },
     });
+
+    ctx.db.runs.push(
+      { id: 'r1', status: 'queued' },
+      { id: 'r2', status: 'running' },
+      { id: 'r3', status: 'done' },
+    );
+    await svc.markCancelRequested('r1');
+    await svc.markCancelRequested('r2');
+    await svc.markCancelRequested('r3');
+    expect(ctx.db.runs[0].cancelRequestedAt).toBeInstanceOf(Date);
+    expect(ctx.db.runs[1].cancelRequestedAt).toBeInstanceOf(Date);
+    // 已终态的 run 不再写取消请求；0 行也不抛错。
+    expect(ctx.db.runs[2].cancelRequestedAt).toBeUndefined();
   });
 
   it('finish 支持 canceled：run/task 均落 canceled 且不写 assistant 消息', async () => {
@@ -497,5 +559,109 @@ describe('TasksService', () => {
       data: { status: 'canceled' },
     });
     expect(ctx.db.messages).toHaveLength(0);
+  });
+
+  it('saveCheckpoint 覆盖式 upsert，并保存当刻该 run 的全部产物 id', async () => {
+    ctx.db.artifacts.push(
+      { id: 'a1', runId: 'r1' },
+      { id: 'a2', runId: 'r1' },
+      { id: 'a-other', runId: 'r2' },
+    );
+    const deltas = [
+      { role: 'assistant', content: '调用', toolCalls: [{ id: 'c1', name: 't', args: {} }] },
+      { role: 'tool', content: '结果', toolCallId: 'c1' },
+    ];
+    const usage = [{ model: 'm1', input: 3, output: 2 }];
+
+    await svc.saveCheckpoint('r1', { round: 1, seq: 5, deltas: deltas as any, usage });
+
+    expect(ctx.db.runCheckpoints).toHaveLength(1);
+    expect(ctx.db.runCheckpoints[0]).toMatchObject({
+      runId: 'r1',
+      round: 1,
+      seq: 5,
+      deltas,
+      usage,
+      artifactIds: ['a1', 'a2'],
+    });
+
+    // 第二次保存覆盖同一行：deltas 是累计值，绝不能追加成两行/两份历史。
+    ctx.db.artifacts.push({ id: 'a3', runId: 'r1' });
+    const next = [{ role: 'assistant', content: '终稿' }];
+    await svc.saveCheckpoint('r1', { round: 2, seq: 9, deltas: next as any, usage });
+
+    expect(ctx.db.runCheckpoints).toHaveLength(1);
+    expect(ctx.db.runCheckpoints[0]).toMatchObject({
+      round: 2,
+      seq: 9,
+      deltas: next,
+      artifactIds: ['a1', 'a2', 'a3'],
+    });
+  });
+
+  it('getCheckpoint 返回最近断点，缺失时为 null', async () => {
+    await expect(svc.getCheckpoint('r1')).resolves.toBeNull();
+
+    ctx.db.runCheckpoints.push({
+      runId: 'r1',
+      round: 2,
+      seq: 9,
+      deltas: [],
+      usage: [],
+      artifactIds: [],
+    });
+    await expect(svc.getCheckpoint('r1')).resolves.toMatchObject({ round: 2, seq: 9 });
+  });
+
+  it('truncateForResume 删除断点之后的步骤与清单外产物', async () => {
+    ctx.db.steps.push(
+      { id: 's0', runId: 'r1', seq: 0 },
+      { id: 's1', runId: 'r1', seq: 1 },
+      { id: 's2', runId: 'r1', seq: 2 },
+      { id: 's3', runId: 'r1', seq: 3 },
+      { id: 'x0', runId: 'r2', seq: 0 },
+    );
+    ctx.db.artifacts.push(
+      { id: 'a1', runId: 'r1' },
+      { id: 'a2', runId: 'r1' },
+      { id: 'other', runId: 'r2' },
+    );
+
+    await svc.truncateForResume('r1', { seq: 2, artifactIds: ['a1'] });
+
+    expect(ctx.db.steps.filter((s) => s.runId === 'r1').map((s) => s.seq)).toEqual([0, 1]);
+    expect(ctx.db.artifacts.filter((a) => a.runId === 'r1').map((a) => a.id)).toEqual(['a1']);
+    // 其他 run 的步骤/产物不受影响。
+    expect(ctx.db.steps.find((s) => s.id === 'x0')).toBeDefined();
+    expect(ctx.db.artifacts.find((a) => a.id === 'other')).toBeDefined();
+  });
+
+  it('truncateForResume 对非数组/非字符串 artifactIds 容错，按空清单清理', async () => {
+    ctx.db.artifacts.push({ id: 'a1', runId: 'r1' }, { id: 'a2', runId: 'r1' });
+
+    // JSON 列历史数据可能损坏：非数组按空清单处理（宁可多删也不留半轮产物）。
+    await svc.truncateForResume('r1', { seq: 0, artifactIds: 'broken' });
+    expect(ctx.db.artifacts.filter((a) => a.runId === 'r1')).toHaveLength(0);
+
+    // 数组中的非字符串条目必须被丢弃，不能拼进 notIn 造成误删/错删。
+    ctx.db.artifacts.push({ id: 'a1', runId: 'r1' }, { id: 'a2', runId: 'r1' });
+    await svc.truncateForResume('r1', { seq: 0, artifactIds: ['a1', 42, null] });
+    expect(ctx.db.artifacts.filter((a) => a.runId === 'r1').map((a) => a.id)).toEqual(['a1']);
+  });
+
+  it('markRunning 条件推进 queued→running，重试时 0 行不抛错且保留 startedAt', async () => {
+    ctx.db.runs.push({ id: 'r1', status: 'queued' });
+    ctx.db.tasks.push({ id: 'task1', status: 'queued' });
+
+    await svc.markRunning('r1', 'task1');
+    expect(ctx.db.runs[0]).toMatchObject({ status: 'running' });
+    expect(ctx.db.runs[0].startedAt).toBeInstanceOf(Date);
+    expect(ctx.db.tasks[0]).toMatchObject({ status: 'running' });
+    expect(ctx.db.tasks[0].startedAt).toBeInstanceOf(Date);
+
+    // 第二次调用两行都已是 running：条件更新 0 行属于正常，且不改写首次开始时间。
+    const startedAt = ctx.db.runs[0].startedAt;
+    await expect(svc.markRunning('r1', 'task1')).resolves.toBeUndefined();
+    expect(ctx.db.runs[0].startedAt).toBe(startedAt);
   });
 });

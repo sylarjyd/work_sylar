@@ -1,12 +1,16 @@
 import 'reflect-metadata';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { Logger, NotFoundException } from '@nestjs/common';
-import { RunExecutor } from './run-executor.service';
+import type { RunCheckpointEvent } from '@ai-office/shared';
+import { RunExecutor, parseCheckpoint } from './run-executor.service';
 import type { RunJob, RunSnapshot } from './run-job';
 import type { TasksService } from '../tasks/tasks.service';
 import type { AttachmentsService } from '../attachments/attachments.service';
 import type { ArtifactService } from '../artifacts/artifacts.service';
-import type { BillingService } from '../billing/billing.service';
+import { BillingService } from '../billing/billing.service';
+import { MemoryRateLimiter } from '../billing/billing.rate-limit';
+import type { PrismaService } from '../db/prisma.service';
+import type { SettingsService } from '../settings/settings.service';
 import type { RunEventBus } from './run-event-bus';
 import type { RunControlBus, RunControlMessage } from './run-control-bus';
 import { InsufficientCreditsError, PlanExpiredError } from '../billing/billing.errors';
@@ -26,6 +30,10 @@ interface ExecutorDeps {
     bindModel: ReturnType<typeof vi.fn>;
     finish: ReturnType<typeof vi.fn>;
     findRun: ReturnType<typeof vi.fn>;
+    saveCheckpoint: ReturnType<typeof vi.fn>;
+    getCheckpoint: ReturnType<typeof vi.fn>;
+    truncateForResume: ReturnType<typeof vi.fn>;
+    markRunning: ReturnType<typeof vi.fn>;
   };
   attachments: { hydrateForRun: ReturnType<typeof vi.fn> };
   artifacts: { record: ReturnType<typeof vi.fn> };
@@ -37,6 +45,7 @@ interface ExecutorDeps {
   };
   events: { publish: ReturnType<typeof vi.fn> };
   control: { subscribe: ReturnType<typeof vi.fn> };
+  settings: { getQueueConfig: ReturnType<typeof vi.fn> };
   /** 控制总线退订函数，用于断言所有退出路径都只退订一次。 */
   off: ReturnType<typeof vi.fn>;
 }
@@ -59,6 +68,28 @@ function job(): RunJob {
 
 function stepEvent(seq: number, type: string, payload: Record<string, unknown>) {
   return { runId: 'r1', seq, type, payload, ts: seq };
+}
+
+/** 一个结构完整、可续跑的 checkpoint 帧。 */
+function checkpointData(overrides: Partial<RunCheckpointEvent> = {}): RunCheckpointEvent {
+  return {
+    round: 1,
+    seq: 4,
+    deltas: [
+      { role: 'assistant', content: '调用', toolCalls: [{ id: 'c1', name: 'search', args: {} }] },
+      { role: 'tool', content: '结果', toolCallId: 'c1' },
+    ],
+    usage: [{ model: 'm1', input: 3, output: 2 }],
+    ...overrides,
+  };
+}
+
+/** DB 里的一行 RunCheckpoint：比 SSE 帧多出 runId/artifactIds/updatedAt。 */
+function storedCheckpoint(
+  cp: RunCheckpointEvent = checkpointData(),
+  artifactIds: string[] = ['a1'],
+) {
+  return { runId: 'r1', ...cp, artifactIds, updatedAt: new Date() };
 }
 
 /** 把事件列表编码成一个完整的 SSE 响应体。 */
@@ -95,7 +126,11 @@ function hangingSseResponse(
 }
 
 /** 直接 new 执行器并注入 mock 依赖；fetch 用 stubGlobal 接管。 */
-function makeExecutor(): { executor: RunExecutor; deps: ExecutorDeps } {
+function makeExecutor(config: { maxAttempts?: number; billing?: BillingService } = {}): {
+  executor: RunExecutor;
+  deps: ExecutorDeps;
+  metrics: ReturnType<typeof createBffMetrics>;
+} {
   const off = vi.fn();
   const deps: ExecutorDeps = {
     fetch: vi.fn(),
@@ -107,26 +142,40 @@ function makeExecutor(): { executor: RunExecutor; deps: ExecutorDeps } {
       findRun: vi
         .fn()
         .mockResolvedValue({ id: 'r1', status: 'running', lastError: null, cancelRequestedAt: null }),
+      saveCheckpoint: vi.fn().mockResolvedValue(undefined),
+      // 默认没有断点：普通首跑不走续跑路径。
+      getCheckpoint: vi.fn().mockResolvedValue(null),
+      truncateForResume: vi.fn().mockResolvedValue(undefined),
+      markRunning: vi.fn().mockResolvedValue(undefined),
     },
     attachments: {
       hydrateForRun: vi.fn().mockImplementation(async (messages: unknown) => messages),
     },
     artifacts: { record: vi.fn().mockResolvedValue(undefined) },
-    billing: {
-      beginRun: vi.fn().mockResolvedValue({
-        maxCredits: 50,
-        allowedModels: ['m1'],
-        prices: {},
-      }),
-      recordUsage: vi.fn().mockResolvedValue(undefined),
-      settle: vi.fn().mockResolvedValue(undefined),
-      releaseHold: vi.fn().mockResolvedValue(undefined),
-    },
+    billing: (config.billing ??
+      {
+        beginRun: vi.fn().mockResolvedValue({
+          maxCredits: 50,
+          allowedModels: ['m1'],
+          prices: {},
+        }),
+        recordUsage: vi.fn().mockResolvedValue(undefined),
+        settle: vi.fn().mockResolvedValue(undefined),
+        releaseHold: vi.fn().mockResolvedValue(undefined),
+      }) as unknown as ExecutorDeps['billing'],
     events: { publish: vi.fn().mockResolvedValue(undefined) },
     control: { subscribe: vi.fn().mockResolvedValue(off) },
+    settings: {
+      getQueueConfig: vi.fn().mockResolvedValue({
+        maxAttempts: config.maxAttempts ?? 2,
+        perTenantConcurrency: 2,
+        maxPerTenant: 50,
+      }),
+    },
     off,
   };
   vi.stubGlobal('fetch', deps.fetch);
+  const metrics = createBffMetrics({ defaultMetrics: false });
   const executor = new RunExecutor(
     deps.tasks as unknown as TasksService,
     deps.attachments as unknown as AttachmentsService,
@@ -134,9 +183,92 @@ function makeExecutor(): { executor: RunExecutor; deps: ExecutorDeps } {
     deps.billing as unknown as BillingService,
     deps.events as unknown as RunEventBus,
     deps.control as unknown as RunControlBus,
-    createBffMetrics({ defaultMetrics: false }),
+    metrics,
+    deps.settings as unknown as SettingsService,
   );
-  return { executor, deps };
+  return { executor, deps, metrics };
+}
+
+/**
+ * 真实 BillingService + 只覆盖 beginRun/releaseHold 所需模型的内存版 Prisma。
+ * 崩溃重投用例必须走真实 beginRun，否则把「同 runId 旧 hold 仍在」的实现缺陷掩盖掉。
+ */
+function makeRealBilling() {
+  const plan = {
+    id: 'free',
+    name: '体验版',
+    priceCents: 0,
+    monthlyBaseCredits: 500,
+    monthlyBonusCredits: 0,
+    maxCreditsPerRun: 50,
+    rpm: 10,
+    allowedModels: ['m1'],
+    active: true,
+  };
+  const now = Date.now();
+  const subscription = {
+    id: 'sub1',
+    tenantId: 't1',
+    planId: 'free',
+    status: 'active',
+    periodStart: new Date(now - 86_400_000),
+    periodEnd: new Date(now + 86_400_000),
+  };
+  const credit = { tenantId: 't1', balance: 500, reserved: 0 };
+  // 记录每次 reserved 变化后的值，用于断言重投期间预占从未被重复累加。
+  const reservedHistory: number[] = [];
+  const holds = new Map<
+    string,
+    { runId: string; tenantId: string; amount: number; expiresAt: Date }
+  >();
+
+  const tx = {
+    $queryRaw: async () => [],
+    tenantCredit: {
+      upsert: async () => credit,
+      findUnique: async () => credit,
+      update: async ({ data }: any) => {
+        if (data.reserved?.increment) credit.reserved += data.reserved.increment;
+        if (data.reserved?.decrement) credit.reserved -= data.reserved.decrement;
+        reservedHistory.push(credit.reserved);
+        return credit;
+      },
+    },
+    creditLot: { findMany: async () => [] },
+    creditHold: {
+      findUnique: async ({ where }: any) => holds.get(where.runId) ?? null,
+      create: async ({ data }: any) => {
+        // 真实库这里会因 runId 主键冲突抛 P2002：保留该语义才能验证幂等。
+        if (holds.has(data.runId)) {
+          throw Object.assign(new Error('unique'), { code: 'P2002' });
+        }
+        const row = { createdAt: new Date(now), ...data };
+        holds.set(data.runId, row);
+        return row;
+      },
+      delete: async ({ where }: any) => {
+        holds.delete(where.runId);
+        return {};
+      },
+    },
+    modelConfig: {
+      findMany: async () => [
+        { model: 'm1', inputMilliCreditsPer1k: 100, outputMilliCreditsPer1k: 300 },
+      ],
+    },
+  };
+
+  const prisma = {
+    subscription: { findUnique: async () => ({ ...subscription, plan }) },
+    $transaction: async (fn: any) => fn(tx),
+  } as unknown as PrismaService;
+
+  return {
+    billing: new BillingService(prisma, new MemoryRateLimiter()),
+    holds,
+    credit,
+    reservedHistory,
+  };
 }
 
 function publishedEvents(deps: ExecutorDeps): string[] {
@@ -722,7 +854,8 @@ describe('RunExecutor', () => {
     });
   });
 
-  it('执行前已有 cancelRequestedAt 时跳过上游并释放预占', async () => {
+  it('执行前已有取消请求时跳过上游并释放预占', async () => {
+    // 运行中收到的取消：cancelRequestedAt 兜底预检。
     const { executor, deps } = makeExecutor();
     deps.tasks.findRun.mockResolvedValue({
       id: 'r1',
@@ -738,6 +871,48 @@ describe('RunExecutor', () => {
     expect(deps.tasks.finish).toHaveBeenCalledWith('r1', 't1', 'canceled', '', 's1');
     expect(publishedEvents(deps)).toEqual(['status']);
     expect(deps.off).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['done', 'failed', 'canceled'] as const)(
+    'run 已是终态 %s 时跳过重复执行，不预占、不 finish、不发布',
+    async (status) => {
+      const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+      const { executor, deps } = makeExecutor();
+      // 停滞后重投：run 已收尾，但作业被再次执行。
+      deps.tasks.findRun.mockResolvedValue({
+        id: 'r1',
+        status,
+        lastError: null,
+        cancelRequestedAt: null,
+      });
+
+      await executor.execute(job());
+
+      expect(warn.mock.calls.some(([msg]) => String(msg).includes(`已是终态 ${status}`))).toBe(
+        true,
+      );
+      expect(deps.billing.beginRun).not.toHaveBeenCalled();
+      expect(deps.fetch).not.toHaveBeenCalled();
+      expect(deps.tasks.finish).not.toHaveBeenCalled();
+      expect(deps.billing.recordUsage).not.toHaveBeenCalled();
+      expect(deps.billing.settle).not.toHaveBeenCalled();
+      expect(deps.billing.releaseHold).not.toHaveBeenCalled();
+      expect(deps.events.publish).not.toHaveBeenCalled();
+      // 提前返回也必须退订控制消息，避免订阅泄漏。
+      expect(deps.off).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it('终态守卫查询失败时记日志并继续执行', async () => {
+    const { executor, deps } = makeExecutor();
+    // run 缺失/DB 抖动不阻断：后续 beginRun 与快照校验仍会安全失败。
+    deps.tasks.findRun.mockRejectedValueOnce(new Error('db down'));
+    deps.fetch.mockResolvedValue(sseResponse([{ event: 'done', data: { runId: 'r1' } }]));
+
+    await executor.execute(job());
+
+    expect(deps.fetch).toHaveBeenCalledTimes(1);
+    expect(deps.tasks.finish).toHaveBeenCalledWith('r1', 't1', 'done', '', 's1');
   });
 
   it('成功与失败路径都只退订一次取消订阅', async () => {
@@ -761,5 +936,347 @@ describe('RunExecutor', () => {
 
     expect(deps.fetch).toHaveBeenCalledTimes(1);
     expect(deps.tasks.finish).toHaveBeenCalledWith('r1', 't1', 'done', '', 's1');
+  });
+
+  it('建连 ECONNRESET 后从断点续跑：只预占一次、携带 resume 并计入续跑指标', async () => {
+    const { executor, deps, metrics } = makeExecutor({ maxAttempts: 2 });
+    const cp = checkpointData();
+    // 首次尝试没有断点，传输中断前一次完整轮落的断点在第二次尝试前读回。
+    deps.tasks.getCheckpoint.mockResolvedValueOnce(null).mockResolvedValue(storedCheckpoint(cp));
+    const reset = Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' });
+    deps.fetch
+      .mockRejectedValueOnce(reset)
+      .mockResolvedValueOnce(
+        sseResponse([
+          {
+            event: 'usage',
+            data: { input: 9, output: 4, models: [{ model: 'm1', input: 9, output: 4 }] },
+          },
+          { event: 'done', data: { runId: 'r1' } },
+        ]),
+      );
+    const resumed = vi.spyOn(metrics.runsResumed, 'inc');
+
+    await executor.execute(job());
+
+    expect(deps.fetch).toHaveBeenCalledTimes(2);
+    // 重试共用同一笔预占，绝不能重复 beginRun。
+    expect(deps.billing.beginRun).toHaveBeenCalledTimes(1);
+    expect(deps.tasks.markRunning).toHaveBeenCalledTimes(2);
+    const body = JSON.parse(String(deps.fetch.mock.calls[1]![1].body)) as {
+      resume: RunCheckpointEvent;
+    };
+    expect(body.resume).toEqual(cp);
+    expect(deps.tasks.truncateForResume).toHaveBeenCalledWith('r1', {
+      seq: cp.seq,
+      artifactIds: ['a1'],
+    });
+    // 只按最终尝试的用量记一次账，中间失败尝试不得重复结算。
+    const finalUsage = { input: 9, output: 4, models: [{ model: 'm1', input: 9, output: 4 }] };
+    expect(deps.billing.recordUsage).toHaveBeenCalledTimes(1);
+    expect(deps.billing.recordUsage).toHaveBeenCalledWith(
+      'r1',
+      { tenantId: 't1', userId: 'u1', sessionId: 's1' },
+      finalUsage,
+    );
+    expect(deps.billing.settle).toHaveBeenCalledTimes(1);
+    expect(deps.billing.settle).toHaveBeenCalledWith('r1');
+    expect(deps.tasks.finish).toHaveBeenCalledWith('r1', 't1', 'done', '', 's1');
+    expect(resumed).toHaveBeenCalledTimes(1);
+  });
+
+  it('重试达到 maxAttempts 后失败收尾并释放预占', async () => {
+    const { executor, deps, metrics } = makeExecutor({ maxAttempts: 2 });
+    deps.fetch.mockRejectedValue(Object.assign(new Error('boom'), { code: 'ECONNRESET' }));
+    const resumed = vi.spyOn(metrics.runsResumed, 'inc');
+
+    await executor.execute(job());
+
+    expect(deps.fetch).toHaveBeenCalledTimes(2);
+    // 无用量时只归还一次预占，绝不结算。
+    expect(deps.billing.releaseHold).toHaveBeenCalledTimes(1);
+    expect(deps.billing.releaseHold).toHaveBeenCalledWith('r1');
+    expect(deps.billing.recordUsage).not.toHaveBeenCalled();
+    expect(deps.billing.settle).not.toHaveBeenCalled();
+    expect(deps.tasks.finish).toHaveBeenCalledWith('r1', 't1', 'failed', '', 's1');
+    expect(lastErrorData(deps)).toEqual({
+      message: '模型服务不可达，请稍后重试',
+      error: 'upstream_unreachable',
+    });
+    expect(resumed).toHaveBeenCalledTimes(1);
+  });
+
+  it('上游 4xx 不重试，直接按 failed 收尾', async () => {
+    const { executor, deps } = makeExecutor({ maxAttempts: 3 });
+    deps.fetch.mockResolvedValue(new Response('bad request', { status: 400 }));
+
+    await executor.execute(job());
+
+    expect(deps.fetch).toHaveBeenCalledTimes(1);
+    expect(deps.billing.releaseHold).toHaveBeenCalledWith('r1');
+    expect(deps.tasks.finish).toHaveBeenCalledWith('r1', 't1', 'failed', '', 's1');
+    expect(lastErrorData(deps)).toEqual({
+      message: '模型服务返回错误，请稍后重试',
+      error: 'upstream_error',
+    });
+  });
+
+  it('干净 EOF 但没有 done 帧时重试并成功', async () => {
+    const { executor, deps, metrics } = makeExecutor({ maxAttempts: 2 });
+    deps.fetch
+      .mockResolvedValueOnce(
+        // 连接中途断开：只有半截 step，没有 done/error。
+        sseResponse([{ event: 'step', data: stepEvent(0, 'think', { text: '半截回答' }) }]),
+      )
+      .mockResolvedValueOnce(
+        sseResponse([
+          { event: 'step', data: stepEvent(0, 'think', { text: '完整回答' }) },
+          { event: 'done', data: { runId: 'r1' } },
+        ]),
+      );
+    const resumed = vi.spyOn(metrics.runsResumed, 'inc');
+
+    await executor.execute(job());
+
+    expect(deps.fetch).toHaveBeenCalledTimes(2);
+    // 最终回答只取最后一次尝试的 think 文本，不能把重放轮次拼出重复内容。
+    expect(deps.tasks.finish).toHaveBeenCalledWith('r1', 't1', 'done', '完整回答', 's1');
+    expect(resumed).toHaveBeenCalledTimes(1);
+  });
+
+  it('无断点重试时先清空 seq 0 的旧步骤，再从头发起第二次尝试', async () => {
+    const { executor, deps } = makeExecutor({ maxAttempts: 2 });
+    deps.fetch
+      .mockResolvedValueOnce(
+        // 首轮中途断流：已落了 seq 0 的 step，但没有任何 checkpoint 帧。
+        sseResponse([{ event: 'step', data: stepEvent(0, 'think', { text: '半截回答' }) }]),
+      )
+      .mockResolvedValueOnce(
+        sseResponse([
+          { event: 'step', data: stepEvent(0, 'think', { text: '完整回答' }) },
+          { event: 'done', data: { runId: 'r1' } },
+        ]),
+      );
+
+    await executor.execute(job());
+
+    expect(deps.fetch).toHaveBeenCalledTimes(2);
+    // 无断点时 runtime 从 seq 0 重放：第二次尝试前必须删掉旧的 seq 0 步骤，
+    // 否则 recordStep 会撞 (runId, seq) 唯一键并被误判为本地持久化失败。
+    expect(deps.tasks.truncateForResume).toHaveBeenCalledWith('r1', {
+      seq: 0,
+      artifactIds: [],
+    });
+    const truncateOrder = deps.tasks.truncateForResume.mock.invocationCallOrder;
+    expect(truncateOrder[truncateOrder.length - 1]!).toBeLessThan(
+      deps.fetch.mock.invocationCallOrder[1]!,
+    );
+    // 无断点就不带 resume：第二次尝试仍是从头跑。
+    const body = JSON.parse(String(deps.fetch.mock.calls[1]![1].body)) as { resume?: unknown };
+    expect(body.resume).toBeUndefined();
+    expect(deps.tasks.finish).toHaveBeenCalledWith('r1', 't1', 'done', '完整回答', 's1');
+  });
+
+  it('markRunning 之后才出现的取消不再发起上游并收尾为 canceled', async () => {
+    const { executor, deps } = makeExecutor();
+    let runningMarked = false;
+    // 排队取消可能正好落在预检与状态推进之间：markRunning 之后才查得到 canceled。
+    deps.tasks.markRunning.mockImplementation(async () => {
+      runningMarked = true;
+    });
+    deps.tasks.findRun.mockImplementation(async () => ({
+      id: 'r1',
+      status: runningMarked ? 'canceled' : 'running',
+      lastError: null,
+      cancelRequestedAt: null,
+    }));
+
+    await executor.execute(job());
+
+    expect(deps.tasks.markRunning).toHaveBeenCalledWith('r1', 't1');
+    expect(deps.fetch).not.toHaveBeenCalled();
+    expect(deps.billing.releaseHold).toHaveBeenCalledWith('r1');
+    expect(deps.tasks.finish).toHaveBeenCalledWith('r1', 't1', 'canceled', '', 's1');
+    // 取消只发 status 帧，绝不能发 error（取消不是故障）。
+    expect(publishedEvents(deps)).toEqual(['status']);
+  });
+
+  it('runtime 的 error 帧不重试，直接按 run_failed 收尾', async () => {
+    const { executor, deps } = makeExecutor({ maxAttempts: 3 });
+    deps.fetch.mockResolvedValue(
+      sseResponse([{ event: 'error', data: { message: 'runtime boom' } }]),
+    );
+
+    await executor.execute(job());
+
+    expect(deps.fetch).toHaveBeenCalledTimes(1);
+    expect(deps.billing.releaseHold).toHaveBeenCalledWith('r1');
+    expect(deps.tasks.finish).toHaveBeenCalledWith('r1', 't1', 'failed', '', 's1');
+    expect(lastErrorData(deps)).toEqual({
+      message: '本次运行失败，请稍后重试',
+      error: 'run_failed',
+    });
+  });
+
+  it('checkpoint 帧落库但不转发到事件总线', async () => {
+    const { executor, deps } = makeExecutor();
+    const cp = checkpointData();
+    deps.fetch.mockResolvedValue(
+      sseResponse([
+        { event: 'step', data: stepEvent(0, 'think', { text: 'hi' }) },
+        { event: 'checkpoint', data: cp },
+        { event: 'done', data: { runId: 'r1' } },
+      ]),
+    );
+
+    await executor.execute(job());
+
+    expect(deps.tasks.saveCheckpoint).toHaveBeenCalledWith('r1', cp);
+    // 浏览器只能看到 step 与 done；checkpoint 属于执行器内部状态。
+    expect(publishedEvents(deps)).toEqual(['step', 'done']);
+    expect(publishedEvents(deps)).not.toContain('checkpoint');
+  });
+
+  it('非法 checkpoint 帧被忽略，不影响运行', async () => {
+    const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    const { executor, deps } = makeExecutor();
+    deps.fetch.mockResolvedValue(
+      sseResponse([
+        // round 非法：整帧拒绝，不能把半截断点写进 DB。
+        { event: 'checkpoint', data: { round: -1, seq: 0, deltas: [], usage: [] } },
+        { event: 'done', data: { runId: 'r1' } },
+      ]),
+    );
+
+    await executor.execute(job());
+
+    expect(deps.tasks.saveCheckpoint).not.toHaveBeenCalled();
+    expect(deps.tasks.finish).toHaveBeenCalledWith('r1', 't1', 'done', '', 's1');
+    expect(
+      warn.mock.calls.some(([msg]) => String(msg).includes('checkpoint 事件非法')),
+    ).toBe(true);
+  });
+
+  it('崩溃重投时旧 hold 仍在，真实 beginRun 复用预占并从断点续跑', async () => {
+    // 上一个 worker 已 beginRun 并落了断点后崩溃：CreditHold.runId 主键上的旧行仍在。
+    const real = makeRealBilling();
+    await real.billing.beginRun('r1', 't1');
+    expect(real.credit.reserved).toBe(50);
+    expect(real.holds.size).toBe(1);
+
+    const { executor, deps } = makeExecutor({ billing: real.billing });
+    const cp = checkpointData();
+    deps.tasks.getCheckpoint.mockResolvedValue(storedCheckpoint(cp));
+    deps.fetch.mockResolvedValue(sseResponse([{ event: 'done', data: { runId: 'r1' } }]));
+
+    await executor.execute(job());
+
+    // 旧 hold 不能被当成 P2002 或可用余额不足而判成 run_failed：必须续跑并正常收尾。
+    expect(deps.tasks.finish).toHaveBeenCalledWith('r1', 't1', 'done', '', 's1');
+    expect(deps.fetch).toHaveBeenCalledTimes(1);
+    expect(deps.tasks.truncateForResume).toHaveBeenCalledWith('r1', {
+      seq: cp.seq,
+      artifactIds: ['a1'],
+    });
+    const body = JSON.parse(String(deps.fetch.mock.calls[0]![1].body)) as {
+      resume: RunCheckpointEvent;
+    };
+    expect(body.resume).toEqual(cp);
+    // 全程 reserved 只累加过一次（50），最终由 releaseHold 归还（无 usage）。
+    expect(Math.max(...real.reservedHistory)).toBe(50);
+    expect(real.credit.reserved).toBe(0);
+    expect(real.holds.size).toBe(0);
+  });
+
+  it('已落库断点结构非法时失败收尾，不静默从头重跑', async () => {
+    const { executor, deps } = makeExecutor();
+    deps.tasks.getCheckpoint.mockResolvedValue({
+      runId: 'r1',
+      round: 1,
+      seq: -1,
+      deltas: [],
+      usage: [],
+      artifactIds: [],
+      updatedAt: new Date(),
+    });
+
+    await executor.execute(job());
+
+    expect(deps.fetch).not.toHaveBeenCalled();
+    expect(deps.tasks.truncateForResume).not.toHaveBeenCalled();
+    expect(deps.billing.releaseHold).toHaveBeenCalledWith('r1');
+    expect(deps.tasks.finish).toHaveBeenCalledWith('r1', 't1', 'failed', '', 's1');
+    expect(lastErrorData(deps).error).toBe('run_failed');
+  });
+
+  it('两次尝试之间请求取消时停止续跑并按 canceled 收尾', async () => {
+    const { executor, deps } = makeExecutor({ maxAttempts: 3 });
+    const clear = { id: 'r1', status: 'running', lastError: null, cancelRequestedAt: null };
+    const canceledRow = { ...clear, cancelRequestedAt: new Date() };
+    // 调用顺序：终态守卫 → 预检 → 首次尝试前 → attempt 内建连前复查 → 建连失败后的取消检查
+    // → 第二次尝试前。
+    deps.tasks.findRun
+      .mockResolvedValueOnce(clear)
+      .mockResolvedValueOnce(clear)
+      .mockResolvedValueOnce(clear)
+      .mockResolvedValueOnce(clear)
+      .mockResolvedValueOnce(clear)
+      .mockResolvedValue(canceledRow);
+    deps.fetch.mockRejectedValue(Object.assign(new Error('boom'), { code: 'ECONNRESET' }));
+
+    await executor.execute(job());
+
+    expect(deps.fetch).toHaveBeenCalledTimes(1);
+    expect(deps.billing.releaseHold).toHaveBeenCalledWith('r1');
+    expect(deps.tasks.finish).toHaveBeenCalledWith('r1', 't1', 'canceled', '', 's1');
+    expect(publishedEvents(deps)).toEqual(['status']);
+  });
+
+  it('断点读取后、发起 fetch 前落库的取消不再请求上游', async () => {
+    const { executor, deps } = makeExecutor({ maxAttempts: 2 });
+    const clear = { id: 'r1', status: 'running', lastError: null, cancelRequestedAt: null };
+    const canceledRow = { ...clear, cancelRequestedAt: new Date() };
+    // 终态守卫 → 预检 → 尝试前检查均正常；attempt 内建连前的复查才发现取消。
+    deps.tasks.findRun
+      .mockResolvedValueOnce(clear)
+      .mockResolvedValueOnce(clear)
+      .mockResolvedValueOnce(clear)
+      .mockResolvedValue(canceledRow);
+    // 断点已读回：取消恰好落在这之后、fetch 之前。
+    deps.tasks.getCheckpoint.mockResolvedValue(storedCheckpoint());
+    deps.fetch.mockResolvedValue(sseResponse([{ event: 'done', data: { runId: 'r1' } }]));
+
+    await executor.execute(job());
+
+    expect(deps.tasks.getCheckpoint).toHaveBeenCalledTimes(1);
+    expect(deps.fetch).not.toHaveBeenCalled();
+    expect(deps.billing.releaseHold).toHaveBeenCalledWith('r1');
+    expect(deps.tasks.finish).toHaveBeenCalledWith('r1', 't1', 'canceled', '', 's1');
+    expect(publishedEvents(deps)).toEqual(['status']);
+  });
+
+  it('每次尝试都在发起 fetch 之前推进 running 状态', async () => {
+    const { executor, deps } = makeExecutor({ maxAttempts: 1 });
+    deps.fetch.mockResolvedValue(sseResponse([{ event: 'done', data: { runId: 'r1' } }]));
+
+    await executor.execute(job());
+
+    expect(deps.tasks.markRunning).toHaveBeenCalledWith('r1', 't1');
+    expect(deps.tasks.markRunning.mock.invocationCallOrder[0]!).toBeLessThan(
+      deps.fetch.mock.invocationCallOrder[0]!,
+    );
+  });
+});
+
+describe('parseCheckpoint', () => {
+  it('round 超过 Int 上限时拒绝，否则每次续跑都会被 runtime 400 invalid_resume', () => {
+    // [MAX, 2^31) 的 round 能落库，但 runtime 侧无法续跑，必须提前整帧拒绝。
+    expect(
+      parseCheckpoint({ round: 2_000_000_001, seq: 0, deltas: [], usage: [] }),
+    ).toBeNull();
+    // 边界值本身仍合法。
+    expect(
+      parseCheckpoint({ round: 2_000_000_000, seq: 0, deltas: [], usage: [] }),
+    ).not.toBeNull();
   });
 });

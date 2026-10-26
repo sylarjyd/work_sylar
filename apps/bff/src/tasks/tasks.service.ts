@@ -1,6 +1,10 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
-import { attachmentKindFor, type AgentEvent } from '@ai-office/shared';
+import {
+  attachmentKindFor,
+  type AgentEvent,
+  type RunCheckpointEvent,
+} from '@ai-office/shared';
 import { PrismaService } from '../db/prisma.service';
 import { SessionsService, type SessionRef } from '../sessions/sessions.service';
 import type { PreparedAttachment, PreparedMessage } from '../attachments/attachments.service';
@@ -200,6 +204,72 @@ export class TasksService {
     });
   }
 
+  /**
+   * 落运行断点，每个 run 只保留一行。
+   * deltas 是截至该轮的累计值，必须整行覆盖而不是追加，否则续跑会把历史回放成重复消息。
+   * artifactIds 取保存当刻该 run 的全部产物：续跑截断时以此为准，删除半轮残留的产物。
+   */
+  async saveCheckpoint(runId: string, cp: RunCheckpointEvent): Promise<void> {
+    const artifacts = await this.prisma.artifact.findMany({
+      where: { runId },
+      select: { id: true },
+    });
+    const data = {
+      round: cp.round,
+      seq: cp.seq,
+      deltas: cp.deltas as unknown as Prisma.InputJsonValue,
+      usage: cp.usage as unknown as Prisma.InputJsonValue,
+      artifactIds: artifacts.map((a) => a.id) as unknown as Prisma.InputJsonValue,
+    };
+    await this.prisma.runCheckpoint.upsert({
+      where: { runId },
+      create: { runId, ...data },
+      update: data,
+    });
+  }
+
+  /** 读取最近一次断点；执行器在每次尝试前重读，确保用上上一次尝试新落的断点。 */
+  async getCheckpoint(runId: string) {
+    return this.prisma.runCheckpoint.findUnique({ where: { runId } });
+  }
+
+  /**
+   * 续跑前清理半轮状态：删除 seq >= 断点序号的步骤与不在断点产物清单里的产物。
+   * Step 有 (runId, seq) 唯一键，半轮残留会让重放直接撞唯一键；产物残留会造成重复记录。
+   * artifactIds 来自 JSON 列，历史/异常数据可能不是字符串数组，这里按空清单容错（宁可多删）。
+   */
+  async truncateForResume(
+    runId: string,
+    cp: { seq: number; artifactIds: unknown },
+  ): Promise<void> {
+    const artifactIds = Array.isArray(cp.artifactIds)
+      ? cp.artifactIds.filter((id): id is string => typeof id === 'string')
+      : [];
+    await this.prisma.$transaction([
+      this.prisma.step.deleteMany({ where: { runId, seq: { gte: cp.seq } } }),
+      this.prisma.artifact.deleteMany({ where: { runId, id: { notIn: artifactIds } } }),
+    ]);
+  }
+
+  /**
+   * 开跑前把 run/task 从 queued 推进到 running（同一事务，避免两行状态撕裂）。
+   * 重试与崩溃重投时两行可能已是 running，条件更新 0 行属于正常，不能视为故障；
+   * startedAt 只在首次成功推进时写入，保留真实开始时间。
+   */
+  async markRunning(runId: string, taskId: string): Promise<void> {
+    const startedAt = new Date();
+    await this.prisma.$transaction([
+      this.prisma.run.updateMany({
+        where: { id: runId, status: 'queued' },
+        data: { status: 'running', startedAt },
+      }),
+      this.prisma.task.updateMany({
+        where: { id: taskId, status: 'queued' },
+        data: { status: 'running', startedAt },
+      }),
+    ]);
+  }
+
   /** 流式挂接需要的运行元信息；不存在时 404。 */
   async findRun(runId: string): Promise<{
     id: string;
@@ -362,10 +432,14 @@ export class TasksService {
     });
   }
 
-  /** 请求取消执行中的运行；只标记仍处于 running 的 run，竞态下 0 行不报错。 */
+  /**
+   * 请求取消执行中的运行，竞态下 0 行不报错。
+   * 同时接受 queued 与 running：执行器可能已经取走作业但还没写入 running，
+   * 排队取消路径会落到这里；只匹配 running 会静默丢弃这次取消。
+   */
   async markCancelRequested(runId: string): Promise<void> {
     await this.prisma.run.updateMany({
-      where: { id: runId, status: 'running' },
+      where: { id: runId, status: { in: ['queued', 'running'] } },
       data: { cancelRequestedAt: new Date() },
     });
   }
