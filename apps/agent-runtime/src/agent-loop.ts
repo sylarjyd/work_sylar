@@ -1,5 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import type { AgentEvent, RunBilling, RunRequest, UsageEvent } from '@ai-office/shared';
+import type {
+  AgentEvent,
+  ConversationDelta,
+  RunBilling,
+  RunCheckpointEvent,
+  RunRequest,
+  UsageEvent,
+} from '@ai-office/shared';
 import { endSpan, startSpan } from '@ai-office/telemetry';
 import type { ModelGateway, ModelMessage } from './model/types';
 import { prepareAttachmentMessages, requiredModalitiesOf } from './model/attachments';
@@ -35,6 +42,11 @@ export interface RunDeps {
    * 网关接口不接收 signal（无法中断在途模型调用），因此在轮次边界与每次工具执行前刹车。
    */
   signal?: AbortSignal;
+  /**
+   * 每完成一个工具轮回调一次 checkpoint（对话增量 + 下一未用 seq + 累计用量）。
+   * 队列模式下 worker 崩溃/重启时，BFF 用它持久化断点，续跑无需重跑已完成的轮次。
+   */
+  onCheckpoint?: (cp: RunCheckpointEvent) => void;
 }
 
 const DEFAULT_MAX_ROUNDS = 8;
@@ -56,9 +68,21 @@ export async function* runAgent(req: RunRequest, deps: RunDeps): AsyncGenerator<
   const prepared = await prepareAttachmentMessages(req.messages);
   // 自定义助手的系统提示词作为首条消息注入；历史消息只落 user/assistant，不会重复。
   const systemPrompt = req.systemPrompt?.trim();
-  const messages: ModelMessage[] = systemPrompt
-    ? [{ role: 'system', content: systemPrompt }, ...prepared]
-    : prepared;
+  const resume = req.resume;
+  const messages: ModelMessage[] = [
+    ...(systemPrompt ? [{ role: 'system' as const, content: systemPrompt }] : []),
+    ...prepared,
+    // 续跑增量由 BFF 从 checkpoint 重建：assistant 带 toolCalls、tool 带 toolCallId，
+    // 与首跑时的历史同构，真实 provider 才不会把续跑当成残缺上下文拒掉。
+    ...((resume?.deltas ?? []) as unknown as ModelMessage[]),
+  ];
+  // 续跑从 checkpoint 的序号与轮次继续，避免重复计入历史步骤与重跑已完成轮次。
+  let seq = resume?.seq ?? 0;
+  const startRound = resume?.round ?? 0;
+  const usageByModel = new Map<string, { input: number; output: number }>(
+    (resume?.usage ?? []).map((u) => [u.model, { input: u.input, output: u.output }]),
+  );
+  // 模态只由本次真实附件决定：续跑增量不含附件，不能据此收窄候选模型。
   const requiredModalities = requiredModalitiesOf(prepared);
   const ctx: RunContext = {
     tenantId: req.tenantId,
@@ -68,8 +92,6 @@ export async function* runAgent(req: RunRequest, deps: RunDeps): AsyncGenerator<
     codeExecTimeoutMs: deps.codeExecTimeoutMs,
     kbIds: req.kbIds,
   };
-  let seq = 0;
-  const usageByModel = new Map<string, { input: number; output: number }>();
   const step = (type: AgentEvent['type'], payload: Record<string, unknown>): AgentEvent => ({
     runId: req.runId,
     seq: seq++,
@@ -81,7 +103,10 @@ export async function* runAgent(req: RunRequest, deps: RunDeps): AsyncGenerator<
   // 注：M1 下耗尽 maxRounds 会静默结束（客户端只看到 done），
   // “轮次耗尽”这一信号留待后续里程碑；此处不新增事件、不改变输出契约。
   try {
-    for (let round = 0; round < maxRounds; round++) {
+    for (let round = startRound; round < maxRounds; round++) {
+      // 本轮新增的对话增量；只在整轮工具执行完毕后随 checkpoint 一起落库，
+      // 半轮中断不会留下“有 assistant 无 tool 结果”的残缺历史。
+      const roundDeltas: ModelMessage[] = [];
       // 已取消：不再发起新一轮模型调用；已产生的用量仍由 finally 上报。
       if (deps.signal?.aborted) return;
       // 预算在发起下一轮之前判断：超限立即刹车，不再浪费一次模型调用。
@@ -129,7 +154,13 @@ export async function* runAgent(req: RunRequest, deps: RunDeps): AsyncGenerator<
 
       // 有工具调用：assistant 回合必须回带 toolCalls、tool 回合回带 toolCallId，
       // 否则真实 provider（DeepSeek/OpenAI 兼容）的多轮 function-calling 会被拒。
-      messages.push({ role: 'assistant', content: resp.content, toolCalls: resp.toolCalls });
+      const assistantMsg: ModelMessage = {
+        role: 'assistant',
+        content: resp.content,
+        toolCalls: resp.toolCalls,
+      };
+      messages.push(assistantMsg);
+      roundDeltas.push(assistantMsg);
       for (const call of resp.toolCalls) {
         // 取消可能发生在模型返回之后：不再执行工具，也不产出 tool_call/tool_result。
         if (deps.signal?.aborted) return;
@@ -205,10 +236,24 @@ export async function* runAgent(req: RunRequest, deps: RunDeps): AsyncGenerator<
           yield step('artifact', artifact);
         }
         // 工具结果回填进对话，供下一轮模型使用（截断防上下文爆炸）。
-        messages.push({
+        const toolMsg: ModelMessage = {
           role: 'tool',
           content: (JSON.stringify(result) ?? 'null').slice(0, 4000),
           toolCallId: call.id,
+        };
+        messages.push(toolMsg);
+        roundDeltas.push(toolMsg);
+      }
+
+      // 只有完整走完工具轮才落 checkpoint：seq 是下一个未用序号，
+      // BFF 可据此截断半轮步骤并只回放已确认的增量。无工具轮会在此前 break，
+      // 不会重复发一次没有续跑价值的 checkpoint。
+      if (roundDeltas.length > 0) {
+        deps.onCheckpoint?.({
+          round: round + 1,
+          seq,
+          deltas: roundDeltas as unknown as ConversationDelta[],
+          usage: [...usageByModel].map(([model, u]) => ({ model, ...u })),
         });
       }
     }

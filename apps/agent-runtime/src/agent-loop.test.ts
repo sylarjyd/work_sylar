@@ -3,7 +3,12 @@ import { runAgent, type ToolObservation } from './agent-loop';
 import type { ModelGateway } from './model/types';
 import type { Tool } from './tools/types';
 import type { ConfirmGate } from './confirm/broker';
-import type { AgentEvent, RunRequest, UsageEvent } from '@ai-office/shared';
+import type {
+  AgentEvent,
+  RunCheckpointEvent,
+  RunRequest,
+  UsageEvent,
+} from '@ai-office/shared';
 
 function collect(gen: AsyncGenerator<AgentEvent>): Promise<AgentEvent[]> {
   return (async () => {
@@ -682,6 +687,91 @@ describe('runAgent', () => {
     ]);
     // 中止后不执行工具、不产出 tool_call/tool_result。
     expect(events.some((e) => e.type === 'tool_call' || e.type === 'tool_result')).toBe(false);
+  });
+
+  it('工具轮结束后发出 checkpoint（round/seq/deltas/usage）', async () => {
+    let round = 0;
+    const gateway: ModelGateway = {
+      async chat() {
+        round++;
+        if (round === 1) {
+          return {
+            content: '先搜索',
+            toolCalls: [{ id: 'c1', name: 'web.search', args: { query: '竞品' } }],
+            usage: { input: 2, output: 1 },
+            model: 'mock',
+          };
+        }
+        return { content: '结论', toolCalls: [], usage: { input: 1, output: 1 }, model: 'mock' };
+      },
+    };
+    const cps: RunCheckpointEvent[] = [];
+    await collect(
+      runAgent(req, { gateway, tools: [echoTool], onCheckpoint: (cp) => cps.push(cp) }),
+    );
+
+    expect(cps).toHaveLength(1);
+    const cp = cps[0];
+    expect(cp.round).toBe(1);
+    // think/tool_call/tool_result 已占用 seq 0/1/2，checkpoint 指向下一个未用序号。
+    expect(cp.seq).toBe(3);
+    expect(cp.deltas.map((d) => d.role)).toEqual(['assistant', 'tool']);
+    expect(cp.deltas[0].toolCalls).toEqual([
+      { id: 'c1', name: 'web.search', args: { query: '竞品' } },
+    ]);
+    // 发出时第二轮（最终文本轮）尚未发起，累计用量只有第一轮的 2/1。
+    expect(cp.usage).toEqual([{ model: 'mock', input: 2, output: 1 }]);
+  });
+
+  it('resume 从指定轮次与序号继续', async () => {
+    const seen: { role: string; content: string; toolCalls?: unknown; toolCallId?: string }[][] =
+      [];
+    const gateway: ModelGateway = {
+      async chat(request) {
+        // messages 会被同一运行持续 push，记录调用时刻的快照而非活引用。
+        seen.push([...request.messages]);
+        return { content: '继续完成', toolCalls: [], usage: { input: 1, output: 1 }, model: 'mock' };
+      },
+    };
+    const usages: UsageEvent[] = [];
+    const events = await collect(
+      runAgent(
+        {
+          ...req,
+          resume: {
+            round: 2,
+            seq: 9,
+            deltas: [
+              {
+                role: 'assistant',
+                content: '执行',
+                toolCalls: [{ id: 'c1', name: 'web.search', args: { query: '竞态' } }],
+              },
+              { role: 'tool', content: '{"results":[]}', toolCallId: 'c1' },
+            ],
+            usage: [{ model: 'mock', input: 5, output: 2 }],
+          },
+        },
+        { gateway, tools: [echoTool], onUsage: (u) => usages.push(u) },
+      ),
+    );
+
+    // 新事件的序号从 checkpoint 的 seq 续起，BFF 才能与已落库步骤无缝拼接。
+    expect(events[0].seq).toBe(9);
+    // 没有 systemPrompt 时不再凭空注入 system 消息。
+    expect(seen[0]).toEqual([
+      { role: 'user', content: '查竞品' },
+      {
+        role: 'assistant',
+        content: '执行',
+        toolCalls: [{ id: 'c1', name: 'web.search', args: { query: '竞态' } }],
+      },
+      { role: 'tool', content: '{"results":[]}', toolCallId: 'c1' },
+    ]);
+    // 用量在 checkpoint 基础上累加，续跑不会重复计费历史轮次。
+    expect(usages).toEqual([
+      { input: 6, output: 3, models: [{ model: 'mock', input: 6, output: 3 }] },
+    ]);
   });
 });
 

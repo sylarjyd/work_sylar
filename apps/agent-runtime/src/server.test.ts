@@ -8,7 +8,12 @@ import {
   shutdownTelemetry,
 } from '@ai-office/telemetry';
 import { decodeSseFrames, createSseParser } from '@ai-office/shared';
-import type { AgentEvent, RuntimeSummaryDto } from '@ai-office/shared';
+import type {
+  AgentEvent,
+  RunCheckpointEvent,
+  RuntimeSummaryDto,
+  UsageEvent,
+} from '@ai-office/shared';
 import { createRuntimeServer, filterTools, isLoopback } from './server';
 import { createRuntimeMetrics } from './observability/metrics';
 import type { ModelGateway } from './model/types';
@@ -96,7 +101,87 @@ describe('runtime server', () => {
     });
     expect(res.headers.get('content-type')).toContain('text/event-stream');
     const messages = decodeSseFrames(await res.text());
-    expect(messages.map((m) => m.event)).toEqual(['step', 'step', 'step', 'step', 'usage', 'done']);
+    expect(messages.map((m) => m.event)).toEqual([
+      'step',
+      'step',
+      'step',
+      'checkpoint',
+      'step',
+      'usage',
+      'done',
+    ]);
+    // 第一轮工具结束后落 checkpoint：seq 指向下一个未用序号，
+    // 用量为发出时刻的累计值（第二轮的 1/1 还没发生）。
+    const cp = messages.find((m) => m.event === 'checkpoint')?.data as RunCheckpointEvent;
+    expect(cp.round).toBe(1);
+    expect(cp.seq).toBe(3);
+    expect(cp.deltas.map((d) => d.role)).toEqual(['assistant', 'tool']);
+    expect(cp.usage).toEqual([{ model: 'mock', input: 1, output: 1 }]);
+  });
+
+  it('非法 resume 返回 400 invalid_resume 且不写 SSE', async () => {
+    const base = {
+      round: 1,
+      seq: 2,
+      deltas: [{ role: 'assistant', content: '执行' }],
+      usage: [{ model: 'mock', input: 1, output: 1 }],
+    };
+    const payloads = [
+      { ...base, round: -1 },
+      { ...base, seq: 1.5 },
+      { ...base, deltas: {} },
+      { ...base, deltas: [{ role: 'user', content: 'x' }] },
+      { ...base, usage: [{ model: '', input: 1, output: 1 }] },
+      { ...base, usage: [{ model: 'm', input: -1, output: 0 }] },
+    ];
+    for (const resume of payloads) {
+      const res = await postRuns({
+        runId: 'r-bad',
+        sessionId: 's1',
+        goal: 'g',
+        messages: [{ role: 'user', content: 'g' }],
+        resume,
+      });
+      expect(res.status).toBe(400);
+      // 必须在写 SSE 头之前拒绝，否则 BFF 会把错误当流式响应吞掉。
+      expect(res.headers.get('content-type')).toContain('application/json');
+      expect(await res.json()).toEqual({ error: 'invalid_resume' });
+    }
+  });
+
+  it('合法 resume 从 checkpoint 继续', async () => {
+    const res = await postRuns({
+      runId: 'r-resume',
+      sessionId: 's1',
+      goal: 'g',
+      messages: [{ role: 'user', content: 'g' }],
+      resume: {
+        round: 1,
+        seq: 9,
+        deltas: [
+          {
+            role: 'assistant',
+            content: '执行',
+            toolCalls: [{ id: 'c1', name: 'web.search', args: { query: '竞态' } }],
+          },
+          { role: 'tool', content: '{"results":[]}', toolCallId: 'c1' },
+        ],
+        usage: [{ model: 'mock', input: 5, output: 2 }],
+      },
+    });
+    expect(res.status).toBe(200);
+    const messages = decodeSseFrames(await res.text());
+    // 脚本网关看到 tool 消息即收尾，因此只有一轮 think。
+    expect(messages.map((m) => m.event)).toEqual(['step', 'usage', 'done']);
+    const step = messages.find((m) => m.event === 'step')?.data as AgentEvent;
+    expect(step.seq).toBe(9);
+    expect(step.type).toBe('think');
+    // 用量在 checkpoint 的 5/2 上累加本轮 1/1。
+    expect(messages.find((m) => m.event === 'usage')?.data).toEqual({
+      input: 6,
+      output: 3,
+      models: [{ model: 'mock', input: 6, output: 3 }],
+    } satisfies UsageEvent);
   });
 
   it('首个模型事件较慢时也先下发 SSE 响应头，避免被建连超时中断', async () => {

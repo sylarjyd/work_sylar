@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import { context, SpanKind, trace } from '@opentelemetry/api';
 import type { Logger } from 'pino';
 import { encodeSse } from '@ai-office/shared';
-import type { RunRequest } from '@ai-office/shared';
+import type { RunRequest, RunResume } from '@ai-office/shared';
 import {
   createLogger,
   endSpan,
@@ -172,6 +172,13 @@ export function createRuntimeServer(deps: RuntimeDeps = {}): Server {
           res.end(JSON.stringify({ error: 'invalid json' }));
           return;
         }
+        // 续跑载荷会直接拼进模型历史，必须在写 SSE 头之前拒绝错型：
+        // 否则错误会以 200 流的形式出现，BFF 只能等到超时或模型 400 才发现。
+        if (runReq.resume !== undefined && !isValidResume(runReq.resume)) {
+          res.writeHead(400, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ error: 'invalid_resume' }));
+          return;
+        }
 
         res.writeHead(200, {
           'content-type': 'text/event-stream',
@@ -266,6 +273,13 @@ export function createRuntimeServer(deps: RuntimeDeps = {}): Server {
                     signal: controller.signal,
                     onToolCall: (obs) => recordToolObservation(metrics, logger, obs),
                     onUsage: (u) => res.write(encodeSse({ event: 'usage', data: u })),
+                    // checkpoint 只给 BFF 落库用；客户端已断开时静默丢弃，
+                    // 避免向已 end 的响应写数据触发 EPIPE。
+                    onCheckpoint: (cp) => {
+                      if (!res.writableEnded && !res.destroyed) {
+                        res.write(encodeSse({ event: 'checkpoint', data: cp }));
+                      }
+                    },
                   })) {
                     res.write(encodeSse({ event: 'step', data: ev }));
                   }
@@ -473,6 +487,52 @@ function recordToolObservation(
     status: obs.status,
     durationMs: obs.durationMs,
   });
+}
+
+/**
+ * 严格校验 BFF 下发的续跑指令。
+ * deltas 会原样拼进模型历史、usage 会并入计费累计值，任一字段错型都可能
+ * 让运行在中途才失败或算错账，因此在这里一次性拦下（非法值整单拒绝）。
+ */
+export function isValidResume(v: unknown): v is RunResume {
+  if (v === null || typeof v !== 'object' || Array.isArray(v)) return false;
+  const r = v as Record<string, unknown>;
+  if (!isNonNegativeInteger(r.round) || !isNonNegativeInteger(r.seq)) return false;
+  if (!Array.isArray(r.deltas)) return false;
+  for (const raw of r.deltas) {
+    if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return false;
+    const delta = raw as Record<string, unknown>;
+    if (delta.role !== 'assistant' && delta.role !== 'tool') return false;
+    if (typeof delta.content !== 'string') return false;
+    if (delta.toolCalls !== undefined) {
+      if (!Array.isArray(delta.toolCalls)) return false;
+      for (const rawCall of delta.toolCalls) {
+        if (rawCall === null || typeof rawCall !== 'object' || Array.isArray(rawCall)) {
+          return false;
+        }
+        const call = rawCall as Record<string, unknown>;
+        if (typeof call.id !== 'string' || typeof call.name !== 'string') return false;
+      }
+    }
+    if (delta.toolCallId !== undefined && typeof delta.toolCallId !== 'string') return false;
+  }
+  if (!Array.isArray(r.usage)) return false;
+  for (const raw of r.usage) {
+    if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return false;
+    const entry = raw as Record<string, unknown>;
+    if (typeof entry.model !== 'string' || entry.model.trim() === '') return false;
+    if (!isFiniteNonNegative(entry.input) || !isFiniteNonNegative(entry.output)) return false;
+  }
+  return true;
+}
+
+function isNonNegativeInteger(v: unknown): v is number {
+  return typeof v === 'number' && Number.isInteger(v) && v >= 0;
+}
+
+/** 用量必须是有限非负数：NaN/Infinity 会污染预算计算与结算金额。 */
+function isFiniteNonNegative(v: unknown): v is number {
+  return typeof v === 'number' && Number.isFinite(v) && v >= 0;
 }
 
 /** 判断请求来源是否为回环地址；未配置共享密钥时仅信任本机调用。 */
