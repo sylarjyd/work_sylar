@@ -115,7 +115,10 @@ describe('runtime server', () => {
     const cp = messages.find((m) => m.event === 'checkpoint')?.data as RunCheckpointEvent;
     expect(cp.round).toBe(1);
     expect(cp.seq).toBe(3);
+    expect(cp.deltas).toHaveLength(2);
     expect(cp.deltas.map((d) => d.role)).toEqual(['assistant', 'tool']);
+    expect(cp.deltas[0].toolCalls?.map((c) => c.id)).toEqual(['c1']);
+    expect(cp.deltas[1].toolCallId).toBe('c1');
     expect(cp.usage).toEqual([{ model: 'mock', input: 1, output: 1 }]);
   });
 
@@ -127,12 +130,49 @@ describe('runtime server', () => {
       usage: [{ model: 'mock', input: 1, output: 1 }],
     };
     const payloads = [
+      // 顶层错型：字符串不是对象。
+      'not-an-object',
       { ...base, round: -1 },
       { ...base, seq: 1.5 },
       { ...base, deltas: {} },
       { ...base, deltas: [{ role: 'user', content: 'x' }] },
+      { ...base, deltas: [{ role: 'assistant', content: 42 }] },
+      // tool 必须带非空 toolCallId，且必须能对上 assistant 的调用。
+      { ...base, deltas: [{ role: 'tool', content: 'x' }] },
+      { ...base, deltas: [{ role: 'tool', content: 'x', toolCallId: 'nope' }] },
+      // 有调用没结果：不是完整轮落的断点。
+      {
+        ...base,
+        deltas: [
+          { role: 'assistant', content: 'x', toolCalls: [{ id: 'c1', name: 'n', args: {} }] },
+        ],
+      },
+      // 角色错配：assistant 不能带 toolCallId，tool 不能带 toolCalls。
+      { ...base, deltas: [{ role: 'assistant', content: 'x', toolCallId: 'c1' }] },
+      {
+        ...base,
+        deltas: [
+          { role: 'assistant', content: 'x', toolCalls: [{ id: 'c1', name: 'n', args: {} }] },
+          {
+            role: 'tool',
+            content: 'x',
+            toolCallId: 'c1',
+            toolCalls: [{ id: 'c1', name: 'n', args: {} }],
+          },
+        ],
+      },
+      // toolCalls.args 必须是对象，不能是数组。
+      {
+        ...base,
+        deltas: [
+          { role: 'assistant', content: 'x', toolCalls: [{ id: 'c1', name: 'n', args: [] }] },
+        ],
+      },
+      // 超出 Prisma Int 上限（seq 之后还要自增）。
+      { ...base, seq: 2147483647 },
       { ...base, usage: [{ model: '', input: 1, output: 1 }] },
       { ...base, usage: [{ model: 'm', input: -1, output: 0 }] },
+      { ...base, usage: [{ model: 'm', input: '1', output: 0 }] },
     ];
     for (const resume of payloads) {
       const res = await postRuns({

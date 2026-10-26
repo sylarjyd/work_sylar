@@ -497,25 +497,48 @@ function recordToolObservation(
 export function isValidResume(v: unknown): v is RunResume {
   if (v === null || typeof v !== 'object' || Array.isArray(v)) return false;
   const r = v as Record<string, unknown>;
-  if (!isNonNegativeInteger(r.round) || !isNonNegativeInteger(r.seq)) return false;
+  // round/seq 最终落 Prisma Int；seq 还会后自增，越界会在落库时才炸。
+  if (!isIntInRange(r.round) || !isIntInRange(r.seq)) return false;
   if (!Array.isArray(r.deltas)) return false;
+  // 待配对的 assistant toolCall id：checkpoint 只在完整轮后发出，
+  // 因此回放历史里每个 tool 结果都必须有对应的 assistant 调用，反之亦然。
+  const pending = new Set<string>();
   for (const raw of r.deltas) {
     if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return false;
     const delta = raw as Record<string, unknown>;
-    if (delta.role !== 'assistant' && delta.role !== 'tool') return false;
     if (typeof delta.content !== 'string') return false;
-    if (delta.toolCalls !== undefined) {
-      if (!Array.isArray(delta.toolCalls)) return false;
-      for (const rawCall of delta.toolCalls) {
-        if (rawCall === null || typeof rawCall !== 'object' || Array.isArray(rawCall)) {
-          return false;
+    if (delta.role === 'assistant') {
+      // assistant 只承载调用，不能带 toolCallId；否则会伪装成工具结果破坏往返结构。
+      if (delta.toolCallId !== undefined) return false;
+      if (delta.toolCalls !== undefined) {
+        if (!Array.isArray(delta.toolCalls)) return false;
+        for (const rawCall of delta.toolCalls) {
+          if (rawCall === null || typeof rawCall !== 'object' || Array.isArray(rawCall)) {
+            return false;
+          }
+          const call = rawCall as Record<string, unknown>;
+          if (typeof call.id !== 'string' || call.id === '') return false;
+          if (typeof call.name !== 'string' || call.name === '') return false;
+          if (call.args === null || typeof call.args !== 'object' || Array.isArray(call.args)) {
+            return false;
+          }
+          // 同一 id 未配对前再次出现，说明历史已被破坏或伪造。
+          if (pending.has(call.id)) return false;
+          pending.add(call.id);
         }
-        const call = rawCall as Record<string, unknown>;
-        if (typeof call.id !== 'string' || typeof call.name !== 'string') return false;
       }
+    } else if (delta.role === 'tool') {
+      // tool 只承载结果：必须带 id，且不能反过来携带 toolCalls。
+      if (delta.toolCalls !== undefined) return false;
+      if (typeof delta.toolCallId !== 'string' || delta.toolCallId === '') return false;
+      if (!pending.has(delta.toolCallId)) return false;
+      pending.delete(delta.toolCallId);
+    } else {
+      return false;
     }
-    if (delta.toolCallId !== undefined && typeof delta.toolCallId !== 'string') return false;
   }
+  // 有调用却没有结果，说明载荷不是完整轮落的 checkpoint，不能进入模型历史。
+  if (pending.size > 0) return false;
   if (!Array.isArray(r.usage)) return false;
   for (const raw of r.usage) {
     if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return false;
@@ -526,8 +549,11 @@ export function isValidResume(v: unknown): v is RunResume {
   return true;
 }
 
-function isNonNegativeInteger(v: unknown): v is number {
-  return typeof v === 'number' && Number.isInteger(v) && v >= 0;
+/** Prisma Int 上限再留 1 位给 seq 后自增：2147483646 是最后一个安全值。 */
+const MAX_INT_SEQ = 2_147_483_646;
+
+function isIntInRange(v: unknown): v is number {
+  return typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= MAX_INT_SEQ;
 }
 
 /** 用量必须是有限非负数：NaN/Infinity 会污染预算计算与结算金额。 */

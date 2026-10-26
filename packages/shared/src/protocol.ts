@@ -39,6 +39,7 @@ export interface CheckpointUsageEntry {
 export interface RunCheckpointEvent {
   round: number;
   seq: number;
+  /** 截至该轮的全部 assistant/tool 增量（累计值）；BFF 覆盖保存，续跑原样回放。 */
   deltas: ConversationDelta[];
   usage: CheckpointUsageEntry[];
 }

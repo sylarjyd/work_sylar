@@ -8,7 +8,7 @@ import type {
   UsageEvent,
 } from '@ai-office/shared';
 import { endSpan, startSpan } from '@ai-office/telemetry';
-import type { ModelGateway, ModelMessage } from './model/types';
+import type { ModelGateway, ModelMessage, ToolCall } from './model/types';
 import { prepareAttachmentMessages, requiredModalitiesOf } from './model/attachments';
 import type { ConfirmGate } from './confirm/broker';
 import type { RunContext, Tool } from './tools/types';
@@ -69,19 +69,35 @@ export async function* runAgent(req: RunRequest, deps: RunDeps): AsyncGenerator<
   // 自定义助手的系统提示词作为首条消息注入；历史消息只落 user/assistant，不会重复。
   const systemPrompt = req.systemPrompt?.trim();
   const resume = req.resume;
+  // 续跑增量来自 JSON，必须按字段白名单重建为 ModelMessage：直接断言类型会让
+  // 未声明的字段（如 parts）绕过校验进入模型上下文并干扰模态路由。
+  // assistant 带 toolCalls、tool 带 toolCallId，与首跑历史同构，真实 provider 才不会拒。
+  const allDeltas: ModelMessage[] = (resume?.deltas ?? []).map((d) => ({
+    role: d.role,
+    content: d.content,
+    ...(d.toolCalls
+      ? {
+          toolCalls: d.toolCalls.map(
+            (c): ToolCall => ({ id: c.id, name: c.name, args: c.args as Record<string, unknown> }),
+          ),
+        }
+      : {}),
+    ...(d.toolCallId ? { toolCallId: d.toolCallId } : {}),
+  }));
   const messages: ModelMessage[] = [
     ...(systemPrompt ? [{ role: 'system' as const, content: systemPrompt }] : []),
     ...prepared,
-    // 续跑增量由 BFF 从 checkpoint 重建：assistant 带 toolCalls、tool 带 toolCallId，
-    // 与首跑时的历史同构，真实 provider 才不会把续跑当成残缺上下文拒掉。
-    ...((resume?.deltas ?? []) as unknown as ModelMessage[]),
+    ...allDeltas,
   ];
   // 续跑从 checkpoint 的序号与轮次继续，避免重复计入历史步骤与重跑已完成轮次。
   let seq = resume?.seq ?? 0;
   const startRound = resume?.round ?? 0;
-  const usageByModel = new Map<string, { input: number; output: number }>(
-    (resume?.usage ?? []).map((u) => [u.model, { input: u.input, output: u.output }]),
-  );
+  // 同一模型可能在 checkpoint 里出现多条（多段运行合并），必须累加而不是覆盖。
+  const usageByModel = new Map<string, { input: number; output: number }>();
+  for (const u of resume?.usage ?? []) {
+    const prev = usageByModel.get(u.model) ?? { input: 0, output: 0 };
+    usageByModel.set(u.model, { input: prev.input + u.input, output: prev.output + u.output });
+  }
   // 模态只由本次真实附件决定：续跑增量不含附件，不能据此收窄候选模型。
   const requiredModalities = requiredModalitiesOf(prepared);
   const ctx: RunContext = {
@@ -106,6 +122,7 @@ export async function* runAgent(req: RunRequest, deps: RunDeps): AsyncGenerator<
     for (let round = startRound; round < maxRounds; round++) {
       // 本轮新增的对话增量；只在整轮工具执行完毕后随 checkpoint 一起落库，
       // 半轮中断不会留下“有 assistant 无 tool 结果”的残缺历史。
+      // 同时追加到 allDeltas：checkpoint 必须携带截至本轮的累计历史（见下方注释）。
       const roundDeltas: ModelMessage[] = [];
       // 已取消：不再发起新一轮模型调用；已产生的用量仍由 finally 上报。
       if (deps.signal?.aborted) return;
@@ -161,6 +178,7 @@ export async function* runAgent(req: RunRequest, deps: RunDeps): AsyncGenerator<
       };
       messages.push(assistantMsg);
       roundDeltas.push(assistantMsg);
+      allDeltas.push(assistantMsg);
       for (const call of resp.toolCalls) {
         // 取消可能发生在模型返回之后：不再执行工具，也不产出 tool_call/tool_result。
         if (deps.signal?.aborted) return;
@@ -243,18 +261,26 @@ export async function* runAgent(req: RunRequest, deps: RunDeps): AsyncGenerator<
         };
         messages.push(toolMsg);
         roundDeltas.push(toolMsg);
+        allDeltas.push(toolMsg);
       }
 
       // 只有完整走完工具轮才落 checkpoint：seq 是下一个未用序号，
       // BFF 可据此截断半轮步骤并只回放已确认的增量。无工具轮会在此前 break，
       // 不会重复发一次没有续跑价值的 checkpoint。
       if (roundDeltas.length > 0) {
-        deps.onCheckpoint?.({
-          round: round + 1,
-          seq,
-          deltas: roundDeltas as unknown as ConversationDelta[],
-          usage: [...usageByModel].map(([model, u]) => ({ model, ...u })),
-        });
+        // BFF 覆盖保存并原样回放，因此 deltas 必须累计（截至本轮的全部 assistant/tool
+        // 增量），否则多轮续跑只剩最后一轮，模型历史会与首跑分叉。
+        // 快照一份，避免后续轮次继续 push 改变已发出的断点内容。
+        try {
+          deps.onCheckpoint?.({
+            round: round + 1,
+            seq,
+            deltas: [...allDeltas] as unknown as ConversationDelta[],
+            usage: [...usageByModel].map(([model, u]) => ({ model, ...u })),
+          });
+        } catch {
+          // 断点落库失败只能退化为从上一断点续跑，不能把已成功的轮次判失败。
+        }
       }
     }
   } finally {

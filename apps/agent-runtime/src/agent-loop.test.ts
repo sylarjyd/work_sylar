@@ -719,8 +719,154 @@ describe('runAgent', () => {
     expect(cp.deltas[0].toolCalls).toEqual([
       { id: 'c1', name: 'web.search', args: { query: '竞品' } },
     ]);
+    // 往返 id 必须一致，续跑回放才能重建合法的 function-calling 历史。
+    expect(cp.deltas[0].toolCalls?.[0].id).toBe('c1');
+    expect(cp.deltas[1].toolCallId).toBe('c1');
     // 发出时第二轮（最终文本轮）尚未发起，累计用量只有第一轮的 2/1。
     expect(cp.usage).toEqual([{ model: 'mock', input: 2, output: 1 }]);
+  });
+
+  it('多轮工具轮：checkpoint 的 deltas 与 usage 均累计', async () => {
+    let round = 0;
+    const gateway: ModelGateway = {
+      async chat() {
+        round++;
+        if (round === 1) {
+          return {
+            content: '第一轮',
+            toolCalls: [{ id: 'c1', name: 'web.search', args: { query: 'a' } }],
+            usage: { input: 1, output: 1 }, model: 'mock',
+          };
+        }
+        if (round === 2) {
+          return {
+            content: '第二轮',
+            toolCalls: [{ id: 'c2', name: 'web.search', args: { query: 'b' } }],
+            usage: { input: 2, output: 2 }, model: 'mock',
+          };
+        }
+        return { content: '结论', toolCalls: [], usage: { input: 1, output: 1 }, model: 'mock' };
+      },
+    };
+    const cps: RunCheckpointEvent[] = [];
+    await collect(
+      runAgent(req, { gateway, tools: [echoTool], onCheckpoint: (cp) => cps.push(cp) }),
+    );
+
+    expect(cps).toHaveLength(2);
+    // 首个断点只含第一轮。
+    expect(cps[0].deltas).toHaveLength(2);
+    expect(cps[0].usage).toEqual([{ model: 'mock', input: 1, output: 1 }]);
+    // 第二个断点必须携带截至本轮的两轮完整往返，否则续跑会丢第一轮。
+    expect(cps[1].deltas).toHaveLength(4);
+    expect(cps[1].deltas.map((d) => d.role)).toEqual(['assistant', 'tool', 'assistant', 'tool']);
+    expect(cps[1].deltas[0].toolCalls?.[0].id).toBe('c1');
+    expect(cps[1].deltas[1].toolCallId).toBe('c1');
+    expect(cps[1].deltas[2].toolCalls?.[0].id).toBe('c2');
+    expect(cps[1].deltas[3].toolCallId).toBe('c2');
+    // 发出时最终文本轮尚未发起：累计用量只含两个工具轮。
+    expect(cps[1].usage).toEqual([{ model: 'mock', input: 3, output: 3 }]);
+  });
+
+  it('resume 用累计 deltas 重建历史：两轮工具结果都进入模型上下文', async () => {
+    // 先跑一次两轮工具调用，把最终断点作为续跑载荷。
+    let round = 0;
+    const first: ModelGateway = {
+      async chat() {
+        round++;
+        if (round === 1) {
+          return {
+            content: '一',
+            toolCalls: [{ id: 'c1', name: 'web.search', args: { query: 'a' } }],
+            usage: { input: 1, output: 1 }, model: 'mock',
+          };
+        }
+        if (round === 2) {
+          return {
+            content: '二',
+            toolCalls: [{ id: 'c2', name: 'web.search', args: { query: 'b' } }],
+            usage: { input: 1, output: 1 }, model: 'mock',
+          };
+        }
+        return { content: '结论', toolCalls: [], usage: { input: 1, output: 1 }, model: 'mock' };
+      },
+    };
+    const cps: RunCheckpointEvent[] = [];
+    await collect(
+      runAgent(req, { gateway: first, tools: [echoTool], onCheckpoint: (cp) => cps.push(cp) }),
+    );
+    const final = cps[cps.length - 1];
+
+    const seen: { role: string; content: string; toolCallId?: string }[][] = [];
+    const resumed: ModelGateway = {
+      async chat(request) {
+        seen.push(
+          request.messages.map((m) => ({
+            role: m.role,
+            content: m.content,
+            ...(m.toolCallId ? { toolCallId: m.toolCallId } : {}),
+          })),
+        );
+        return { content: '收尾', toolCalls: [], usage: { input: 4, output: 5 }, model: 'mock' };
+      },
+    };
+    const usages: UsageEvent[] = [];
+    const events = await collect(
+      runAgent(
+        {
+          ...req,
+          resume: {
+            round: final.round,
+            seq: final.seq,
+            deltas: final.deltas,
+            usage: final.usage,
+          },
+        },
+        { gateway: resumed, tools: [], onUsage: (u) => usages.push(u) },
+      ),
+    );
+
+    // 序号从断点续起；模型上下文里两轮工具结果都要在，否则历史与首跑分叉。
+    expect(events[0].seq).toBe(final.seq);
+    expect(seen[0].filter((m) => m.role === 'tool').map((m) => m.toolCallId)).toEqual([
+      'c1',
+      'c2',
+    ]);
+    // 用量在断点累计值上继续累加。
+    const input = final.usage.reduce((n, u) => n + u.input, 0) + 4;
+    const output = final.usage.reduce((n, u) => n + u.output, 0) + 5;
+    expect(usages).toEqual([
+      { input, output, models: [{ model: 'mock', input, output }] },
+    ]);
+  });
+
+  it('onCheckpoint 抛错不中断运行（降级为从上一断点续跑）', async () => {
+    let round = 0;
+    const gateway: ModelGateway = {
+      async chat() {
+        round++;
+        if (round === 1) {
+          return {
+            content: '执行',
+            toolCalls: [{ id: 'c1', name: 'web.search', args: { query: 'x' } }],
+            usage: { input: 0, output: 0 }, model: 'mock',
+          };
+        }
+        return { content: '收尾', toolCalls: [], usage: { input: 0, output: 0 }, model: 'mock' };
+      },
+    };
+    const events = await collect(
+      runAgent(req, {
+        gateway,
+        tools: [echoTool],
+        onCheckpoint: () => {
+          throw new Error('checkpoint_failed');
+        },
+      }),
+    );
+    // 断点落库失败不能把已成功的轮次判失败：运行照常收尾。
+    expect(events.at(-1)?.type).toBe('think');
+    expect(events.at(-1)?.payload).toMatchObject({ text: '收尾' });
   });
 
   it('resume 从指定轮次与序号继续', async () => {
