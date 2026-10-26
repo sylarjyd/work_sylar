@@ -151,18 +151,18 @@ export async function listArtifacts(sessionId: string): Promise<ArtifactDto[]> {
   return (await res.json()) as ArtifactDto[];
 }
 
-/** 提交确认决策：JWT 走请求头。返回 runtime 的 { ok, matched }（matched=false 表示重复/过期/未知）。 */
+/** 提交确认决策：JWT 走请求头。BFF 经控制总线转交给 runtime，只能确认已受理。 */
 export async function confirmRun(
   runId: string,
   confirmId: string,
   approved: boolean,
-): Promise<{ ok: boolean; matched: boolean }> {
+): Promise<{ ok: boolean }> {
   const res = await authFetch(`/api/runs/${runId}/confirm`, {
     method: 'POST',
     body: JSON.stringify({ confirmId, approved }),
   });
   if (!res.ok) throw new Error(`confirm_failed_${res.status}`);
-  return (await res.json()) as { ok: boolean; matched: boolean };
+  return (await res.json()) as { ok: boolean };
 }
 
 /**
