@@ -444,6 +444,48 @@ describe('RunRelayService', () => {
     expect(reply.raw.end).toHaveBeenCalled();
   });
 
+  it('待发字节数超过上限时主动断开，消息条数未超限也生效', async () => {
+    const { relay, deps } = makeRelay({ status: 'running' });
+    const { reply, raw, chunks } = fakeReply();
+    backpressureOnce(raw, chunks);
+    const done = relay.attach('r1', reply);
+    await untilEvent(chunks, 'status');
+
+    // 单帧约 3MiB；三条即超过 8MiB 字节上限，但远未触及消息条数上限。
+    // 暂停期间 writableLength 冻结，若不按入队帧累计字节数判断，这里不会断开。
+    const blob = 'x'.repeat(3 * 1024 * 1024);
+    for (let seq = 0; seq < 3; seq += 1) {
+      deps.emit({
+        event: 'step',
+        data: { runId: 'r1', seq, type: 'think', payload: { text: blob }, ts: 1000 + seq },
+      });
+    }
+
+    await done;
+    expect(deps.unsubscribe).toHaveBeenCalledTimes(1);
+    expect(reply.raw.end).toHaveBeenCalled();
+  });
+
+  it('暂停期间收到实时 canceled 时强制写出并结束流', async () => {
+    const { relay, deps } = makeRelay({ status: 'running' });
+    const { reply, raw, chunks } = fakeReply();
+    backpressureOnce(raw, chunks);
+    const done = relay.attach('r1', reply);
+    await untilEvent(chunks, 'status');
+
+    deps.emit({ event: 'step', data: stepEvent(1) }); // 暂停中排队，终态到达后被丢弃
+    deps.emit({ event: 'status', data: { runId: 'r1', status: 'canceled' } });
+    await done;
+
+    expect(messages(chunks)).toEqual([
+      { event: 'status', data: { runId: 'r1', status: 'running' } },
+      { event: 'status', data: { runId: 'r1', status: 'canceled' } },
+      { event: 'done', data: { runId: 'r1' } },
+    ]);
+    expect(deps.unsubscribe).toHaveBeenCalledTimes(1);
+    expect(reply.raw.end).toHaveBeenCalled();
+  });
+
   it('暂停期间收到 done 时强制写出终态，不被积压吞掉', async () => {
     const { relay, deps } = makeRelay({ status: 'running' });
     const { reply, raw, chunks } = fakeReply();

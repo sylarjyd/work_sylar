@@ -13,7 +13,7 @@ const HEARTBEAT_INTERVAL_MS = 15_000;
 /** 慢客户端暂停期间允许积压的最大消息数；超过即主动断开，避免无界内存增长。 */
 export const MAX_PENDING_MESSAGES = 1000;
 
-/** 慢客户端暂停期间 socket 缓冲的字节上限，超过即主动断开。 */
+/** 慢客户端暂停期间待发队列的字节上限，超过即主动断开。 */
 export const MAX_PENDING_BYTES = 8 * 1024 * 1024;
 
 /**
@@ -61,7 +61,9 @@ export class RunRelayService {
     const buffered: SseMessage[] = [];
     /** socket 写满后暂停；暂停期间非终态消息进入 pending，保持原有顺序。 */
     let paused = false;
-    const pending: SseMessage[] = [];
+    /** 已编码的待发帧；入队时编码一次，字节数按真实出站体积累计。 */
+    const pending: Array<{ encoded: string; bytes: number }> = [];
+    let pendingBytes = 0;
     let drainHandler: (() => void) | undefined;
 
     let resolveSettled!: () => void;
@@ -90,6 +92,7 @@ export class RunRelayService {
 
     const clearPending = (): void => {
       pending.length = 0;
+      pendingBytes = 0;
     };
 
     const settle = (endStream: boolean): void => {
@@ -114,19 +117,23 @@ export class RunRelayService {
     };
 
     /** 真正写 socket；返回 false 表示内核/用户态缓冲已满，需要暂停生产。 */
-    const writeRaw = (msg: SseMessage): boolean => {
+    const writeEncoded = (encoded: string): boolean => {
       try {
-        return reply.raw.write(encodeSse(msg));
+        return reply.raw.write(encoded);
       } catch {
         // 客户端已断开；close 处理器会负责退订与清理。
         return true;
       }
     };
 
+    const writeRaw = (msg: SseMessage): boolean => writeEncoded(encodeSse(msg));
+
     const flushPending = (): void => {
       while (!finalized && pending.length > 0) {
-        const msg = pending.shift()!;
-        if (!writeRaw(msg)) {
+        const frame = pending.shift()!;
+        // 已交给 socket 的帧不再计入待发字节（write 返回 false 时数据也已入缓冲）。
+        pendingBytes -= frame.bytes;
+        if (!writeEncoded(frame.encoded)) {
           startPause();
           return;
         }
@@ -145,13 +152,15 @@ export class RunRelayService {
     };
 
     const enqueue = (msg: SseMessage): void => {
-      pending.push(msg);
-      // 慢客户端积压超过上限时，继续缓冲会无限占用进程内存（工具结果可能很大）。
+      // 入队即编码：暂停期间 writableLength 会冻结，只有按待发帧的真实体积
+      // 累计字节数才能发现积压（工具结果可能单帧就很大）。
+      const encoded = encodeSse(msg);
+      const bytes = Buffer.byteLength(encoded, 'utf8');
+      pending.push({ encoded, bytes });
+      pendingBytes += bytes;
+      // 慢客户端积压超过上限时，继续缓冲会无限占用进程内存。
       // 主动断开优于 OOM：客户端会带 afterSeq 重连，由 DB 回放补齐历史。
-      if (
-        pending.length > MAX_PENDING_MESSAGES ||
-        reply.raw.writableLength > MAX_PENDING_BYTES
-      ) {
+      if (pending.length > MAX_PENDING_MESSAGES || pendingBytes > MAX_PENDING_BYTES) {
         settle(true);
       }
     };
