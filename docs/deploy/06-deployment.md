@@ -561,6 +561,7 @@ curl -X POST http://localhost:4000/api/billing/admin/credits \
 
 ### 安全边界（生产必读）
 
+- **禁止把 prompt、消息正文、工具入参/结果全文、Authorization、内部 token、API key、连接器 env、Webhook secret 写入日志或指标 label。**
 - **指标 label 禁止 userId/tenantId/sessionId/runId**；管理端指标接口也不返回邮箱、消息内容、工具入参/结果。
 - `/metrics`、`/api/health/ready` 仅回环或内部 token 可访问；runtime 指标端点仅在配置 `AGENT_RUNTIME_TOKEN` 后对非回环来源放行。
 - Webhook URL 仅管理员可改；secret 设置后永不返回明文，读取一律掩码。

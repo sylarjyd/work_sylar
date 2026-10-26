@@ -439,15 +439,17 @@ export class TasksService {
   }
 
   /**
-   * 请求取消执行中的运行，竞态下 0 行不报错。
+   * 请求取消执行中的运行，返回本次真正写入取消意图的行数（0 或 1），竞态下 0 行不报错。
    * 同时接受 queued 与 running：执行器可能已经取走作业但还没写入 running，
    * 排队取消路径会落到这里；只匹配 running 会静默丢弃这次取消。
+   * 条件带 cancelRequestedAt: null：重复取消不覆盖首次请求时间，调用方也据此区分首次/重复。
    */
-  async markCancelRequested(runId: string): Promise<void> {
-    await this.prisma.run.updateMany({
-      where: { id: runId, status: { in: ['queued', 'running'] } },
+  async markCancelRequested(runId: string): Promise<number> {
+    const { count } = await this.prisma.run.updateMany({
+      where: { id: runId, status: { in: ['queued', 'running'] }, cancelRequestedAt: null },
       data: { cancelRequestedAt: new Date() },
     });
+    return count;
   }
 
   /**

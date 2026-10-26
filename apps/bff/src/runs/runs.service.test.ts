@@ -38,7 +38,7 @@ function makeService(
     tasks: {
       findOwnedRun: vi.fn(),
       markCanceled: vi.fn().mockResolvedValue(true),
-      markCancelRequested: vi.fn().mockResolvedValue(undefined),
+      markCancelRequested: vi.fn().mockResolvedValue(1),
       createRetryRun: vi.fn().mockResolvedValue({
         runId: 'r2',
         taskId: 'task1',
@@ -122,6 +122,20 @@ describe('RunsService.cancel', () => {
     await expect(svc.cancel('r1', 't1', 'u1')).resolves.toEqual({ status: 'running' });
 
     expect(inc).toHaveBeenCalledTimes(1);
+  });
+
+  it('重复取消（markCancelRequested 返回 0）仍发布控制消息但不计数', async () => {
+    const { svc, deps, metrics } = makeService({ status: 'running' });
+    const inc = vi.spyOn(metrics.runsCanceled, 'inc');
+    // 已有取消请求时条件更新 0 行：本次是重复点击/重发。
+    deps.tasks.markCancelRequested.mockResolvedValue(0);
+
+    await expect(svc.cancel('r1', 't1', 'u1')).resolves.toEqual({ status: 'running' });
+
+    expect(deps.tasks.markCancelRequested).toHaveBeenCalledWith('r1');
+    // 仍要重发控制消息：首次消息可能丢失，重发是唯一兜底。
+    expect(deps.control.publish).toHaveBeenCalledWith('r1', { type: 'cancel' });
+    expect(inc).not.toHaveBeenCalled();
   });
 
   it('控制消息发布失败时不计数并原样上抛', async () => {

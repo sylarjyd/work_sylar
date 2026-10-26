@@ -434,6 +434,6 @@ pnpm --filter @ai-office/bff typecheck             # 类型
 1. **队列并发**：同一租户连续发起 5 个任务（`RUN_QUEUE_PER_TENANT=2`、`RUN_QUEUE_CONCURRENCY≥2`），预期 2 个 running、3 个 queued；前两个结束后排队任务自动补位。
 2. **断线重连**：运行中刷新/关闭工作台页面，再打开同一任务。前端会带 `?afterSeq=<lastSeq>`（或 `Last-Event-ID`）续流，先回放缺失 step，再继续实时事件，不丢失中间步骤。
 3. **取消**：排队中取消应移除作业并立即返回 canceled；执行中取消应受理控制消息，运行在收尾后转 canceled（已产生的 step 与用量保留）。终态重复取消幂等，不产生副作用。
-4. **checkpoint 续跑**：运行中停掉 agent-runtime 再启动，执行器应从中断前 checkpoint 继续；连续中断超过 `RUN_QUEUE_MAX_ATTEMPTS` 才落 failed。
+4. **checkpoint 续跑**：运行中停掉 agent-runtime 再启动，执行器应从中断前 checkpoint 继续；连续中断达到 `RUN_QUEUE_MAX_ATTEMPTS` 次尝试仍失败即落 failed（默认 2 次）。
 5. **管理端手动重试**：运营端任务详情对 failed/canceled 运行点重试，基于任务目标创建新 run 并重新排队（attempt 递增）；容量不足时返回 429。
 6. **指标**：`GET /metrics`（回环或 `x-internal-token`）应包含 `ai_office_run_queue_depth`、`ai_office_run_queue_wait_seconds`、`ai_office_runs_canceled_total`、`ai_office_runs_retried_total`、`ai_office_runs_resumed_total`。可先发起几个排队/取消/重试操作，确认计数与直方图有值。

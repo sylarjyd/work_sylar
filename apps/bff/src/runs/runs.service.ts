@@ -51,10 +51,11 @@ export class RunsService {
     }
 
     // 条件标记 + 控制消息：先把取消意图落库，执行器即使错过消息也能在执行前兜底。
-    await this.tasks.markCancelRequested(runId);
+    const marked = await this.tasks.markCancelRequested(runId);
     await this.control.publish(runId, { type: 'cancel' });
-    // 控制消息发出即视为取消请求被接受；发布失败会先抛错，不会走到这里。
-    this.metrics.runsCanceled.inc();
+    // 即使 marked=0 也要继续 publish：首次控制消息可能已丢失，重复取消重发是唯一补救。
+    // 只有第一次写入取消意图才计数；重复点击/重发不放大指标。发布失败会先抛错，不会走到这里。
+    if (marked > 0) this.metrics.runsCanceled.inc();
     return { status: 'running' };
   }
 

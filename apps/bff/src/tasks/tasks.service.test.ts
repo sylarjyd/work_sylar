@@ -563,29 +563,40 @@ describe('TasksService', () => {
     expect(ctx.db.tasks[0].status).toBe('running');
   });
 
-  it('markCancelRequested 接受 queued 与 running，忽略已终态的 run', async () => {
+  it('markCancelRequested 接受 queued 与 running，返回首次写入行数且忽略已终态的 run', async () => {
     // 执行器可能已取走作业但还没写 running：只匹配 running 会静默丢弃这次取消。
     const updateMany = vi.fn().mockResolvedValue({ count: 0 });
     const conditional = new TasksService({ run: { updateMany } } as any, sessions as any);
 
-    await expect(conditional.markCancelRequested('r1')).resolves.toBeUndefined();
+    // 0 行时返回 0，不抛错。
+    await expect(conditional.markCancelRequested('r1')).resolves.toBe(0);
     expect(updateMany).toHaveBeenCalledWith({
-      where: { id: 'r1', status: { in: ['queued', 'running'] } },
+      where: {
+        id: 'r1',
+        status: { in: ['queued', 'running'] },
+        // 条件带 null 才能既避免覆盖首次请求时间，又让调用方区分首次/重复取消。
+        cancelRequestedAt: null,
+      },
       data: { cancelRequestedAt: expect.any(Date) },
     });
 
     ctx.db.runs.push(
-      { id: 'r1', status: 'queued' },
-      { id: 'r2', status: 'running' },
-      { id: 'r3', status: 'done' },
+      { id: 'r1', status: 'queued', cancelRequestedAt: null },
+      { id: 'r2', status: 'running', cancelRequestedAt: null },
+      { id: 'r3', status: 'done', cancelRequestedAt: null },
     );
-    await svc.markCancelRequested('r1');
-    await svc.markCancelRequested('r2');
-    await svc.markCancelRequested('r3');
+    // queued/running 首次取消写入 1 行，已终态 0 行。
+    await expect(svc.markCancelRequested('r1')).resolves.toBe(1);
+    await expect(svc.markCancelRequested('r2')).resolves.toBe(1);
+    await expect(svc.markCancelRequested('r3')).resolves.toBe(0);
     expect(ctx.db.runs[0].cancelRequestedAt).toBeInstanceOf(Date);
     expect(ctx.db.runs[1].cancelRequestedAt).toBeInstanceOf(Date);
-    // 已终态的 run 不再写取消请求；0 行也不抛错。
-    expect(ctx.db.runs[2].cancelRequestedAt).toBeUndefined();
+    expect(ctx.db.runs[2].cancelRequestedAt).toBeNull();
+
+    // 同一 run 再次请求返回 0，且首次请求时间不被覆盖。
+    const first = ctx.db.runs[0].cancelRequestedAt;
+    await expect(svc.markCancelRequested('r1')).resolves.toBe(0);
+    expect(ctx.db.runs[0].cancelRequestedAt).toBe(first);
   });
 
   it('finish 支持 canceled：run/task 均落 canceled 且不写 assistant 消息', async () => {
