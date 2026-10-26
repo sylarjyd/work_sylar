@@ -1,3 +1,5 @@
+import type { RunResume, RunStatus } from './protocol';
+
 export type ChatRole = 'system' | 'user' | 'assistant' | 'tool';
 
 export interface ChatMessage {
@@ -173,6 +175,8 @@ export interface RunRequest {
   permissionMode?: AssistantPermissionMode;
   /** 助手绑定的知识库；缺省或空数组表示检索全部知识库。 */
   kbIds?: string[];
+  /** 断点续跑：由 BFF 从 RunCheckpoint 读出后下发。 */
+  resume?: RunResume;
 }
 
 export interface RegisterRequest {
@@ -735,15 +739,20 @@ export interface AdminTaskItemDto {
   id: string;
   sessionId: string;
   goal: string;
-  status: string;
-  latestRunStatus: string | null;
+  status: RunStatus;
+  latestRunStatus: RunStatus | null;
+  attempts: number;
+  queuedAt: string;
+  startedAt: string | null;
+  endedAt: string | null;
   createdAt: string;
 }
 
 export interface AdminRunItemDto {
   id: string;
-  status: string;
-  startedAt: string;
+  attempt: number;
+  status: RunStatus;
+  startedAt: string | null;
   endedAt: string | null;
   credits: number | null;
 }
@@ -763,10 +772,13 @@ export interface AdminStepDto {
 export interface AdminRunDetailDto {
   id: string;
   taskId: string;
+  attempt: number;
   traceId: string | null;
-  status: string;
-  startedAt: string;
+  status: RunStatus;
+  startedAt: string | null;
   endedAt: string | null;
+  cancelRequestedAt: string | null;
+  checkpoint: { round: number; seq: number; updatedAt: string } | null;
   steps: PageDto<AdminStepDto>;
   usage: {
     inputTokens: number;
@@ -775,6 +787,16 @@ export interface AdminRunDetailDto {
     status: string;
     models: unknown;
   } | null;
+}
+
+export interface CancelRunResultDto {
+  status: RunStatus;
+}
+
+export interface RetryRunResultDto {
+  runId: string;
+  taskId: string;
+  attempt: number;
 }
 
 /** 运营端厂商（永不返回 apiKey 明文）。 */

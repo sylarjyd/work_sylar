@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { encodeSse, decodeSseFrames, parseSseFrame } from './protocol';
+import { encodeSse, decodeSseFrames, parseSseFrame, SSE_EVENT_NAMES } from './protocol';
 import type { AgentEvent } from './protocol';
 
 describe('encodeSse', () => {
@@ -32,6 +32,15 @@ describe('parseSseFrame', () => {
     expect(parseSseFrame('event: error\ndata: not-json')).toBeNull();
     expect(parseSseFrame('event: error\ndata:')).toBeNull();
   });
+});
+
+it('接受 status 与 checkpoint 事件', () => {
+  for (const event of ['status', 'checkpoint'] as const) {
+    const frame = encodeSse({ event, data: { runId: 'r1' } });
+    expect(parseSseFrame(frame.trimEnd())?.event).toBe(event);
+  }
+  expect(SSE_EVENT_NAMES).toContain('status');
+  expect(SSE_EVENT_NAMES).toContain('checkpoint');
 });
 
 describe('decodeSseFrames', () => {

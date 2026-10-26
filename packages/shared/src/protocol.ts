@@ -1,7 +1,55 @@
-export const SSE_EVENT_NAMES = ['step', 'usage', 'done', 'error'] as const;
+export const SSE_EVENT_NAMES = [
+  'step',
+  'usage',
+  'done',
+  'error',
+  'status',
+  'checkpoint',
+] as const;
 export type SseEventName = (typeof SSE_EVENT_NAMES)[number];
 
+/** 任务/运行的排队与执行状态；以 string 落库，DTO 层收窄为该联合类型。 */
+export type RunStatus = 'queued' | 'running' | 'done' | 'failed' | 'canceled';
+
 export type StepType = 'think' | 'tool_call' | 'tool_result' | 'artifact' | 'confirm_request' | 'notice';
+
+/** 排队/执行状态变更（非 Step，不入库）。 */
+export interface RunStatusEvent {
+  runId: string;
+  status: RunStatus;
+  /** 仅 queued 时给出：同租户前方等待数。 */
+  position?: number;
+}
+
+/** 会话增量：续跑时回放给 runtime 的 assistant/tool 消息。 */
+export interface ConversationDelta {
+  role: 'assistant' | 'tool';
+  content: string;
+  toolCalls?: Array<{ id: string; name: string; args: unknown }>;
+  toolCallId?: string;
+}
+
+export interface CheckpointUsageEntry {
+  model: string;
+  input: number;
+  output: number;
+}
+
+/** runtime → BFF 的 checkpoint；BFF 落库后不转发浏览器。 */
+export interface RunCheckpointEvent {
+  round: number;
+  seq: number;
+  deltas: ConversationDelta[];
+  usage: CheckpointUsageEntry[];
+}
+
+/** BFF → runtime 的续跑指令。 */
+export interface RunResume {
+  round: number;
+  seq: number;
+  deltas: ConversationDelta[];
+  usage: CheckpointUsageEntry[];
+}
 
 /** `notice` step 的 payload：目前只有预算超限，后续可扩展。 */
 export interface NoticePayload {
