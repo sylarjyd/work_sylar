@@ -9,7 +9,7 @@ export interface AdminNavGroup {
   items: AdminNavItem[];
 }
 
-/** 运营端分组导航：按业务域分组，组名常驻展示，不做二级折叠。 */
+/** 运营端分组导航：按业务域分组；组名作为二级菜单，可点击折叠。 */
 export const ADMIN_NAV: AdminNavGroup[] = [
   {
     key: 'monitor',
