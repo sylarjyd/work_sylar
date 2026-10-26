@@ -30,6 +30,7 @@ import { LocalRunEventBus, RedisRunEventBus, type RunEventBus } from './run-even
 import { RunExecutor } from './run-executor.service';
 import type { RunJob } from './run-job';
 import { RunQueueService } from './run-queue.service';
+import { RunRelayService } from './run-relay.service';
 import { RunWorker } from './run-worker';
 
 /**
@@ -93,6 +94,7 @@ export class QueueModule implements OnApplicationShutdown {
       },
       RunExecutor,
       RunQueueService,
+      RunRelayService,
       RunWorker,
     ];
 
@@ -108,7 +110,7 @@ export class QueueModule implements OnApplicationShutdown {
         SettingsModule,
       ],
       providers,
-      exports: [RunQueueService, RunExecutor, RUN_EVENT_BUS, RUN_CONTROL_BUS],
+      exports: [RunQueueService, RunExecutor, RunRelayService, RUN_EVENT_BUS, RUN_CONTROL_BUS],
     };
   }
 

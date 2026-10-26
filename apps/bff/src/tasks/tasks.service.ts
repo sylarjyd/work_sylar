@@ -195,6 +195,32 @@ export class TasksService {
     });
   }
 
+  /** 流式挂接需要的运行元信息；不存在时 404。 */
+  async findRun(runId: string): Promise<{ id: string; status: string; lastError: string | null }> {
+    const run = await this.prisma.run.findUnique({
+      where: { id: runId },
+      select: { id: true, status: true, task: { select: { lastError: true } } },
+    });
+    if (!run) throw new NotFoundException('run_not_found');
+    return { id: run.id, status: run.status, lastError: run.task.lastError ?? null };
+  }
+
+  /** 按 seq 回放已落库步骤；payload 原样还原为 AgentEvent。 */
+  async listSteps(runId: string, afterSeq = -1): Promise<AgentEvent[]> {
+    const rows = await this.prisma.step.findMany({
+      where: { runId, seq: { gt: afterSeq } },
+      orderBy: { seq: 'asc' },
+      select: { seq: true, type: true, payload: true, ts: true },
+    });
+    return rows.map((r) => ({
+      runId,
+      seq: r.seq,
+      type: r.type as AgentEvent['type'],
+      payload: r.payload as unknown as Record<string, unknown>,
+      ts: r.ts.getTime(),
+    }));
+  }
+
   /** 单租户排队任务数：用于入队时的排队上限校验。 */
   async countQueued(tenantId: string): Promise<number> {
     return this.prisma.task.count({ where: { status: 'queued', session: { tenantId } } });

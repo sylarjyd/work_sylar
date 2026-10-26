@@ -1,7 +1,19 @@
-import { Body, Controller, NotFoundException, Param, Post, Res, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Headers,
+  NotFoundException,
+  Param,
+  Post,
+  Query,
+  Res,
+  UseGuards,
+} from '@nestjs/common';
 import type { FastifyReply } from 'fastify';
 import type { ConfirmDecision } from '@ai-office/shared';
 import { TasksService } from '../tasks/tasks.service';
+import { RunRelayService } from '../queue/run-relay.service';
 import { JwtGuard } from '../auth/jwt.guard';
 import { CurrentUser } from '../auth/current-user';
 import type { JwtPayload } from '../auth/jwt';
@@ -9,7 +21,38 @@ import type { JwtPayload } from '../auth/jwt';
 @Controller('api/runs')
 @UseGuards(JwtGuard)
 export class RunsController {
-  constructor(private readonly tasks: TasksService) {}
+  constructor(
+    private readonly tasks: TasksService,
+    private readonly relay: RunRelayService,
+  ) {}
+
+  /**
+   * 断线可重连的事件流：先回放 afterSeq 之后的落库步骤，再转发实时事件。
+   * 游标优先取 query（浏览器 EventSource 重连会自动带 Last-Event-ID，但首连需显式指定）。
+   */
+  @Get(':id/stream')
+  async stream(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') runId: string,
+    @Headers('last-event-id') lastEventId: string | undefined,
+    @Query('afterSeq') afterSeqQuery: string | undefined,
+    @Res() reply: FastifyReply,
+  ): Promise<void> {
+    try {
+      await this.tasks.assertRunOwned(runId, user.tenantId, user.sub);
+    } catch (err) {
+      if (err instanceof NotFoundException) {
+        reply.status(404).send({ error: 'run_not_found' });
+        return;
+      }
+      throw err;
+    }
+    // query 优先；非法游标回退为从头回放，不能把 NaN/负数当作合法 seq。
+    const raw = afterSeqQuery ?? lastEventId;
+    const parsed = raw === undefined ? -1 : Number(raw);
+    const afterSeq = Number.isInteger(parsed) && parsed >= -1 ? parsed : -1;
+    await this.relay.attach(runId, reply, { afterSeq });
+  }
 
   @Post(':id/confirm')
   async confirm(

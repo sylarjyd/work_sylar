@@ -1,13 +1,15 @@
 import 'reflect-metadata';
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import { Test } from '@nestjs/testing';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
+import type { FastifyReply } from 'fastify';
 import { createServer, type Server } from 'node:http';
 import { RunsController } from './runs.controller';
 import { TasksService } from '../tasks/tasks.service';
 import { SessionsService } from '../sessions/sessions.service';
 import { ModelCatalogService } from '../models/model-catalog.service';
 import { PrismaService } from '../db/prisma.service';
+import { RunRelayService } from '../queue/run-relay.service';
 import { signToken } from '../auth/jwt';
 
 let app: NestFastifyApplication;
@@ -19,6 +21,10 @@ let prismaFail = false;
 
 // 归属：仅 r1 属 t1/u1；嵌套关系过滤由假库按 where 结构模拟。
 const ownedRun = { id: 'r1' };
+/** 流式挂接以桩替代：本文件只验证路由、鉴权与游标解析。 */
+const attach = vi.fn(async (_runId: string, reply: FastifyReply) => {
+  reply.status(200).header('content-type', 'text/plain').send('ok');
+});
 const fakePrisma = {
   user: {
     // JwtGuard 会按 sub 查库校验 status/role；测试里按 token 中的 sub 返回对应租户。
@@ -65,6 +71,7 @@ beforeAll(async () => {
       { provide: PrismaService, useValue: fakePrisma },
       // SessionsService 依赖模型目录；本文件只验证 run 归属，给一个不会被调用的桩。
       { provide: ModelCatalogService, useValue: { available: async () => ({ models: [], defaultModel: null }) } },
+      { provide: RunRelayService, useValue: { attach } },
     ],
   }).compile();
   app = moduleRef.createNestApplication<NestFastifyApplication>(new FastifyAdapter());
@@ -76,6 +83,7 @@ beforeEach(() => {
   upstreamStatus = 200;
   upstreamBody = JSON.stringify({ ok: true, matched: true });
   prismaFail = false;
+  attach.mockClear();
   delete process.env.AGENT_RUNTIME_TOKEN;
   process.env.AGENT_RUNTIME_URL = runtimeUrl;
 });
@@ -118,6 +126,46 @@ describe('RunsController', () => {
       payload: { confirmId: 'c1', approved: true },
     });
     expect(res.statusCode).toBe(500);
+  });
+
+  it('stream：非本用户的 run 返回 404 且不挂接', async () => {
+    const other = signToken({ sub: 'u2', tenantId: 't2' });
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/runs/r1/stream',
+      headers: { authorization: `Bearer ${other}` },
+    });
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toEqual({ error: 'run_not_found' });
+    expect(attach).not.toHaveBeenCalled();
+  });
+
+  it('stream：query 优先于 Last-Event-ID，非法游标回退为 -1', async () => {
+    const query = await app.inject({
+      method: 'GET',
+      url: '/api/runs/r1/stream?afterSeq=5',
+      headers: { ...auth(), 'last-event-id': '3' },
+    });
+    expect(query.statusCode).toBe(200);
+    expect(attach).toHaveBeenLastCalledWith('r1', expect.anything(), { afterSeq: 5 });
+
+    const header = await app.inject({
+      method: 'GET',
+      url: '/api/runs/r1/stream',
+      headers: { ...auth(), 'last-event-id': '7' },
+    });
+    expect(header.statusCode).toBe(200);
+    expect(attach).toHaveBeenLastCalledWith('r1', expect.anything(), { afterSeq: 7 });
+
+    for (const bad of ['abc', '-5', '1.5']) {
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/runs/r1/stream?afterSeq=${bad}`,
+        headers: auth(),
+      });
+      expect(res.statusCode).toBe(200);
+      expect(attach).toHaveBeenLastCalledWith('r1', expect.anything(), { afterSeq: -1 });
+    }
   });
 
   it('body 非法返回 400（不转发上游）', async () => {
