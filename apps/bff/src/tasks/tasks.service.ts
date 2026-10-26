@@ -226,9 +226,18 @@ export class TasksService {
     }));
   }
 
-  /** 单租户排队任务数：用于入队时的排队上限校验。 */
-  async countQueued(tenantId: string): Promise<number> {
-    return this.prisma.task.count({ where: { status: 'queued', session: { tenantId } } });
+  /**
+   * 单租户排队任务数：用于入队时的排队上限校验。
+   * 新任务在提交前已落库为 queued，必须排除自身，否则会把自己算进上限导致永远只允许 max-1 个。
+   */
+  async countQueued(tenantId: string, excludeTaskId?: string): Promise<number> {
+    return this.prisma.task.count({
+      where: {
+        status: 'queued',
+        session: { tenantId },
+        ...(excludeTaskId ? { id: { not: excludeTaskId } } : {}),
+      },
+    });
   }
 
   /**

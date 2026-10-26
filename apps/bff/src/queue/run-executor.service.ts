@@ -30,7 +30,6 @@ const UPSTREAM_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
 // 项目未启用 DOM lib，`ReadableStreamReadResult` 不存在，从 reader.read 推导。
 type StreamReadResult<T> = Awaited<ReturnType<ReadableStreamDefaultReader<T>['read']>>;
 
-// 与 tasks.controller 重复，Task 9 切换后删除 controller 版本。
 /** 带空闲超时的读取：超时后 reject，避免上游卡死导致执行器与 hold 永久悬挂。 */
 function readWithIdleTimeout(
   reader: ReadableStreamDefaultReader<Uint8Array>,
@@ -308,7 +307,6 @@ export class RunExecutor {
     }
   }
 
-  // 与 tasks.controller 重复，Task 9 切换后删除 controller 版本。
   /** 记录用量：瞬时故障最多重试 3 次（100ms/200ms 退避），全部失败才抛出最后一次错误。 */
   private async recordUsageWithRetry(
     runId: string,
@@ -330,7 +328,6 @@ export class RunExecutor {
     throw lastErr;
   }
 
-  // 与 tasks.controller 重复，Task 9 切换后删除 controller 版本。
   /** 落库收尾；失败只记日志，绝不向 worker 抛出。 */
   private async safeFinish(
     runId: string,

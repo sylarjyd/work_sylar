@@ -356,6 +356,22 @@ describe('TasksService', () => {
     });
   });
 
+  it('countQueued 可排除新任务自身，避免入队时把自己算进上限', async () => {
+    const count = vi.fn().mockResolvedValue(0);
+    const counting = new TasksService({ task: { count } } as any, sessions as any);
+
+    await expect(counting.countQueued('t1', 'task-self')).resolves.toBe(0);
+    expect(count).toHaveBeenLastCalledWith({
+      where: { status: 'queued', session: { tenantId: 't1' }, id: { not: 'task-self' } },
+    });
+
+    // 不传排除项时保持原有语义。
+    await counting.countQueued('t1');
+    expect(count).toHaveBeenLastCalledWith({
+      where: { status: 'queued', session: { tenantId: 't1' } },
+    });
+  });
+
   it('loadSnapshot 返回入队快照，缺失或为空时抛 NotFoundException', async () => {
     const input = { goal: '目标', messages: [], traceId: null };
     ctx.db.tasks.push({ id: 'task1', input });

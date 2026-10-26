@@ -51,7 +51,8 @@ export class RunQueueService {
   async enqueue(job: RunJob): Promise<void> {
     if (!this.queue) throw new Error('queue_disabled');
     const config = await this.settings.getQueueConfig();
-    const queued = await this.tasks.countQueued(job.tenantId);
+    // 新任务已落库为 queued，排除自身后才是真正的「已有排队数」。
+    const queued = await this.tasks.countQueued(job.tenantId, job.taskId);
     if (queued >= config.maxPerTenant) throw new QueueFullError(job.tenantId);
 
     // jobId 复用 runId：同一 run 重复提交只会保留一个作业，避免重复执行。

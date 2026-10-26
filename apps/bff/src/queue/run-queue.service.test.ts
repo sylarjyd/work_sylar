@@ -36,6 +36,7 @@ function makeService(options: ServiceOptions = {}): {
   service: RunQueueService;
   queue: RunQueue | null;
   executor: { execute: ReturnType<typeof vi.fn> };
+  tasks: { countQueued: ReturnType<typeof vi.fn> };
   metrics: ReturnType<typeof createBffMetrics>;
 } {
   const enabled = options.enabled ?? true;
@@ -64,12 +65,36 @@ function makeService(options: ServiceOptions = {}): {
     settings as unknown as SettingsService,
     metrics,
   );
-  return { service, queue, executor, metrics };
+  return { service, queue, executor, tasks, metrics };
 }
 
 describe('RunQueueService', () => {
   it('排队超限抛 QueueFullError', async () => {
     const { service, queue } = makeService({ queuedCount: 50 });
+
+    await expect(service.enqueue(job())).rejects.toBeInstanceOf(QueueFullError);
+    expect(queue!.add).not.toHaveBeenCalled();
+  });
+
+  it('入队时按 (租户, 当前任务) 统计排队数，排除新任务自身', async () => {
+    const { service, tasks } = makeService();
+
+    await service.enqueue({ runId: 'r9', taskId: 'task-9', sessionId: 's9', tenantId: 'tenant-9', userId: 'u9' });
+
+    expect(tasks.countQueued).toHaveBeenCalledWith('tenant-9', 'task-9');
+  });
+
+  it('maxPerTenant 为 1 时，已有另一个排队任务仍可入队（自身被排除）', async () => {
+    // 新任务已落库为 queued，countQueued 返回的是排除自身后的其他人数量 0。
+    const { service, queue } = makeService({ maxPerTenant: 1, queuedCount: 0 });
+
+    await service.enqueue(job());
+
+    expect(queue!.add).toHaveBeenCalledTimes(1);
+  });
+
+  it('maxPerTenant 为 1 且已有他人任务排队时抛 QueueFullError', async () => {
+    const { service, queue } = makeService({ maxPerTenant: 1, queuedCount: 1 });
 
     await expect(service.enqueue(job())).rejects.toBeInstanceOf(QueueFullError);
     expect(queue!.add).not.toHaveBeenCalled();
