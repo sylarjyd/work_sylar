@@ -4,7 +4,6 @@ import { Test } from '@nestjs/testing';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
 import { NotFoundException } from '@nestjs/common';
 import type { FastifyReply } from 'fastify';
-import { createServer, type Server } from 'node:http';
 import { RunsController } from './runs.controller';
 import { RunsService } from './runs.service';
 import { TasksService } from '../tasks/tasks.service';
@@ -12,14 +11,13 @@ import { SessionsService } from '../sessions/sessions.service';
 import { ModelCatalogService } from '../models/model-catalog.service';
 import { PrismaService } from '../db/prisma.service';
 import { RunRelayService } from '../queue/run-relay.service';
+import { RUN_CONTROL_BUS } from '../queue/queue.tokens';
 import { signToken } from '../auth/jwt';
 
 let app: NestFastifyApplication;
-let upstream: Server;
-let runtimeUrl: string;
-let upstreamStatus = 200;
-let upstreamBody = JSON.stringify({ ok: true, matched: true });
 let prismaFail = false;
+/** 控制总线发布桩：确认端点只验证据此下发决策，不再直连 runtime。 */
+const publishControl = vi.fn().mockResolvedValue(undefined);
 
 // 归属：仅 r1 属 t1/u1；嵌套关系过滤由假库按 where 结构模拟。
 const ownedRun = { id: 'r1' };
@@ -62,16 +60,6 @@ const fakePrisma = {
 beforeAll(async () => {
   process.env.JWT_SECRET = 'test-secret';
 
-  upstream = createServer((_req, res) => {
-    res.writeHead(upstreamStatus, { 'content-type': 'application/json' });
-    res.end(upstreamBody);
-  });
-  await new Promise<void>((r) => upstream.listen(0, r));
-  const addr = upstream.address();
-  if (!addr || typeof addr === 'string') throw new Error('no port');
-  runtimeUrl = `http://127.0.0.1:${addr.port}`;
-  process.env.AGENT_RUNTIME_URL = runtimeUrl;
-
   const moduleRef = await Test.createTestingModule({
     controllers: [RunsController],
     providers: [
@@ -82,6 +70,7 @@ beforeAll(async () => {
       { provide: ModelCatalogService, useValue: { available: async () => ({ models: [], defaultModel: null }) } },
       { provide: RunRelayService, useValue: { attach } },
       { provide: RunsService, useValue: { cancel } },
+      { provide: RUN_CONTROL_BUS, useValue: { publish: publishControl } },
     ],
   }).compile();
   app = moduleRef.createNestApplication<NestFastifyApplication>(new FastifyAdapter());
@@ -90,20 +79,16 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
-  upstreamStatus = 200;
-  upstreamBody = JSON.stringify({ ok: true, matched: true });
   prismaFail = false;
   cancelResult = { status: 'canceled' };
   cancelError = undefined;
   cancel.mockClear();
   attach.mockClear();
-  delete process.env.AGENT_RUNTIME_TOKEN;
-  process.env.AGENT_RUNTIME_URL = runtimeUrl;
+  publishControl.mockReset().mockResolvedValue(undefined);
 });
 
 afterAll(async () => {
   await app.close();
-  await new Promise<void>((r) => upstream.close(() => r()));
 });
 
 const token = () => signToken({ sub: 'u1', tenantId: 't1' });
@@ -117,9 +102,10 @@ describe('RunsController', () => {
       payload: { confirmId: 'c1', approved: true },
     });
     expect(res.statusCode).toBe(401);
+    expect(publishControl).not.toHaveBeenCalled();
   });
 
-  it('非本用户的 run 返回 404', async () => {
+  it('非本用户的 run 返回 404 且不发布控制消息', async () => {
     const other = signToken({ sub: 'u2', tenantId: 't2' });
     const res = await app.inject({
       method: 'POST',
@@ -128,6 +114,7 @@ describe('RunsController', () => {
       payload: { confirmId: 'c1', approved: true },
     });
     expect(res.statusCode).toBe(404);
+    expect(publishControl).not.toHaveBeenCalled();
   });
 
   it('归属查询故障时原样抛出（500），不伪装成 404', async () => {
@@ -139,6 +126,7 @@ describe('RunsController', () => {
       payload: { confirmId: 'c1', approved: true },
     });
     expect(res.statusCode).toBe(500);
+    expect(publishControl).not.toHaveBeenCalled();
   });
 
   it('stream：非本用户的 run 返回 404 且不挂接', async () => {
@@ -221,7 +209,7 @@ describe('RunsController', () => {
     }
   });
 
-  it('body 非法返回 400（不转发上游）', async () => {
+  it('body 非法返回 400 且不发布控制消息', async () => {
     for (const payload of [{}, { confirmId: '', approved: true }, { confirmId: 'c1', approved: 'x' }]) {
       const res = await app.inject({
         method: 'POST',
@@ -232,49 +220,41 @@ describe('RunsController', () => {
       expect(res.statusCode).toBe(400);
       expect(res.json()).toEqual({ error: 'invalid_decision' });
     }
+    expect(publishControl).not.toHaveBeenCalled();
   });
 
-  it('合法请求转发上游并回传其 200 结果', async () => {
+  it('合法请求经控制总线下发决策并返回 ok，不直连 runtime', async () => {
+    // 全局 fetch 只应在执行器转发时使用；控制器绝不能自己打到 runtime。
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    try {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/runs/r1/confirm',
+        headers: auth(),
+        payload: { confirmId: 'c1', approved: true },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ ok: true });
+      expect(publishControl).toHaveBeenCalledWith('r1', {
+        type: 'confirm',
+        confirmId: 'c1',
+        approved: true,
+      });
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it('发布控制消息失败时返回 500（决策未送达，客户端应看到错误）', async () => {
+    publishControl.mockRejectedValueOnce(new Error('redis down'));
     const res = await app.inject({
       method: 'POST',
       url: '/api/runs/r1/confirm',
       headers: auth(),
-      payload: { confirmId: 'c1', approved: true },
-    });
-    expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ ok: true, matched: true });
-  });
-
-  it('上游非 2xx 时透传其状态码', async () => {
-    upstreamStatus = 500;
-    upstreamBody = JSON.stringify({ error: 'boom' });
-    const res = await app.inject({
-      method: 'POST',
-      url: '/api/runs/r1/confirm',
-      headers: auth(),
-      payload: { confirmId: 'c1', approved: true },
+      payload: { confirmId: 'c1', approved: false },
     });
     expect(res.statusCode).toBe(500);
-  });
-
-  it('上游不可达返回 502', async () => {
-    const deadPort = await new Promise<number>((resolve) => {
-      const probe = createServer();
-      probe.listen(0, '127.0.0.1', () => {
-        const a = probe.address();
-        const port = typeof a === 'object' && a ? a.port : 0;
-        probe.close(() => resolve(port));
-      });
-    });
-    process.env.AGENT_RUNTIME_URL = `http://127.0.0.1:${deadPort}`;
-    const res = await app.inject({
-      method: 'POST',
-      url: '/api/runs/r1/confirm',
-      headers: auth(),
-      payload: { confirmId: 'c1', approved: true },
-    });
-    expect(res.statusCode).toBe(502);
-    expect(res.json()).toEqual({ error: 'upstream_unreachable' });
   });
 
   it('cancel：调用服务并回 200 JSON 结果', async () => {

@@ -539,6 +539,58 @@ describe('RunExecutor', () => {
     expect(deps.off).toHaveBeenCalledTimes(1);
   });
 
+  it('confirm 控制消息转发到 runtime HTTP 端点', async () => {
+    // runtime 的待确认 promise 在它自己的进程内，只有持有该连接的执行器能送达决策。
+    process.env.AGENT_RUNTIME_TOKEN = 'rt';
+    const { executor, deps } = makeExecutor();
+    let handler: ((msg: RunControlMessage) => void) | undefined;
+    deps.control.subscribe.mockImplementation(async (_runId: string, h: typeof handler) => {
+      handler = h;
+      return deps.off;
+    });
+    let stepConsumed!: () => void;
+    const consumed = new Promise<void>((resolve) => {
+      stepConsumed = resolve;
+    });
+    deps.tasks.recordStep.mockImplementation(async () => stepConsumed());
+    deps.fetch.mockImplementation((url: unknown, init: { signal: AbortSignal }) => {
+      if (String(url) === 'http://runtime.test/runs/r1/confirm') {
+        return Promise.resolve(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+      }
+      return Promise.resolve(
+        hangingSseResponse(
+          [{ event: 'step', data: stepEvent(0, 'think', { text: '半截回答' }) }],
+          init.signal,
+        ),
+      );
+    });
+
+    const running = executor.execute(job());
+    await consumed;
+    handler!({ type: 'confirm', confirmId: 'c1', approved: false });
+
+    await vi.waitFor(() => {
+      const call = deps.fetch.mock.calls.find(
+        ([url]) => String(url) === 'http://runtime.test/runs/r1/confirm',
+      );
+      expect(call).toBeDefined();
+      const init = call![1] as {
+        method: string;
+        headers: Record<string, string>;
+        body: string;
+      };
+      expect(init.method).toBe('POST');
+      expect(init.headers['content-type']).toBe('application/json');
+      expect(init.headers['x-agent-runtime-token']).toBe('rt');
+      expect(JSON.parse(init.body)).toEqual({ confirmId: 'c1', approved: false });
+    });
+
+    // 转发后仍可正常取消收尾，确保没有悬挂的执行 promise。
+    handler!({ type: 'cancel' });
+    await expect(running).resolves.toBeUndefined();
+    expect(deps.tasks.finish).toHaveBeenCalledWith('r1', 't1', 'canceled', '', 's1');
+  });
+
   it('已收到 usage 后取消：仍记录用量并结算，finish 为 canceled 且不保留半截回答', async () => {
     const { executor, deps } = makeExecutor();
     let handler: ((msg: RunControlMessage) => void) | undefined;

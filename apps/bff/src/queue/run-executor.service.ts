@@ -69,7 +69,10 @@ export class RunExecutor {
 
   async execute(job: RunJob): Promise<void> {
     const { runId } = job;
-    // 取消意图可能在执行器接管后的任意阶段到达：先订阅再开跑，
+    // runtime 地址在订阅前固定：转发确认与发起运行必须指向同一实例。
+    const runtimeUrl = process.env.AGENT_RUNTIME_URL ?? 'http://localhost:4001';
+    const runtimeToken = process.env.AGENT_RUNTIME_TOKEN;
+    // 取消/确认意图可能在执行器接管后的任意阶段到达：先订阅再开跑，
     // 所有中止路径共用一个 AbortController；退订放在最外层 finally，任何退出都只执行一次。
     let canceled = false;
     const abort = new AbortController();
@@ -80,15 +83,20 @@ export class RunExecutor {
           if (msg.type === 'cancel') {
             canceled = true;
             abort.abort();
+            return;
+          }
+          if (msg.type === 'confirm') {
+            // 不 await：控制分发不应被 runtime 的确认往返阻塞；失败由 forwardConfirm 自行兜底。
+            void this.forwardConfirm(runtimeUrl, runtimeToken, runId, msg.confirmId, msg.approved);
           }
         });
       } catch (err) {
         // 订阅失败不能阻断运行：执行前的 DB 兜底检查仍能发现取消请求。
-        this.logger.warn(`run ${runId} 订阅取消消息失败，继续执行: ${(err as Error).message}`);
+        this.logger.warn(`run ${runId} 订阅控制消息失败，继续执行: ${(err as Error).message}`);
       }
       await this.executeRun(job, {
-        runtimeUrl: process.env.AGENT_RUNTIME_URL ?? 'http://localhost:4001',
-        runtimeToken: process.env.AGENT_RUNTIME_TOKEN,
+        runtimeUrl,
+        runtimeToken,
         isCanceled: () => canceled,
         abort,
       });
@@ -97,9 +105,41 @@ export class RunExecutor {
         try {
           await unsubscribe();
         } catch (err) {
-          this.logger.warn(`run ${runId} 退订取消消息失败: ${(err as Error).message}`);
+          this.logger.warn(`run ${runId} 退订控制消息失败: ${(err as Error).message}`);
         }
       }
+    }
+  }
+
+  /**
+   * 把确认决策转发给持有待确认 promise 的 runtime。
+   * 决策丢失只会退化为 runtime 自身的确认超时，因此这里绝不抛出：转发失败只记日志，
+   * 不能因一次确认投递失败把正在执行的 run 拖垮。
+   */
+  private async forwardConfirm(
+    baseUrl: string,
+    token: string | undefined,
+    runId: string,
+    confirmId: string,
+    approved: boolean,
+  ): Promise<void> {
+    try {
+      const res = await fetch(`${baseUrl}/runs/${encodeURIComponent(runId)}/confirm`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          // 配了共享密钥才带；与发起运行时的鉴权头保持一致。
+          ...(token ? { 'x-agent-runtime-token': token } : {}),
+        },
+        body: JSON.stringify({ confirmId, approved }),
+      });
+      if (!res.ok) {
+        // 不关心错误体内容，但必须取消 body，避免连接/流资源残留。
+        await res.body?.cancel().catch(() => undefined);
+        this.logger.warn(`run ${runId} 转发确认决策失败（HTTP ${res.status}）`);
+      }
+    } catch (err) {
+      this.logger.warn(`run ${runId} 转发确认决策失败: ${(err as Error).message}`);
     }
   }
 

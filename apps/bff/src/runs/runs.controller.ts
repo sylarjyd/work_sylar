@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   Headers,
+  Inject,
   NotFoundException,
   Param,
   Post,
@@ -15,6 +16,8 @@ import type { ConfirmDecision } from '@ai-office/shared';
 import { TasksService } from '../tasks/tasks.service';
 import { RunsService } from './runs.service';
 import { RunRelayService } from '../queue/run-relay.service';
+import { RUN_CONTROL_BUS } from '../queue/queue.tokens';
+import type { RunControlBus } from '../queue/run-control-bus';
 import { JwtGuard } from '../auth/jwt.guard';
 import { CurrentUser } from '../auth/current-user';
 import type { JwtPayload } from '../auth/jwt';
@@ -38,6 +41,7 @@ export class RunsController {
     private readonly tasks: TasksService,
     private readonly runs: RunsService,
     private readonly relay: RunRelayService,
+    @Inject(RUN_CONTROL_BUS) private readonly control: RunControlBus,
   ) {}
 
   /**
@@ -89,6 +93,12 @@ export class RunsController {
     }
   }
 
+  /**
+   * 确认决策必须抵达持有 runtime 事件流的那个进程：runtime 的待确认 promise 在它自己的
+   * ConfirmBroker 里，而任意 BFF 实例都可能收到本请求。因此这里只把决策发到控制总线，
+   * 由订阅该 run 的执行器转发给 runtime；直连 runtime 在多实例/队列模式下会打到错误进程，
+   * 决策静默丢失直到确认超时。发布失败必须上抛（500），不能假装已送达。
+   */
   @Post(':id/confirm')
   async confirm(
     @CurrentUser() user: JwtPayload,
@@ -115,35 +125,7 @@ export class RunsController {
       throw err;
     }
 
-    const runtimeUrl = process.env.AGENT_RUNTIME_URL ?? 'http://localhost:4001';
-    const runtimeToken = process.env.AGENT_RUNTIME_TOKEN;
-    let upstream: Response;
-    try {
-      upstream = await fetch(`${runtimeUrl}/runs/${encodeURIComponent(runId)}/confirm`, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          ...(runtimeToken ? { 'x-agent-runtime-token': runtimeToken } : {}),
-        },
-        body: JSON.stringify({ confirmId, approved }),
-      });
-    } catch {
-      reply.status(502).send({ error: 'upstream_unreachable' });
-      return;
-    }
-
-    if (!upstream.ok) {
-      // 上游非 2xx：原样透传状态码与响应体。
-      const text = await upstream.text();
-      reply
-        .status(upstream.status)
-        .header('content-type', upstream.headers.get('content-type') ?? 'application/json')
-        .send(text || JSON.stringify({ error: 'upstream_error' }));
-      return;
-    }
-    reply
-      .status(200)
-      .header('content-type', 'application/json')
-      .send(await upstream.text());
+    await this.control.publish(runId, { type: 'confirm', confirmId, approved });
+    reply.status(200).send({ ok: true });
   }
 }
