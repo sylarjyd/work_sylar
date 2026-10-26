@@ -1,6 +1,6 @@
 import 'reflect-metadata';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { NotFoundException } from '@nestjs/common';
+import { Logger, NotFoundException } from '@nestjs/common';
 import { RunExecutor } from './run-executor.service';
 import type { RunJob, RunSnapshot } from './run-job';
 import type { TasksService } from '../tasks/tasks.service';
@@ -161,6 +161,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe('RunExecutor', () => {
@@ -586,6 +587,92 @@ describe('RunExecutor', () => {
     });
 
     // 转发后仍可正常取消收尾，确保没有悬挂的执行 promise。
+    handler!({ type: 'cancel' });
+    await expect(running).resolves.toBeUndefined();
+    expect(deps.tasks.finish).toHaveBeenCalledWith('r1', 't1', 'canceled', '', 's1');
+  });
+
+  it('confirm 转发收到 matched:false 时记录告警，run 仍正常收尾', async () => {
+    // matched:false 表示决策来晚了或 confirmId 不符，过去完全不可见；必须留下可诊断日志。
+    const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    const { executor, deps } = makeExecutor();
+    let handler: ((msg: RunControlMessage) => void) | undefined;
+    deps.control.subscribe.mockImplementation(async (_runId: string, h: typeof handler) => {
+      handler = h;
+      return deps.off;
+    });
+    let stepConsumed!: () => void;
+    const consumed = new Promise<void>((resolve) => {
+      stepConsumed = resolve;
+    });
+    deps.tasks.recordStep.mockImplementation(async () => stepConsumed());
+    deps.fetch.mockImplementation((url: unknown, init: { signal: AbortSignal }) => {
+      if (String(url) === 'http://runtime.test/runs/r1/confirm') {
+        return Promise.resolve(
+          new Response(JSON.stringify({ ok: true, matched: false }), { status: 200 }),
+        );
+      }
+      return Promise.resolve(
+        hangingSseResponse(
+          [{ event: 'step', data: stepEvent(0, 'think', { text: '半截回答' }) }],
+          init.signal,
+        ),
+      );
+    });
+
+    const running = executor.execute(job());
+    await consumed;
+    handler!({ type: 'confirm', confirmId: 'c1', approved: true });
+
+    // 断言必须等转发落定：控制分发不 await，只能轮询告警是否出现。
+    await vi.waitFor(() => {
+      const unmatched = warn.mock.calls.find(
+        ([msg]) => String(msg).includes('confirmId=c1') && String(msg).includes('matched=false'),
+      );
+      expect(unmatched).toBeDefined();
+    });
+
+    // 告警后 run 仍可正常取消收尾，转发绝不把异常抛回执行流程。
+    handler!({ type: 'cancel' });
+    await expect(running).resolves.toBeUndefined();
+    expect(deps.tasks.finish).toHaveBeenCalledWith('r1', 't1', 'canceled', '', 's1');
+    expect(publishedEvents(deps)[publishedEvents(deps).length - 1]).toBe('status');
+  });
+
+  it('confirm 转发收到 500 时记录告警，run 仍正常收尾', async () => {
+    const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    const { executor, deps } = makeExecutor();
+    let handler: ((msg: RunControlMessage) => void) | undefined;
+    deps.control.subscribe.mockImplementation(async (_runId: string, h: typeof handler) => {
+      handler = h;
+      return deps.off;
+    });
+    let stepConsumed!: () => void;
+    const consumed = new Promise<void>((resolve) => {
+      stepConsumed = resolve;
+    });
+    deps.tasks.recordStep.mockImplementation(async () => stepConsumed());
+    deps.fetch.mockImplementation((url: unknown, init: { signal: AbortSignal }) => {
+      if (String(url) === 'http://runtime.test/runs/r1/confirm') {
+        return Promise.resolve(new Response('boom', { status: 500 }));
+      }
+      return Promise.resolve(
+        hangingSseResponse(
+          [{ event: 'step', data: stepEvent(0, 'think', { text: '半截回答' }) }],
+          init.signal,
+        ),
+      );
+    });
+
+    const running = executor.execute(job());
+    await consumed;
+    handler!({ type: 'confirm', confirmId: 'c1', approved: true });
+
+    await vi.waitFor(() => {
+      const failed = warn.mock.calls.find(([msg]) => String(msg).includes('HTTP 500'));
+      expect(failed).toBeDefined();
+    });
+
     handler!({ type: 'cancel' });
     await expect(running).resolves.toBeUndefined();
     expect(deps.tasks.finish).toHaveBeenCalledWith('r1', 't1', 'canceled', '', 's1');

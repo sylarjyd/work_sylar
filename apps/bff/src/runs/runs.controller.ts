@@ -106,9 +106,11 @@ export class RunsController {
     @Body() body: ConfirmDecision,
     @Res() reply: FastifyReply,
   ): Promise<void> {
-    const confirmId = body?.confirmId;
+    // 先 trim 再校验：客户端粘来的空白会变成一个永远匹配不到的决策，只能等 runtime 超时。
+    const rawConfirmId = body?.confirmId;
+    const confirmId = typeof rawConfirmId === 'string' ? rawConfirmId.trim() : '';
     const approved = body?.approved;
-    if (typeof confirmId !== 'string' || confirmId === '' || typeof approved !== 'boolean') {
+    if (confirmId === '' || typeof approved !== 'boolean') {
       reply.status(400).send({ error: 'invalid_decision' });
       return;
     }

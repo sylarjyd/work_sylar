@@ -29,6 +29,11 @@ import { errorPayload, type RunErrorCode } from './run-errors';
 const UPSTREAM_CONNECT_TIMEOUT_MS = 10_000;
 /** 上游流空闲超时：超过该时长未收到任何 chunk 视为 runtime 卡死。 */
 const UPSTREAM_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
+/**
+ * 确认转发超时：决策丢失只会退化为 runtime 自身的确认超时，
+ * 因此转发不能比 run 活得更久，也不能让一个无响应的 runtime 长期占用 socket。
+ */
+const CONFIRM_FORWARD_TIMEOUT_MS = 5_000;
 
 // 项目未启用 DOM lib，`ReadableStreamReadResult` 不存在，从 reader.read 推导。
 type StreamReadResult<T> = Awaited<ReturnType<ReadableStreamDefaultReader<T>['read']>>;
@@ -132,11 +137,30 @@ export class RunExecutor {
           ...(token ? { 'x-agent-runtime-token': token } : {}),
         },
         body: JSON.stringify({ confirmId, approved }),
+        signal: AbortSignal.timeout(CONFIRM_FORWARD_TIMEOUT_MS),
       });
       if (!res.ok) {
         // 不关心错误体内容，但必须取消 body，避免连接/流资源残留。
         await res.body?.cancel().catch(() => undefined);
         this.logger.warn(`run ${runId} 转发确认决策失败（HTTP ${res.status}）`);
+        return;
+      }
+      // 200 的 matched 是唯一能区分「已送达」与「无人匹配」的信号：
+      // false 说明决策来晚了 / confirmId 不符，只能等 runtime 自己的确认超时收场。
+      let matched: unknown;
+      try {
+        matched = ((await res.json()) as { matched?: unknown } | null)?.matched;
+      } catch (err) {
+        this.logger.warn(
+          `run ${runId} 确认转发响应解析失败（confirmId=${confirmId}）: ${(err as Error).message}`,
+        );
+        return;
+      }
+      if (matched !== true) {
+        this.logger.warn(
+          `run ${runId} 确认决策未匹配到待确认请求（confirmId=${confirmId}, matched=${String(matched)}），` +
+            '可能到达过晚或已重复提交，只能依赖 runtime 确认超时兜底',
+        );
       }
     } catch (err) {
       this.logger.warn(`run ${runId} 转发确认决策失败: ${(err as Error).message}`);

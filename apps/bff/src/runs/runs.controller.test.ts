@@ -223,6 +223,19 @@ describe('RunsController', () => {
     expect(publishControl).not.toHaveBeenCalled();
   });
 
+  it('confirmId 仅含空白时返回 400 且不发布控制消息', async () => {
+    // 空白串 trim 后为空：若不拒绝会下发一个永远匹配不到的决策，只能等 runtime 超时。
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/runs/r1/confirm',
+      headers: auth(),
+      payload: { confirmId: '   ', approved: true },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ error: 'invalid_decision' });
+    expect(publishControl).not.toHaveBeenCalled();
+  });
+
   it('合法请求经控制总线下发决策并返回 ok，不直连 runtime', async () => {
     // 全局 fetch 只应在执行器转发时使用；控制器绝不能自己打到 runtime。
     const fetchSpy = vi.spyOn(globalThis, 'fetch');
