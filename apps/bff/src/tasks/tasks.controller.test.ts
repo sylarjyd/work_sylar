@@ -4,7 +4,7 @@ import { Test } from '@nestjs/testing';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
 import { NotFoundException } from '@nestjs/common';
 import type { FastifyReply } from 'fastify';
-import { toolsForSkills } from '@ai-office/shared';
+import { toolsForSkills, type RunModelRoute } from '@ai-office/shared';
 import { initTelemetry, shutdownTelemetry } from '@ai-office/telemetry';
 import pino from 'pino';
 import { TasksController } from './tasks.controller';
@@ -24,12 +24,27 @@ import { registerRequestTelemetry } from '../observability/request-telemetry';
 import { QueueFullError, RunQueueService } from '../queue/run-queue.service';
 import { RunRelayService } from '../queue/run-relay.service';
 import type { RunJob, RunSnapshot } from '../queue/run-job';
+import { decryptSecret } from '../secrets/secret-box';
+import { MODEL_ENC_KEY } from '../models/model.constants';
+
+const ENC_KEY_HEX = 'a'.repeat(64);
+// 快照路由加密在请求期发生，但仍提前提供密钥，避免任何路径读到未设置的密钥。
+process.env.MODEL_ENC_KEY = ENC_KEY_HEX;
 
 let app: NestFastifyApplication;
 let baseUrl: string;
 let prepareSpy: any;
+let prepareOriginal: typeof TasksService.prototype.prepare;
 // 配置读取故障注入：非空时 getRunConfig 抛错，用于验证「配置失败不预占/不入队」。
 let getRunConfigError: unknown = null;
+// 模型路由与排队容量故障注入。
+let modelRoutes: RunModelRoute[] = [];
+let assertCapacityError: unknown = null;
+const assertCapacityCalls: string[] = [];
+// 关键调用顺序：容量校验 → 准入 → 建单 → 入队 → 挂接。
+const callOrder: string[] = [];
+// 落库故障注入：验证入队失败后的清理再失败也不会掩盖响应。
+let runUpdateError: unknown = null;
 
 const stored: {
   messages: unknown[];
@@ -71,6 +86,7 @@ let admitRunError: unknown = null;
 const fakeBilling = {
   admitRun: async (tenantId: string) => {
     billingCalls.push(['admit', tenantId]);
+    callOrder.push('admitRun');
     if (admitRunError) throw admitRunError;
   },
   beginRun: async (...args: unknown[]) => {
@@ -101,7 +117,7 @@ const fakeCatalog = {
     if (resolveForRunError) throw resolveForRunError;
     return {
       selectedModel: 'mock',
-      modelRoutes: [],
+      modelRoutes,
       selectedModalities,
     };
   },
@@ -126,8 +142,14 @@ const fakeAttachments = {
 const queueCalls: RunJob[] = [];
 let submitError: unknown = null;
 const fakeQueue = {
+  assertCapacity: async (tenantId: string) => {
+    assertCapacityCalls.push(tenantId);
+    callOrder.push('assertCapacity');
+    if (assertCapacityError) throw assertCapacityError;
+  },
   submit: async (job: RunJob) => {
     queueCalls.push(job);
+    callOrder.push('submit');
     if (submitError) throw submitError;
     return 'inline' as const;
   },
@@ -138,6 +160,7 @@ let attachError: unknown = null;
 const fakeRelay = {
   attach: async (runId: string, reply: FastifyReply) => {
     relayCalls.push(runId);
+    callOrder.push('attach');
     if (attachError) throw attachError;
     reply.hijack();
     reply.raw.writeHead(200, {
@@ -199,6 +222,7 @@ const fakePrisma = {
       return { ...(data as object) };
     },
     update: async (args: unknown) => {
+      if (runUpdateError) throw runUpdateError;
       stored.runUpdates.push(args);
       return {};
     },
@@ -270,9 +294,16 @@ beforeEach(() => {
   submitError = null;
   relayCalls.length = 0;
   attachError = null;
+  modelRoutes = [];
+  assertCapacityError = null;
+  assertCapacityCalls.length = 0;
+  callOrder.length = 0;
+  runUpdateError = null;
   session.model = 'mock';
   session.assistantId = null;
   session.assistant = null;
+  // 记录原始实现，便于个别用例在 spy 中插入调用顺序观测而不改变行为。
+  prepareOriginal = TasksService.prototype.prepare;
   prepareSpy = vi.spyOn(TasksService.prototype, 'prepare');
 });
 
@@ -512,6 +543,64 @@ describe('TasksController', () => {
     expect(stored.sessionModelUpdates).toHaveLength(0);
   });
 
+  it('快照落库前加密厂商密钥，不在 Task.input 留明文', async () => {
+    modelRoutes = [{ model: 'm1', baseUrl: 'https://ark.example/v3', apiKey: 'sk-plain' }];
+    const token = signToken({ sub: 'u1', tenantId: 't1' });
+    const res = await fetch(`${baseUrl}/api/sessions/s1/tasks`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+      body: JSON.stringify({ goal: 'g' }),
+    });
+    expect(res.status).toBe(200);
+    await res.text();
+
+    const snapshot = prepareSpy.mock.calls[0][7] as RunSnapshot;
+    const sealed = snapshot.resolution.modelRoutes[0]!;
+    expect(sealed.apiKey).not.toBe('sk-plain');
+    expect(decryptSecret(sealed.apiKey, MODEL_ENC_KEY)).toBe('sk-plain');
+    // prepare 把同一个 resolution 写回 Task.input，落库值同样不能是明文。
+    const persisted = finalTaskInput().resolution.modelRoutes[0]!;
+    expect(persisted.apiKey).not.toBe('sk-plain');
+    expect(decryptSecret(persisted.apiKey, MODEL_ENC_KEY)).toBe('sk-plain');
+  });
+
+  it('排队容量预检拒绝时返回 429，且不准入、不建单、不入队', async () => {
+    assertCapacityError = new QueueFullError('t1');
+    const token = signToken({ sub: 'u1', tenantId: 't1' });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/sessions/s1/tasks',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { goal: 'g' },
+    });
+
+    expect(res.statusCode).toBe(429);
+    expect(JSON.parse(res.payload)).toEqual({ error: 'queue_full' });
+    expect(assertCapacityCalls).toEqual(['t1']);
+    expect(billingCalls).toEqual([]);
+    expect(prepareSpy).not.toHaveBeenCalled();
+    expect(queueCalls).toEqual([]);
+    expect(stored.messages).toHaveLength(0);
+  });
+
+  it('容量校验在准入、建单、入队与挂接之前依次进行', async () => {
+    // 只观测顺序，仍用真实 prepare 落库。
+    prepareSpy.mockImplementation((...args: Parameters<typeof prepareOriginal>) => {
+      callOrder.push('prepare');
+      return prepareOriginal.call(app.get(TasksService), ...args);
+    });
+    const token = signToken({ sub: 'u1', tenantId: 't1' });
+    const res = await fetch(`${baseUrl}/api/sessions/s1/tasks`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+      body: JSON.stringify({ goal: 'g' }),
+    });
+    expect(res.status).toBe(200);
+    await res.text();
+
+    expect(callOrder).toEqual(['assertCapacity', 'admitRun', 'prepare', 'submit', 'attach']);
+  });
+
   it('排队已满时标记刚创建的任务失败并返回 429', async () => {
     submitError = new QueueFullError('t1');
     const token = signToken({ sub: 'u1', tenantId: 't1' });
@@ -528,6 +617,23 @@ describe('TasksController', () => {
     expect(relayCalls).toEqual([]);
     expect(stored.runUpdates.at(-1)).toMatchObject({ data: { status: 'failed' } });
     expect(stored.taskUpdates.at(-1)).toMatchObject({ data: { status: 'failed' } });
+  });
+
+  it('入队失败后的清理再失败也不改变 429 响应', async () => {
+    submitError = new QueueFullError('t1');
+    runUpdateError = new Error('db down');
+    const token = signToken({ sub: 'u1', tenantId: 't1' });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/sessions/s1/tasks',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { goal: 'g' },
+    });
+
+    expect(res.statusCode).toBe(429);
+    expect(JSON.parse(res.payload)).toEqual({ error: 'queue_full' });
+    expect(queueCalls).toHaveLength(1);
+    expect(relayCalls).toEqual([]);
   });
 
   it('入队其他异常时同样标记失败并返回 500', async () => {

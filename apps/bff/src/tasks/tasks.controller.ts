@@ -26,6 +26,7 @@ import {
 import { BillingService } from '../billing/billing.service';
 import { SettingsService } from '../settings/settings.service';
 import { ModelCatalogService } from '../models/model-catalog.service';
+import { sealRoutes } from '../models/run-routes';
 import { InsufficientCreditsError, PlanExpiredError, RateLimitedError } from '../billing/billing.errors';
 import { JwtGuard } from '../auth/jwt.guard';
 import { CurrentUser } from '../auth/current-user';
@@ -134,16 +135,29 @@ export class TasksController {
       }
     }
 
+    // 排队容量预检前置：队列已满时不能先落库用户消息/任务，也不应消耗 RPM 准入额度。
+    // 并发提交仍可能越过上限，submit 时的校验保留为竞态兜底。
+    try {
+      await this.queue.assertCapacity(user.tenantId);
+    } catch (err) {
+      if (err instanceof QueueFullError) {
+        reply.status(429).send({ error: 'queue_full' });
+        return;
+      }
+      throw err;
+    }
+
     // 快照固化入队时的模型、参数与助手配置，执行器不再读 settings/catalog；
     // messages 先留空，prepare 在事务内补入历史与本次用户消息后写回。
     const traceId = currentTrace()?.traceId ?? null;
     const snapshot: RunSnapshot = {
       goal,
-      // 记录会话是否已有模型：null 时执行器在首次成功执行后回填。
+      // 记录会话是否已有模型：null 时执行器在首次成功预占后回填。
       model: session.model,
       resolution: {
         selectedModel: resolution.selectedModel,
-        modelRoutes: resolution.modelRoutes,
+        // Task.input 会进备份与运维查询，厂商密钥必须加密后再落库。
+        modelRoutes: sealRoutes(resolution.modelRoutes),
       },
       config,
       traceId,

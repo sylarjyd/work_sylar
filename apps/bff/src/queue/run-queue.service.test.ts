@@ -84,7 +84,7 @@ describe('RunQueueService', () => {
     expect(tasks.countQueued).toHaveBeenCalledWith('tenant-9', 'task-9');
   });
 
-  it('maxPerTenant 为 1 时，已有另一个排队任务仍可入队（自身被排除）', async () => {
+  it('排除自身后未达上限仍可入队', async () => {
     // 新任务已落库为 queued，countQueued 返回的是排除自身后的其他人数量 0。
     const { service, queue } = makeService({ maxPerTenant: 1, queuedCount: 0 });
 
@@ -98,6 +98,24 @@ describe('RunQueueService', () => {
 
     await expect(service.enqueue(job())).rejects.toBeInstanceOf(QueueFullError);
     expect(queue!.add).not.toHaveBeenCalled();
+  });
+
+  it('assertCapacity 达到上限时抛 QueueFullError', async () => {
+    const { service, tasks } = makeService({ queuedCount: 50 });
+    await expect(service.assertCapacity('t1')).rejects.toBeInstanceOf(QueueFullError);
+    // 建单前预检：不排除任何任务，统计当前全部排队数。
+    expect(tasks.countQueued).toHaveBeenCalledWith('t1');
+  });
+
+  it('assertCapacity 未达上限时直接通过', async () => {
+    const { service } = makeService({ queuedCount: 49, maxPerTenant: 50 });
+    await expect(service.assertCapacity('t1')).resolves.toBeUndefined();
+  });
+
+  it('assertCapacity 在队列禁用时直接返回且不读配置/不统计', async () => {
+    const { service, tasks } = makeService({ enabled: false, queue: null });
+    await expect(service.assertCapacity('t1')).resolves.toBeUndefined();
+    expect(tasks.countQueued).not.toHaveBeenCalled();
   });
 
   it('无 queue 时 submit 走内联并调用 executor.execute', async () => {

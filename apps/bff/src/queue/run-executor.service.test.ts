@@ -10,6 +10,12 @@ import type { BillingService } from '../billing/billing.service';
 import type { RunEventBus } from './run-event-bus';
 import { InsufficientCreditsError, PlanExpiredError } from '../billing/billing.errors';
 import { createBffMetrics } from '../observability/observability.metrics';
+import { encryptSecret } from '../secrets/secret-box';
+import { MODEL_ENC_KEY } from '../models/model.constants';
+
+const ENC_KEY_HEX = 'b'.repeat(64);
+// 执行器下发 runtime 前需解密快照路由，提前提供合法密钥。
+process.env.MODEL_ENC_KEY = ENC_KEY_HEX;
 
 interface ExecutorDeps {
   fetch: ReturnType<typeof vi.fn>;
@@ -114,6 +120,7 @@ function lastErrorData(deps: ExecutorDeps): { message: string; error: string } {
 beforeEach(() => {
   process.env.AGENT_RUNTIME_URL = 'http://runtime.test';
   delete process.env.AGENT_RUNTIME_TOKEN;
+  process.env.MODEL_ENC_KEY = ENC_KEY_HEX;
 });
 
 afterEach(() => {
@@ -293,6 +300,47 @@ describe('RunExecutor', () => {
       message: '本次运行失败，请稍后重试',
       error: 'run_failed',
     });
+  });
+
+  it('快照中的加密路由在请求体里以明文下发', async () => {
+    const { executor, deps } = makeExecutor();
+    const sealed = encryptSecret('sk-plain', MODEL_ENC_KEY);
+    deps.tasks.loadSnapshot.mockResolvedValue({
+      ...snapshot(),
+      resolution: {
+        selectedModel: 'm1',
+        modelRoutes: [{ model: 'm1', baseUrl: 'https://ark.example/v3', apiKey: sealed }],
+      },
+    });
+    deps.fetch.mockResolvedValue(sseResponse([{ event: 'done', data: { runId: 'r1' } }]));
+
+    await executor.execute(job());
+
+    expect(deps.fetch).toHaveBeenCalledTimes(1);
+    const body = JSON.parse(String(deps.fetch.mock.calls[0]![1].body)) as {
+      modelRoutes: Array<{ apiKey: string }>;
+    };
+    expect(body.modelRoutes[0]!.apiKey).toBe('sk-plain');
+    expect(body.modelRoutes[0]!.apiKey).not.toBe(sealed);
+  });
+
+  it('快照路由解密失败时释放预占、标记 failed 且不请求上游', async () => {
+    const { executor, deps } = makeExecutor();
+    deps.tasks.loadSnapshot.mockResolvedValue({
+      ...snapshot(),
+      resolution: {
+        selectedModel: 'm1',
+        modelRoutes: [{ model: 'm1', baseUrl: 'https://ark.example/v3', apiKey: 'not-a-ciphertext' }],
+      },
+    });
+
+    await expect(executor.execute(job())).resolves.toBeUndefined();
+
+    expect(deps.fetch).not.toHaveBeenCalled();
+    expect(deps.billing.releaseHold).toHaveBeenCalledWith('r1');
+    expect(deps.tasks.finish).toHaveBeenCalledWith('r1', 't1', 'failed', '', 's1');
+    expect(publishedEvents(deps)).toEqual(['error']);
+    expect(lastErrorData(deps).error).toBe('run_failed');
   });
 
   it('正常完成但无 usage 时释放预占且不结算', async () => {

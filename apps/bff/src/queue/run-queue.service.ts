@@ -34,6 +34,17 @@ export class RunQueueService {
     @Inject(BFF_METRICS) private readonly metrics: BffMetrics,
   ) {}
 
+  /**
+   * 建单前的容量预检：队列已满时直接拒绝，避免落库用户消息与失败任务、白白消耗准入额度。
+   * 此刻新任务尚未落库，统计无需排除自身；submit 时的校验保留为并发竞态兜底。
+   */
+  async assertCapacity(tenantId: string): Promise<void> {
+    if (!this.config.enabled || !this.queue) return;
+    const config = await this.settings.getQueueConfig();
+    const queued = await this.tasks.countQueued(tenantId);
+    if (queued >= config.maxPerTenant) throw new QueueFullError(tenantId);
+  }
+
   /** 提交运行：返回实际采用的执行方式，调用方无需关心队列是否可用。 */
   async submit(job: RunJob): Promise<'queued' | 'inline'> {
     if (this.config.enabled && this.queue) {

@@ -4,6 +4,7 @@ import type {
   ArtifactRef,
   ChatMessage,
   RunBilling,
+  RunModelRoute,
   SseMessage,
   UsageEvent,
 } from '@ai-office/shared';
@@ -20,6 +21,7 @@ import { InsufficientCreditsError, PlanExpiredError } from '../billing/billing.e
 import { parseUsageEvent } from '../billing/usage';
 import { BFF_METRICS, type BffMetrics } from '../observability/observability.metrics';
 import { RunTelemetry } from '../observability/run-telemetry';
+import { unsealRoutes } from '../models/run-routes';
 import { errorPayload, type RunErrorCode } from './run-errors';
 
 /** 上游建连超时：只约束 fetch 拿到响应头，不中断已建立的长流。 */
@@ -99,6 +101,18 @@ export class RunExecutor {
       return;
     }
 
+    // 快照中的路由密钥是密文，下发 runtime 前必须解密；解密失败按快照不可用收尾。
+    let modelRoutes: RunModelRoute[];
+    try {
+      modelRoutes = unsealRoutes(snapshot.resolution.modelRoutes);
+    } catch (err) {
+      this.logger.error(`run ${runId} 解密模型路由失败: ${(err as Error).message}`);
+      await this.releaseHold(runId);
+      await this.safeFinish(runId, taskId, 'failed', '', sessionId);
+      await this.publish(runId, { event: 'error', data: errorPayload('run_failed') });
+      return;
+    }
+
     // 历史会话在首次成功预占后固化模型；失败只记日志，不影响本次运行。
     if (snapshot.model == null) {
       try {
@@ -130,7 +144,11 @@ export class RunExecutor {
       const connectController = new AbortController();
       const connectTimer = setTimeout(() => connectController.abort(), UPSTREAM_CONNECT_TIMEOUT_MS);
       connectTimer.unref?.();
-      const runtimeSpan = startSpan('runtime.run', { 'run.id': runId });
+      // traceId 只作为关联属性，避免伪造父上下文；缺省时不下发该字段。
+      const runtimeSpan = startSpan('runtime.run', {
+        'run.id': runId,
+        ...(snapshot.traceId ? { 'run.trace_id': snapshot.traceId } : {}),
+      });
       const upstreamHeaders: Record<string, string> = {
         'content-type': 'application/json',
         // 配了共享密钥才带；不配时与未开启鉴权的 runtime 保持兼容。
@@ -150,9 +168,7 @@ export class RunExecutor {
             messages,
             billing,
             config: snapshot.config,
-            ...(snapshot.resolution.modelRoutes.length > 0
-              ? { modelRoutes: snapshot.resolution.modelRoutes }
-              : {}),
+            ...(modelRoutes.length > 0 ? { modelRoutes } : {}),
             ...(snapshot.assistant
               ? {
                   ...(snapshot.assistant.systemPrompt
