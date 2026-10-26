@@ -10,6 +10,7 @@ function createFakeSubscriber() {
   const redis = {
     subscribe: vi.fn(async (_channel: string) => 1),
     unsubscribe: vi.fn(async (_channel: string) => 0),
+    quit: vi.fn(async () => 'OK'),
     disconnect: vi.fn(),
     on: vi.fn((event: string, listener: (channel: string, raw: string) => void) => {
       if (event === 'message') messageListener = listener;
@@ -50,6 +51,10 @@ describe('LocalRunEventBus', () => {
     await bus.subscribe('r1', (m) => got.push(m));
     await bus.publish('r2', { event: 'status', data: {} });
     expect(got).toHaveLength(0);
+  });
+
+  it('close 无外部资源可释放', async () => {
+    await expect(new LocalRunEventBus().close()).resolves.toBeUndefined();
   });
 
   it('单个订阅者抛错不影响其他订阅者', async () => {
@@ -186,6 +191,28 @@ describe('RedisRunEventBus', () => {
     expect(got).toHaveLength(1);
   });
 
+  it('close 关闭共享订阅连接且幂等', async () => {
+    const sub = createFakeSubscriber();
+    const bus = new RedisRunEventBus(fakePublisher() as unknown as Redis, () => sub.redis);
+    await bus.subscribe('r1', () => undefined);
+
+    await bus.close();
+    await bus.close();
+
+    expect(sub.mocks.quit).toHaveBeenCalledTimes(1);
+    expect(sub.mocks.disconnect).not.toHaveBeenCalled();
+  });
+
+  it('close 时 quit 失败则强制断开', async () => {
+    const sub = createFakeSubscriber();
+    sub.mocks.quit.mockRejectedValueOnce(new Error('redis down'));
+    const bus = new RedisRunEventBus(fakePublisher() as unknown as Redis, () => sub.redis);
+    await bus.subscribe('r1', () => undefined);
+
+    await expect(bus.close()).resolves.toBeUndefined();
+    expect(sub.mocks.disconnect).toHaveBeenCalledTimes(1);
+  });
+
   it('过滤坏帧', async () => {
     const sub = createFakeSubscriber();
     const bus = new RedisRunEventBus(fakePublisher() as unknown as Redis, () => sub.redis);
@@ -241,6 +268,17 @@ describe('RedisRunEventBus', () => {
 });
 
 describe('RedisRunControlBus', () => {
+  it('close 关闭共享订阅连接且幂等', async () => {
+    const sub = createFakeSubscriber();
+    const bus = new RedisRunControlBus(fakePublisher() as unknown as Redis, () => sub.redis);
+    await bus.subscribe('r1', () => undefined);
+
+    await bus.close();
+    await bus.close();
+
+    expect(sub.mocks.quit).toHaveBeenCalledTimes(1);
+  });
+
   it('publish 向 run:<id>:control 发送 JSON 帧', async () => {
     const publisher = fakePublisher();
     const bus = new RedisRunControlBus(

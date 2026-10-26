@@ -17,6 +17,10 @@ export interface BffMetrics {
   modelTokens: Counter;
   modelCredits: Counter;
   billingSettleFailures: Counter;
+  runsEnqueued: Counter;
+  runsQueueFailures: Counter;
+  runQueueDepth: Gauge;
+  runQueueActive: Gauge;
   rateLimitHits: Counter;
   alertsFired: Counter;
   alertEvalFailures: Counter;
@@ -75,6 +79,26 @@ export function createBffMetrics(
     billingSettleFailures: new Counter({
       name: 'ai_office_billing_settle_failures_total',
       help: '结算失败次数',
+      registers: [registry],
+    }),
+    runsEnqueued: new Counter({
+      name: 'ai_office_runs_enqueued_total',
+      help: '成功入队的运行数',
+      registers: [registry],
+    }),
+    runsQueueFailures: new Counter({
+      name: 'ai_office_runs_queue_failures_total',
+      help: '队列作业失败次数',
+      registers: [registry],
+    }),
+    runQueueDepth: new Gauge({
+      name: 'ai_office_run_queue_depth',
+      help: '待执行的队列作业数',
+      registers: [registry],
+    }),
+    runQueueActive: new Gauge({
+      name: 'ai_office_run_queue_active',
+      help: '正在执行的队列作业数',
       registers: [registry],
     }),
     rateLimitHits: new Counter({

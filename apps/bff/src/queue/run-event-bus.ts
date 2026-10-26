@@ -4,6 +4,8 @@ import { SSE_EVENT_NAMES, type SseEventName, type SseMessage } from '@ai-office/
 export interface RunEventBus {
   publish(runId: string, msg: SseMessage): Promise<void>;
   subscribe(runId: string, handler: (msg: SseMessage) => void): Promise<() => void>;
+  /** 释放总线持有的连接；可选，供模块关闭时调用。 */
+  close?(): Promise<void>;
 }
 
 /** 单个运行的运行事件频道；跨进程分发时 publisher 与 subscriber 共用。 */
@@ -41,10 +43,14 @@ export class LocalRunEventBus implements RunEventBus {
       }
     };
   }
+
+  /** 单进程实现不持有外部资源。 */
+  async close(): Promise<void> {}
 }
 
 const SUBSCRIBE_TIMEOUT_MS = 5000;
 const UNSUBSCRIBE_TIMEOUT_MS = 5000;
+const CLOSE_TIMEOUT_MS = 5000;
 
 /**
  * 多进程实现：事件经 Redis Pub/Sub 跨进程分发。
@@ -116,6 +122,20 @@ export class RedisRunEventBus implements RunEventBus {
       this.sub.on('message', (channel: string, raw: string) => this.dispatch(channel, raw));
     }
     return this.sub;
+  }
+
+  /** 关闭共享订阅连接；quit 在断线时可能排队，超时后强制断开，避免拖住进程退出。 */
+  async close(): Promise<void> {
+    const sub = this.sub;
+    this.sub = null;
+    this.handlers.clear();
+    this.subscribed.clear();
+    if (!sub) return;
+    try {
+      await withTimeout(sub.quit(), CLOSE_TIMEOUT_MS);
+    } catch {
+      sub.disconnect();
+    }
   }
 
   private dispatch(channel: string, raw: string): void {

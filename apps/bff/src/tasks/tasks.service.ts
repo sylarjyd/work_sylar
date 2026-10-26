@@ -195,6 +195,16 @@ export class TasksService {
     });
   }
 
+  /** 单租户排队任务数：用于入队时的排队上限校验。 */
+  async countQueued(tenantId: string): Promise<number> {
+    return this.prisma.task.count({ where: { status: 'queued', session: { tenantId } } });
+  }
+
+  /** 单租户执行中任务数：用于 worker 的租户级并发让位。 */
+  async countRunning(tenantId: string): Promise<number> {
+    return this.prisma.task.count({ where: { status: 'running', session: { tenantId } } });
+  }
+
   async finish(
     runId: string,
     taskId: string,

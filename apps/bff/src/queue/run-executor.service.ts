@@ -10,6 +10,7 @@ import type {
 import { createSseParser } from '@ai-office/shared';
 import { endSpan, injectTraceparent, startSpan } from '@ai-office/telemetry';
 import { parseSnapshot, type RunJob, type RunSnapshot } from './run-job';
+import { RUN_EVENT_BUS } from './queue.tokens';
 import type { RunEventBus } from './run-event-bus';
 import { TasksService } from '../tasks/tasks.service';
 import { AttachmentsService } from '../attachments/attachments.service';
@@ -75,7 +76,7 @@ export class RunExecutor {
     private readonly attachments: AttachmentsService,
     private readonly artifacts: ArtifactService,
     private readonly billing: BillingService,
-    private readonly events: RunEventBus,
+    @Inject(RUN_EVENT_BUS) private readonly events: RunEventBus,
     @Inject(BFF_METRICS) private readonly metrics: BffMetrics,
   ) {}
 

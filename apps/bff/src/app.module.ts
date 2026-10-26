@@ -21,6 +21,7 @@ import { BillingModule } from './billing/billing.module';
 import { ModelsModule } from './models/models.module';
 import { AdminModule } from './admin/admin.module';
 import { SettingsModule } from './settings/settings.module';
+import { QueueModule } from './queue/queue.module';
 
 /**
  * 应用装配根：数据库、知识库、连接器、计费、管理端模块在此汇合；
@@ -36,6 +37,7 @@ import { SettingsModule } from './settings/settings.module';
     SessionsModule,
     TasksModule,
     ArtifactsModule,
+    QueueModule.forRoot(),
     RunsModule,
     KbModule,
     AttachmentsModule,

@@ -8,6 +8,8 @@ export type RunControlMessage =
 export interface RunControlBus {
   publish(runId: string, msg: RunControlMessage): Promise<void>;
   subscribe(runId: string, handler: (msg: RunControlMessage) => void): Promise<() => void>;
+  /** 释放总线持有的连接；可选，供模块关闭时调用。 */
+  close?(): Promise<void>;
 }
 
 /** 单个运行的控制频道；与事件频道分开，避免控制指令混入 SSE 流。 */
@@ -43,10 +45,14 @@ export class LocalRunControlBus implements RunControlBus {
       }
     };
   }
+
+  /** 单进程实现不持有外部资源。 */
+  async close(): Promise<void> {}
 }
 
 const SUBSCRIBE_TIMEOUT_MS = 5000;
 const UNSUBSCRIBE_TIMEOUT_MS = 5000;
+const CLOSE_TIMEOUT_MS = 5000;
 
 /**
  * 多进程实现：控制指令经 Redis Pub/Sub 送达持有该运行执行器的 worker。
@@ -117,6 +123,20 @@ export class RedisRunControlBus implements RunControlBus {
       this.sub.on('message', (channel: string, raw: string) => this.dispatch(channel, raw));
     }
     return this.sub;
+  }
+
+  /** 关闭共享订阅连接；quit 在断线时可能排队，超时后强制断开，避免拖住进程退出。 */
+  async close(): Promise<void> {
+    const sub = this.sub;
+    this.sub = null;
+    this.handlers.clear();
+    this.subscribed.clear();
+    if (!sub) return;
+    try {
+      await withTimeout(sub.quit(), CLOSE_TIMEOUT_MS);
+    } catch {
+      sub.disconnect();
+    }
   }
 
   private dispatch(channel: string, raw: string): void {
