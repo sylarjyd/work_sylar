@@ -341,29 +341,25 @@ export class TasksService {
   /**
    * 取消仍在排队的运行：run 与 task 必须一起落到 canceled。
    * run 与 task 分属两行，只改其一会让前端/后台看到「run 已取消、task 仍在排队」的撕裂状态，
-   * 因此用同一事务条件更新：run 未抢到（已开始执行）直接返回 false；
-   * task 条件更新失败则抛错回滚 run，把整次取消交给控制消息路径。
+   * 因此用同一事务条件更新：run 未抢到（已开始执行或并发取消）返回 false，由调用方回查 DB；
+   * task 条件更新失败属于数据不一致，抛错回滚整笔事务；DB 故障也原样上抛，
+   * 让 POST /cancel 返回 5xx 供客户端重试，而不是把基础设施故障谎报成「取消未发生」。
    */
   async markCanceled(runId: string, taskId: string): Promise<boolean> {
-    try {
-      return await this.prisma.$transaction(async (tx) => {
-        const endedAt = new Date();
-        const run = await tx.run.updateMany({
-          where: { id: runId, status: 'queued' },
-          data: { status: 'canceled', endedAt },
-        });
-        if (run.count === 0) return false;
-        const task = await tx.task.updateMany({
-          where: { id: taskId, status: 'queued' },
-          data: { status: 'canceled', endedAt },
-        });
-        if (task.count === 0) throw new Error('task_not_queued');
-        return true;
+    return this.prisma.$transaction(async (tx) => {
+      const endedAt = new Date();
+      const run = await tx.run.updateMany({
+        where: { id: runId, status: 'queued' },
+        data: { status: 'canceled', endedAt },
       });
-    } catch {
-      // 条件更新落空说明执行器已抢占；DB 故障同样降级为「取消未完成」，由控制消息兜底。
-      return false;
-    }
+      if (run.count === 0) return false;
+      const task = await tx.task.updateMany({
+        where: { id: taskId, status: 'queued' },
+        data: { status: 'canceled', endedAt },
+      });
+      if (task.count === 0) throw new Error('task_not_queued');
+      return true;
+    });
   }
 
   /** 请求取消执行中的运行；只标记仍处于 running 的 run，竞态下 0 行不报错。 */

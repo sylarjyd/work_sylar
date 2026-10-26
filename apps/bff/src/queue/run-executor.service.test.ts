@@ -70,6 +70,30 @@ function sseResponse(events: Array<{ event: string; data: unknown }>): Response 
   });
 }
 
+/**
+ * 构造「建连成功但长流会挂起」的上游响应：先把 initial 事件入队，之后不再推进，
+ * 直到取消信号把流置错——用于区分建连阶段与流式消费阶段的取消。
+ */
+function hangingSseResponse(
+  initial: Array<{ event: string; data: unknown }>,
+  signal: AbortSignal,
+): Response {
+  const body = initial.map((e) => `event: ${e.event}\ndata: ${JSON.stringify(e.data)}\n\n`).join('');
+  return new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(body));
+        signal.addEventListener('abort', () =>
+          controller.error(Object.assign(new Error('aborted'), { name: 'AbortError' })),
+        );
+      },
+      // 不主动结束流：没有取消时应一直等待上游，模拟真实的长连接。
+      pull: () => new Promise<void>(() => {}),
+    }),
+    { status: 200, headers: { 'content-type': 'text/event-stream' } },
+  );
+}
+
 /** 直接 new 执行器并注入 mock 依赖；fetch 用 stubGlobal 接管。 */
 function makeExecutor(): { executor: RunExecutor; deps: ExecutorDeps } {
   const off = vi.fn();
@@ -472,6 +496,91 @@ describe('RunExecutor', () => {
       data: { runId: 'r1', status: 'canceled' },
     });
     expect(deps.off).toHaveBeenCalledTimes(1);
+  });
+
+  it('流式消费阶段收到 cancel：中止上游、标记 canceled，无用量则不结算', async () => {
+    const { executor, deps } = makeExecutor();
+    let handler: ((msg: RunControlMessage) => void) | undefined;
+    deps.control.subscribe.mockImplementation(async (_runId: string, h: typeof handler) => {
+      handler = h;
+      return deps.off;
+    });
+    let stepConsumed!: () => void;
+    const consumed = new Promise<void>((resolve) => {
+      stepConsumed = resolve;
+    });
+    // recordStep 落定说明首个 chunk 已被消费：此时取消属于流式阶段，而非建连阶段。
+    deps.tasks.recordStep.mockImplementation(async () => stepConsumed());
+    deps.fetch.mockImplementation((_url: unknown, init: { signal: AbortSignal }) =>
+      Promise.resolve(
+        hangingSseResponse(
+          [{ event: 'step', data: stepEvent(0, 'think', { text: '半截回答' }) }],
+          init.signal,
+        ),
+      ),
+    );
+
+    const running = executor.execute(job());
+    await consumed;
+    handler!({ type: 'cancel' });
+    await expect(running).resolves.toBeUndefined();
+
+    expect(deps.fetch).toHaveBeenCalledTimes(1);
+    expect(deps.billing.releaseHold).toHaveBeenCalledWith('r1');
+    expect(deps.billing.recordUsage).not.toHaveBeenCalled();
+    expect(deps.billing.settle).not.toHaveBeenCalled();
+    // 取消不保留半截回答，assistantText 必须为空。
+    expect(deps.tasks.finish).toHaveBeenCalledWith('r1', 't1', 'canceled', '', 's1');
+    expect(deps.events.publish).toHaveBeenCalledWith('r1', {
+      event: 'status',
+      data: { runId: 'r1', status: 'canceled' },
+    });
+    expect(publishedEvents(deps)[publishedEvents(deps).length - 1]).toBe('status');
+    expect(deps.off).toHaveBeenCalledTimes(1);
+  });
+
+  it('已收到 usage 后取消：仍记录用量并结算，finish 为 canceled 且不保留半截回答', async () => {
+    const { executor, deps } = makeExecutor();
+    let handler: ((msg: RunControlMessage) => void) | undefined;
+    deps.control.subscribe.mockImplementation(async (_runId: string, h: typeof handler) => {
+      handler = h;
+      return deps.off;
+    });
+    let stepConsumed!: () => void;
+    const consumed = new Promise<void>((resolve) => {
+      stepConsumed = resolve;
+    });
+    deps.tasks.recordStep.mockImplementation(async () => stepConsumed());
+    const usage = { input: 10, output: 5, models: [{ model: 'm1', input: 10, output: 5 }] };
+    deps.fetch.mockImplementation((_url: unknown, init: { signal: AbortSignal }) =>
+      Promise.resolve(
+        hangingSseResponse(
+          [
+            { event: 'usage', data: usage },
+            { event: 'step', data: stepEvent(0, 'think', { text: '半截回答' }) },
+          ],
+          init.signal,
+        ),
+      ),
+    );
+
+    const running = executor.execute(job());
+    await consumed;
+    handler!({ type: 'cancel' });
+    await expect(running).resolves.toBeUndefined();
+
+    expect(deps.billing.recordUsage).toHaveBeenCalledWith(
+      'r1',
+      { tenantId: 't1', userId: 'u1', sessionId: 's1' },
+      usage,
+    );
+    expect(deps.billing.settle).toHaveBeenCalledWith('r1');
+    expect(deps.billing.releaseHold).not.toHaveBeenCalled();
+    expect(deps.tasks.finish).toHaveBeenCalledWith('r1', 't1', 'canceled', '', 's1');
+    expect(deps.events.publish).toHaveBeenCalledWith('r1', {
+      event: 'status',
+      data: { runId: 'r1', status: 'canceled' },
+    });
   });
 
   it('执行前已有 cancelRequestedAt 时跳过上游并释放预占', async () => {

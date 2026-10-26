@@ -14,6 +14,7 @@ function isTerminal(status: string): boolean {
 /**
  * 取消运行：排队中的直接移除作业并落库 canceled；
  * 已被执行器接管的只发布控制消息，由执行器自行中止并收尾。
+ * 移除或落库落空时必须回查 DB：作业可能已被删除却无人收尾，不能凭假设回报 running。
  * 所有副作用都放在归属校验之后，避免越权用户触发队列/总线操作。
  */
 @Injectable()
@@ -33,17 +34,15 @@ export class RunsService {
 
     if (run.status === 'queued') {
       const removed = await this.queue.remove(runId);
-      if (removed) {
-        const updated = await this.tasks.markCanceled(runId, run.taskId);
-        if (updated) {
-          // 先落库再发布：订阅方收到 canceled 会立即回查 DB。
-          await this.publishCanceled(runId);
-          return { status: 'canceled' };
-        }
-        // 作业已被 worker 抢走，执行器会按自己的节奏收尾。
-        return { status: 'running' };
+      if (removed && (await this.tasks.markCanceled(runId, run.taskId))) {
+        // 先落库再发布：订阅方收到 canceled 会立即回查 DB。
+        await this.publishCanceled(runId);
+        return { status: 'canceled' };
       }
-      // remove 失败说明作业已 active：降级为控制消息，走执行中取消路径。
+      // 作业已被取走或并发取消已落库：以 DB 为准。终态直接幂等返回；
+      // 仍未终态（执行器刚接管）才补发控制消息，避免作业已删除却无人收尾。
+      const latest = await this.tasks.findOwnedRun(runId, tenantId, userId);
+      if (isTerminal(latest.status)) return { status: latest.status as RunStatus };
     }
 
     // 条件标记 + 控制消息：先把取消意图落库，执行器即使错过消息也能在执行前兜底。

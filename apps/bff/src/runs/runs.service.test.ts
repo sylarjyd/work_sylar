@@ -18,6 +18,11 @@ interface Deps {
   events: { publish: ReturnType<typeof vi.fn> };
 }
 
+/** 构造归属查询返回的行，供默认实现与回查用例复用。 */
+function runRow(status: string) {
+  return { id: 'r1', taskId: 'task1', status, cancelRequestedAt: null };
+}
+
 /** 按给定 run 状态构造服务；findOwnedRun 默认返回本人 r1/task1。 */
 function makeService(
   run: { status: string; cancelRequestedAt?: Date | null } | Error,
@@ -36,9 +41,7 @@ function makeService(
     deps.tasks.findOwnedRun.mockRejectedValue(run);
   } else {
     deps.tasks.findOwnedRun.mockResolvedValue({
-      id: 'r1',
-      taskId: 'task1',
-      status: run.status,
+      ...runRow(run.status),
       cancelRequestedAt: run.cancelRequestedAt ?? null,
     });
   }
@@ -102,24 +105,67 @@ describe('RunsService.cancel', () => {
     expect(deps.control.publish).not.toHaveBeenCalled();
   });
 
-  it('排队作业已被 worker 取走（remove=false）时降级为控制消息', async () => {
+  it('排队作业已被 worker 取走（remove=false）且回查仍未终态时降级为控制消息', async () => {
     const { svc, deps } = makeService({ status: 'queued' });
     deps.queue.remove.mockResolvedValue(false);
 
     await expect(svc.cancel('r1', 't1', 'u1')).resolves.toEqual({ status: 'running' });
     expect(deps.tasks.markCanceled).not.toHaveBeenCalled();
+    expect(deps.tasks.findOwnedRun).toHaveBeenCalledTimes(2);
     expect(deps.tasks.markCancelRequested).toHaveBeenCalledWith('r1');
     expect(deps.control.publish).toHaveBeenCalledWith('r1', { type: 'cancel' });
+    expect(deps.events.publish).not.toHaveBeenCalled();
   });
 
-  it('remove 成功后 run 已被执行器抢占（markCanceled=false）时返回 running', async () => {
+  it('remove=false 且回查已 canceled（并发取消已落库）时幂等返回 canceled', async () => {
     const { svc, deps } = makeService({ status: 'queued' });
-    deps.tasks.markCanceled.mockResolvedValue(false);
+    deps.queue.remove.mockResolvedValue(false);
+    deps.tasks.findOwnedRun
+      .mockResolvedValueOnce(runRow('queued'))
+      .mockResolvedValueOnce(runRow('canceled'));
 
-    await expect(svc.cancel('r1', 't1', 'u1')).resolves.toEqual({ status: 'running' });
-    expect(deps.events.publish).not.toHaveBeenCalled();
-    // 已由 worker 持有，控制消息必须由执行器路径补发。
+    await expect(svc.cancel('r1', 't1', 'u1')).resolves.toEqual({ status: 'canceled' });
+    expect(deps.tasks.markCanceled).not.toHaveBeenCalled();
     expect(deps.tasks.markCancelRequested).not.toHaveBeenCalled();
     expect(deps.control.publish).not.toHaveBeenCalled();
+    expect(deps.events.publish).not.toHaveBeenCalled();
+  });
+
+  it('markCanceled=false 且回查仍 running（执行器刚接管）时补发控制消息', async () => {
+    const { svc, deps } = makeService({ status: 'queued' });
+    deps.tasks.markCanceled.mockResolvedValue(false);
+    deps.tasks.findOwnedRun
+      .mockResolvedValueOnce(runRow('queued'))
+      .mockResolvedValueOnce(runRow('running'));
+
+    await expect(svc.cancel('r1', 't1', 'u1')).resolves.toEqual({ status: 'running' });
+    expect(deps.tasks.findOwnedRun).toHaveBeenCalledTimes(2);
+    expect(deps.tasks.markCancelRequested).toHaveBeenCalledWith('r1');
+    expect(deps.control.publish).toHaveBeenCalledWith('r1', { type: 'cancel' });
+    expect(deps.events.publish).not.toHaveBeenCalled();
+  });
+
+  it('markCanceled=false 且回查已 canceled（并发取消已落库）时直接返回 canceled', async () => {
+    const { svc, deps } = makeService({ status: 'queued' });
+    deps.tasks.markCanceled.mockResolvedValue(false);
+    deps.tasks.findOwnedRun
+      .mockResolvedValueOnce(runRow('queued'))
+      .mockResolvedValueOnce(runRow('canceled'));
+
+    await expect(svc.cancel('r1', 't1', 'u1')).resolves.toEqual({ status: 'canceled' });
+    expect(deps.tasks.markCancelRequested).not.toHaveBeenCalled();
+    expect(deps.control.publish).not.toHaveBeenCalled();
+    expect(deps.events.publish).not.toHaveBeenCalled();
+  });
+
+  it('markCanceled 抛错（DB 故障）时原样上抛，不伪报 running', async () => {
+    const { svc, deps } = makeService({ status: 'queued' });
+    const dbError = new Error('db down');
+    deps.tasks.markCanceled.mockRejectedValue(dbError);
+
+    await expect(svc.cancel('r1', 't1', 'u1')).rejects.toBe(dbError);
+    expect(deps.tasks.markCancelRequested).not.toHaveBeenCalled();
+    expect(deps.control.publish).not.toHaveBeenCalled();
+    expect(deps.events.publish).not.toHaveBeenCalled();
   });
 });

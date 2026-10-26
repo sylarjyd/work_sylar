@@ -459,11 +459,12 @@ describe('TasksService', () => {
     expect(ctx.db.tasks[0].status).toBe('queued');
   });
 
-  it('markCanceled 在 task 已非 queued 时回滚 run 更新', async () => {
+  it('markCanceled 在 task 已非 queued 时抛错并回滚 run 更新', async () => {
     ctx.db.runs.push({ id: 'r1', taskId: 'task1', status: 'queued' });
     ctx.db.tasks.push({ id: 'task1', status: 'running' });
 
-    await expect(svc.markCanceled('r1', 'task1')).resolves.toBe(false);
+    // task 与 run 状态撕裂属于数据不一致：不能静默返回 false，必须上抛让调用方感知。
+    await expect(svc.markCanceled('r1', 'task1')).rejects.toThrow('task_not_queued');
     // task 未能同步取消时必须回滚 run，避免出现 run canceled / task running 的撕裂状态。
     expect(ctx.db.runs[0]).toMatchObject({ status: 'queued' });
     expect(ctx.db.runs[0].endedAt).toBeUndefined();
