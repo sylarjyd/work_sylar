@@ -1,7 +1,7 @@
 -- =============================================================================
 -- AI 办公智能体 · 数据库 Schema（PostgreSQL 16）
 -- -----------------------------------------------------------------------------
--- 本文件是 apps/bff/prisma/schema.prisma 的等价 DDL（29 张表），用于：
+-- 本文件是 apps/bff/prisma/schema.prisma 的等价 DDL（30 张表），用于：
 --   1) 首次建库的基线（无 Prisma 迁移历史时）；
 --   2) 审阅数据模型 / 供 DBA 参考。
 --
@@ -233,6 +233,27 @@ CREATE TABLE "KbChunk" (
 
     CONSTRAINT "KbChunk_pkey" PRIMARY KEY ("id")
 );
+
+-- CreateTable
+CREATE TABLE "UserMemory" (
+    "id" TEXT NOT NULL,
+    "tenantId" TEXT NOT NULL,
+    "userId" TEXT NOT NULL,
+    "sessionId" TEXT,
+    "content" TEXT NOT NULL,
+    "hash" TEXT NOT NULL,
+    "vector" vector(1024) NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "lastUsedAt" TIMESTAMP(3),
+
+    CONSTRAINT "UserMemory_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateIndex
+CREATE UNIQUE INDEX "UserMemory_tenantId_userId_hash_key" ON "UserMemory"("tenantId", "userId", "hash");
+
+-- CreateIndex
+CREATE INDEX "UserMemory_tenantId_userId_createdAt_idx" ON "UserMemory"("tenantId", "userId", "createdAt" DESC);
 
 -- CreateTable
 CREATE TABLE "Connector" (
@@ -684,3 +705,4 @@ ALTER TABLE "ModelPrice" ADD CONSTRAINT "ModelPrice_providerId_fkey" FOREIGN KEY
 -- pgvector HNSW 索引（Prisma 不生成 Unsupported 类型的索引，需手工维护）
 -- -----------------------------------------------------------------------------
 CREATE INDEX "kb_chunk_vec_idx" ON "KbChunk" USING hnsw ("vector" vector_cosine_ops);
+CREATE INDEX "user_memory_vec_idx" ON "UserMemory" USING hnsw ("vector" vector_cosine_ops);

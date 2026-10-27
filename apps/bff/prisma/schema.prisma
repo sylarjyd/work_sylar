@@ -263,6 +263,25 @@ model KbChunk {
   @@index([tenantId, userId])
 }
 
+/// 长期记忆：跨会话的用户偏好与事实，按 tenant + userId 隔离。
+model UserMemory {
+  id         String    @id @default(cuid())
+  tenantId   String
+  userId     String
+  /// 来源会话，仅作溯源；不建外键，会话删除不级联删记忆。
+  sessionId  String?
+  content    String
+  /// sha256(归一化内容)，用于同一用户重复事实去重。
+  hash       String
+  // pgvector 列：Prisma 无法原生建模索引，读写走 $executeRaw / $queryRaw（与 KbChunk 一致）。
+  vector     Unsupported("vector(1024)")
+  createdAt  DateTime  @default(now())
+  lastUsedAt DateTime?
+
+  @@unique([tenantId, userId, hash])
+  @@index([tenantId, userId, createdAt])
+}
+
 model Connector {
   id              String    @id @default(uuid())
   tenantId        String
