@@ -15,7 +15,6 @@ import {
   type AssistantDto,
   type AttachmentDto,
   type AttachmentKind,
-  type AttachmentRef,
   type ClientModelDto,
   type MessageDto,
   type RunStatus,
@@ -41,9 +40,10 @@ import {
 import { errorText } from '@ai-office/web-core';
 import {
   consumeRunStream,
-  createRunStreamState,
   type RunStreamHandlers,
+  type RunStreamState,
 } from '../lib/run-stream';
+import { RunTracker, type RunAttachment } from '../lib/run-tracker';
 import {
   cancelRun,
   confirmRun,
@@ -85,11 +85,6 @@ interface PendingAttachment {
   dto?: AttachmentDto;
   previewUrl?: string;
   error?: string;
-}
-
-/** 已提交消息的附件；previewUrl 仅供本次会话内即时预览，刷新后不再保留。 */
-interface SubmittedAttachment extends AttachmentRef {
-  previewUrl?: string;
 }
 
 interface SuggestionCategory {
@@ -263,6 +258,11 @@ const HERO_SUB: Record<SessionMode, string> = {
   code: '描述要开发的应用，智能体会规划步骤、编写代码并把完整源码保存成文件。',
 };
 
+/** 无条目时的稳定空值，避免每次渲染新建引用。 */
+const NO_EVENTS: AgentEvent[] = [];
+const NO_ATTACHMENTS: RunAttachment[] = [];
+const NO_DECISIONS: Record<string, boolean> = {};
+
 function EventRow({
   ev,
   expectedModel,
@@ -412,20 +412,22 @@ export default function Home() {
   const sessionsLoadingRef = useRef(false);
   const [sessionId, setSessionId] = useState<string>('');
   const [goal, setGoal] = useState('');
-  const [submittedGoal, setSubmittedGoal] = useState('');
-  const [events, setEvents] = useState<AgentEvent[]>([]);
-  // 正在流式输出的正文：由 assistant_delta 逐块累加，收到完整 think 后清空并由它接管。
-  const [liveText, setLiveText] = useState('');
   // 历史消息：切换/打开会话时回填，新一轮运行只追加到 events，不回写这里。
   const [history, setHistory] = useState<MessageDto[]>([]);
   const [artifacts, setArtifacts] = useState<ArtifactDto[]>([]);
-  const [running, setRunning] = useState(false);
   const [error, setError] = useState('');
-  const [runId, setRunId] = useState('');
-  const [runStatus, setRunStatus] = useState<RunStatus | null>(null);
-  const [queuePosition, setQueuePosition] = useState<number | null>(null);
-  const [stopping, setStopping] = useState(false);
-  const [decisions, setDecisions] = useState<Record<string, boolean>>({});
+  // 运行态按会话存放在纯 TS 表里：切走不中断，切回直接渲染该会话条目。
+  const [, bumpTrackerVersion] = useState(0);
+  const trackerRef = useRef<RunTracker | null>(null);
+  if (!trackerRef.current) {
+    trackerRef.current = new RunTracker(() => bumpTrackerVersion((v) => v + 1));
+  }
+  const tracker = trackerRef.current;
+  // 同一会话同一时刻最多一条被消费的流：起跑与回放挂回都先占位。
+  const streamingRef = useRef(new Set<string>());
+  // 事件回调可能在用户切走之后才到达：用它判断「当前查看的会话」，避免给别的会话刷新页面级视图。
+  const sessionIdRef = useRef(sessionId);
+  sessionIdRef.current = sessionId;
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [models, setModels] = useState<ClientModelDto[]>([]);
   const [selectedModel, setSelectedModel] = useState('');
@@ -440,7 +442,6 @@ export default function Home() {
   // 首页推荐问题的当前分类；空值表示取该任务类型的第一个分类。
   const [categoryKey, setCategoryKey] = useState('');
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
-  const [submittedAttachments, setSubmittedAttachments] = useState<SubmittedAttachment[]>([]);
   const [dragOver, setDragOver] = useState(false);
   // 左侧问题导航当前高亮的问题 id（历史消息用 m.id，尚未落库的当轮用 pending）。
   const [activeAnchor, setActiveAnchor] = useState('');
@@ -457,9 +458,36 @@ export default function Home() {
   const historyReqRef = useRef(0);
   const loadedHistoryRef = useRef('');
   const lastUserScrollRef = useRef(0);
-  // 重连游标：seq 从 0 开始，未收到任何 step 时用 -1 从头回放。
-  const lastSeqRef = useRef(-1);
   pendingRef.current = pendingAttachments;
+
+  // 当前会话视图：由 tracker 快照派生，事件/正文/决策都跟着会话走。
+  const view = sessionId ? tracker.snapshot(sessionId) : null;
+  const events = view?.events ?? NO_EVENTS;
+  const liveText = view?.liveText ?? '';
+  const decisions = view?.decisions ?? NO_DECISIONS;
+  const submittedGoal = view?.goal ?? '';
+  const submittedAttachments = view?.attachments ?? NO_ATTACHMENTS;
+  const queuePosition = view?.queuePosition ?? null;
+  const stopping = !!view && !view.terminal && view.status === 'stopping';
+  const runId = view?.runId ?? '';
+  const running = !!view && !view.terminal;
+  // 视觉阶段映射回 RunStatus：终结后用于展示「已取消」等收尾文案。
+  const runStatus: RunStatus | null = view
+    ? view.terminal
+      ? view.finalStatus
+      : view.status === 'queued'
+        ? 'queued'
+        : 'running'
+    : null;
+  // prepare 已把本轮提问落库：刷新或切回后历史里也有同一条，同一份提问只渲染一次（优先历史）。
+  const lastHistoryMsg = history[history.length - 1];
+  const pendingEchoed =
+    !!view &&
+    !view.terminal &&
+    submittedGoal !== '' &&
+    lastHistoryMsg?.role === 'user' &&
+    lastHistoryMsg.content === submittedGoal;
+  const showPendingTurn = !!view && !pendingEchoed;
 
   useEffect(() => {
     sessionsRef.current = sessions;
@@ -660,41 +688,51 @@ export default function Home() {
     setPendingAttachments([]);
   }
 
-  function discardSubmitted(): void {
-    setSubmittedAttachments((prev) => {
-      for (const a of prev) if (a.previewUrl) releaseUrl(a.previewUrl);
-      return [];
-    });
-  }
-
   function resetConversation() {
-    setEvents([]);
-    setLiveText('');
     setHistory([]);
     historyReqRef.current += 1;
     loadedHistoryRef.current = '';
-    setSubmittedGoal('');
-    setDecisions({});
     setError('');
-    setRunStatus(null);
-    setQueuePosition(null);
     stickToBottomRef.current = true;
     artifactReqRef.current += 1;
     setArtifacts([]);
     discardPending();
-    discardSubmitted();
   }
 
-  /** 只清实时视图，保留成果区与待发送附件：切回当前会话回看历史时用。 */
-  function clearLiveTurn() {
-    setEvents([]);
-    setLiveText('');
-    setSubmittedGoal('');
-    setSubmittedAttachments([]);
-    setDecisions({});
-    setRunStatus(null);
-    setQueuePosition(null);
-    stickToBottomRef.current = true;
+  /** 释放并清除某会话的内存条目；终态条目由落库历史接管时使用。 */
+  function releaseEntry(id: string) {
+    const entry = tracker.snapshot(id);
+    if (entry) {
+      for (const a of entry.attachments) if (a.previewUrl) releaseUrl(a.previewUrl);
+    }
+    tracker.clear(id);
+  }
+
+  /** 只丢弃已终结的条目：运行中的条目保留，后台流继续消费。 */
+  function dropFinishedEntry(id: string) {
+    const entry = tracker.snapshot(id);
+    if (!entry?.terminal) return;
+    releaseEntry(id);
+  }
+
+  /**
+   * done 之后把实时条目交回落库历史：执行器在发布终态之前已写好 assistant 消息，
+   * 因此这里拉到的历史是完整的。不交接的话，下一次发送覆盖条目时上一轮答案会从界面消失。
+   * 拉取失败则保留实时条目，回答已经上屏，不应凭空消失。
+   */
+  async function settleIntoTimeline(id: string) {
+    if (id !== sessionIdRef.current) return;
+    const req = ++historyReqRef.current;
+    try {
+      const list = await listSessionMessages(id);
+      if (req !== historyReqRef.current || id !== sessionIdRef.current) return;
+      loadedHistoryRef.current = id;
+      setHistory(list);
+      stickToBottomRef.current = true;
+      releaseEntry(id);
+    } catch {
+      // 拉取失败保持实时视图。
+    }
   }
 
   function handleSelect(id: string) {
@@ -707,8 +745,8 @@ export default function Home() {
       setSessionId(id);
       resetConversation();
     } else if (needLoad) {
-      // 同一会话但还没回看过（例如刚跑完一轮）：实时视图换成落库消息，避免同一轮展示两次。
-      clearLiveTurn();
+      // 同一会话回看：落库历史接管已结束的那一轮，避免同一轮展示两次。
+      dropFinishedEntry(id);
     }
     if (needLoad) void loadHistory(id);
   }
@@ -737,6 +775,7 @@ export default function Home() {
 
   async function handleDeleteSession(id: string): Promise<void> {
     await deleteSession(id);
+    releaseEntry(id);
     const remaining = sessionsRef.current.filter((s) => s.id !== id);
     setSessions((prev) => prev.filter((s) => s.id !== id));
     if (id !== sessionId) return;
@@ -842,13 +881,77 @@ export default function Home() {
     if (target?.dto) void deleteAttachment(target.dto.id).catch(() => undefined);
   }
 
+  /**
+   * 流事件统一走 tracker：初连、重连、挂回共用同一套处理，页面只有一份折叠逻辑。
+   */
+  function makeHandlers(id: string, st: RunStreamState): RunStreamHandlers {
+    return {
+      onStep(ev) {
+        tracker.applyStep(id, ev);
+        if (ev.type === 'artifact') addOptimisticArtifact(ev);
+        syncRunMarker(id);
+      },
+      onStatus(status, position) {
+        // status 帧先写入 st.runId，再交给 tracker：排队期也有 runId 可停止、可标记。
+        tracker.applyStatus(id, status, position, st.runId);
+        syncRunMarker(id);
+      },
+      onDone(status) {
+        tracker.applyDone(id, status);
+      },
+      onError(message) {
+        setError(message);
+        tracker.applyError(id);
+      },
+      onTerminal() {
+        tracker.applyTerminal(id);
+        syncRunMarker(id);
+        // 自动命名按会话 id 更新侧栏，后台会话结束也要补。
+        void syncSessionTitle(id);
+        // 产物与界面是页面级的：只为当前查看的会话刷新，避免后台会话把别人的成果区覆盖掉。
+        if (id !== sessionIdRef.current) return;
+        void refreshArtifacts(id);
+        // 完成的那一轮已落库，交给历史接管；取消/失败保留实时条目，才能看到「已取消」与错误步骤。
+        if (tracker.snapshot(id)?.finalStatus === 'done') void settleIntoTimeline(id);
+      },
+    };
+  }
+
+  /** 本地起跑/终态时同步侧栏标记；刷新列表后以后端返回值为准。 */
+  function syncRunMarker(id: string) {
+    const entry = tracker.snapshot(id);
+    const active =
+      entry && !entry.terminal && entry.runId
+        ? {
+            id: entry.runId,
+            status: entry.status === 'queued' ? ('queued' as const) : ('running' as const),
+          }
+        : null;
+    setSessions((prev) => prev.map((s) => (s.id === id ? { ...s, activeRun: active } : s)));
+  }
+
+  /** 产物事件先乐观上屏，终态后由 refreshArtifacts 用落库版本覆盖。 */
+  function addOptimisticArtifact(ev: AgentEvent) {
+    setArtifacts((prev) => [
+      {
+        id: '',
+        kind: String(ev.payload.kind ?? 'docx') as ArtifactDto['kind'],
+        filename: String(ev.payload.filename ?? ''),
+        size: Number(ev.payload.size ?? 0),
+        version: 0,
+        createdAt: new Date().toISOString(),
+      },
+      ...prev,
+    ]);
+  }
+
   async function run() {
     const currentGoal = goal;
     const ready = pendingRef.current.filter(
       (a): a is PendingAttachment & { dto: AttachmentDto } => a.status === 'ready' && !!a.dto,
     );
     const attachmentIds = ready.map((a) => a.dto.id);
-    const submitted: SubmittedAttachment[] = ready.map((a) => ({
+    const submitted: RunAttachment[] = ready.map((a) => ({
       id: a.dto.id,
       kind: a.kind,
       filename: a.filename,
@@ -858,78 +961,14 @@ export default function Home() {
     }));
     stickToBottomRef.current = true;
     artifactReqRef.current += 1;
-    setEvents([]);
-    setLiveText('');
-    setSubmittedGoal(currentGoal);
-    setSubmittedAttachments(submitted);
     setGoal('');
-    setRunning(true);
     setError('');
-    setDecisions({});
-    // 新一轮开始：清掉上一轮的运行态与游标，避免停止/重连误挂到旧运行。
-    // 新建的 run 在库里就是 queued，先按排队展示，等状态帧或首个步骤再切执行中。
-    setRunId('');
-    setRunStatus('queued');
-    setQueuePosition(null);
-    setStopping(false);
-    lastSeqRef.current = -1;
-    const st = createRunStreamState();
-    // 事件流只负责推进状态机，React 副作用集中在这里，初连与重连行为一致。
-    const handlers: RunStreamHandlers = {
-      onStep(ev) {
-        lastSeqRef.current = st.lastSeq;
-        if (typeof ev.runId === 'string' && ev.runId) setRunId(ev.runId);
-        // 收到步骤说明已经开始执行，清掉排队提示。
-        setRunStatus((prev) => (prev === 'queued' ? 'running' : prev));
-        setQueuePosition(null);
-        if (ev.type === 'assistant_delta') {
-          // 增量只喂给实时气泡；完整 think 到达时会用全文替换，避免两处重复。
-          const text = typeof ev.payload.text === 'string' ? ev.payload.text : '';
-          if (text) setLiveText((prev) => prev + text);
-          return;
-        }
-        if (ev.type === 'think') setLiveText('');
-        setEvents((prev) => [...prev, ev]);
-        if (ev.type === 'artifact') {
-          setArtifacts((prev) => [
-            {
-              id: '',
-              kind: String(ev.payload.kind ?? 'docx') as ArtifactDto['kind'],
-              filename: String(ev.payload.filename ?? ''),
-              size: Number(ev.payload.size ?? 0),
-              version: 0,
-              createdAt: new Date().toISOString(),
-            },
-            ...prev,
-          ]);
-        }
-      },
-      onStatus(status, position) {
-        if (st.runId) setRunId(st.runId);
-        setRunStatus(status);
-        setQueuePosition(position);
-      },
-      onDone(status) {
-        setRunStatus(status);
-      },
-      onError(message) {
-        setError(message);
-        setRunStatus((prev) => (prev === 'canceled' ? prev : 'failed'));
-        setQueuePosition(null);
-        // 未完成的增量不会落库，留在界面上会误导用户以为回答已保存。
-        setLiveText('');
-      },
-      onTerminal() {
-        // 终态到达即结束「正在停止…」，不必等 run() 的 finally（重连期间保持禁用）。
-        setStopping(false);
-        setLiveText('');
-      },
-    };
     composerRef.current?.focus();
     let sid = sessionId;
+    // 只有本次真正占位成功才在 finally 释放：提前 return 不能把别人的在途流标记删掉。
+    let claimed = false;
     try {
       // 草稿态首次发送才建会话，并把选中的模型固化到会话上。
-      // 不能用 setSessionId 后的 state：本次渲染闭包拿不到新值。
       if (!sid) {
         const created = await createSession(
           selectedModel || undefined,
@@ -942,80 +981,82 @@ export default function Home() {
         setSessionId(created.id);
         sid = created.id;
       }
+      if (streamingRef.current.has(sid)) return;
+      streamingRef.current.add(sid);
+      claimed = true;
       // 会话创建成功后再清空输入区：失败时可保留附件重试。
-      // 已发送附件的预览 URL 转交给 submittedAttachments，待切换会话时统一释放。
+      // 已发送附件的预览 URL 转交给 tracker 条目，切换/清理时统一释放。
       const sentIds = new Set(ready.map((a) => a.localId));
       for (const p of pendingRef.current) {
         if (!sentIds.has(p.localId) && p.previewUrl) releaseUrl(p.previewUrl);
       }
       pendingRef.current = [];
       setPendingAttachments([]);
+      // 新建的 run 在库里就是 queued，先按排队展示，等状态帧或首个步骤再切执行中。
+      const st = tracker.begin(sid, currentGoal, submitted);
+      syncRunMarker(sid);
       const res = await streamTask(sid, currentGoal, attachmentIds);
       if (!res.ok) {
         // 错误响应通常带 JSON body 但没有 SSE 帧；不在此拦截就会静默结束、既不报错也无事件。
         const detail = await res.text().catch(() => '');
         throw new Error(`stream_failed_${res.status}${detail ? `: ${detail}` : ''}`);
       }
-      await consumeRunStream(res, st, handlers);
+      await consumeRunStream(res, st, makeHandlers(sid, st));
+      if (!st.terminal && st.runId) {
+        // 流在没有终态的情况下断开：用游标重连一次补回断档事件；
+        // 取消也一样重连，终态帧丢失时由这次重连回放 status(canceled)+done 收尾。
+        const retry = await streamRun(st.runId, st.lastSeq);
+        if (!retry.ok) throw new Error(`stream_failed_${retry.status}`);
+        setError('');
+        await consumeRunStream(retry, st, makeHandlers(sid, st));
+      }
+      if (!st.terminal) {
+        tracker.settle(sid, 'failed');
+        syncRunMarker(sid);
+        setError('连接已断开，可刷新恢复');
+      }
     } catch (err) {
       if (isUnauthorized(err)) {
         router.push('/login');
         return;
       }
       setError(errorText(err));
-      setLiveText('');
-    } finally {
-      // 流在没有终态的情况下断开（网络抖动/中间层超时）：本次发送已有 runId 时重连一次，
-      // 用 afterSeq 补回断档事件。历史会话不会走到这里（run() 只在发送时调用）。
-      // 取消也一样重连：终态帧丢失时，由这唯一一次重连回放 status(canceled)+done 收尾。
-      if (!st.terminal && st.runId) {
-        try {
-          const res = await streamRun(st.runId, lastSeqRef.current);
-          if (!res.ok) throw new Error(`stream_failed_${res.status}`);
-          // 重连成功：清掉刚才断线瞬间留下的临时错误，后续若再有 error 事件会重新写入。
-          setError('');
-          await consumeRunStream(res, st, handlers);
-        } catch (err) {
-          if (isUnauthorized(err)) {
-            router.push('/login');
-          } else {
-            setError('连接已断开，可刷新恢复');
-          }
-        }
+      if (sid) {
+        // 起跑失败也要收尾，否则该会话输入框会一直只读。
+        tracker.settle(sid, 'failed');
+        syncRunMarker(sid);
       }
-      // 未收到终态时也要解除「正在停止…」，否则按钮会一直卡在禁用态。
-      setRunning(false);
-      setStopping(false);
-      // 首条消息才自动命名；这里补拉生成结果，失败静默。
-      if (sid) void syncSessionTitle(sid);
+    } finally {
+      if (claimed) streamingRef.current.delete(sid);
     }
   }
 
   async function stopRun() {
-    if (!runId || stopping) return;
-    setStopping(true);
+    if (!runId || stopping || !sessionId) return;
+    tracker.markStopping(sessionId);
     try {
-      // 不本地结束 running：等取消的终态事件到达，由事件流统一收尾。
+      // 不本地结束运行：等取消的终态事件到达，由事件流统一收尾。
       const result = await cancelRun(runId);
-      // 取消已受理但终态帧可能还在路上：保持 stopping，由 onTerminal 或 run() 收尾恢复。
+      // 取消已受理但终态帧可能还在路上：保持 stopping，由 onTerminal 收尾。
       if (result.status === 'done' || result.status === 'failed' || result.status === 'canceled') {
-        setRunStatus(result.status);
+        tracker.applyStatus(sessionId, result.status, null);
       }
     } catch (err) {
       if (isUnauthorized(err)) {
         router.push('/login');
-        setStopping(false);
+        tracker.clearStopping(sessionId);
         return;
       }
       // 取消失败时运行可能仍在继续：恢复按钮，并提示可重试。
-      setStopping(false);
+      tracker.clearStopping(sessionId);
       setError(errorText(err));
     }
   }
 
   async function decide(confirmId: string, approved: boolean) {
+    if (!runId || !sessionId) return;
     // 立即禁用按钮（在 tool_result 回来之前给出反馈）；随后由事件流自然收尾。
-    setDecisions((prev) => ({ ...prev, [confirmId]: approved }));
+    tracker.decide(sessionId, confirmId, approved);
     try {
       await confirmRun(runId, confirmId, approved);
     } catch (err) {
@@ -1023,13 +1064,8 @@ export default function Home() {
         router.push('/login');
         return;
       }
-      // 决策未送达（网络/上游故障）：撤销乐观禁用，否则按钮会一直卡在
-      // 「已允许/已拒绝」直到闸门超时，用户无法重试。
-      setDecisions((prev) => {
-        const next = { ...prev };
-        delete next[confirmId];
-        return next;
-      });
+      // 决策未送达（网络/上游故障）：撤销乐观禁用，否则按钮会一直卡到闸门超时。
+      tracker.undecide(sessionId, confirmId);
       setError(errorText(err));
     }
   }
@@ -1073,7 +1109,9 @@ export default function Home() {
     ...history
       .filter((m) => m.role === 'user' && m.content.trim() !== '')
       .map((m) => ({ id: m.id, text: m.content })),
-    ...(submittedGoal.trim() !== '' ? [{ id: 'pending', text: submittedGoal }] : []),
+    ...(showPendingTurn && submittedGoal.trim() !== ''
+      ? [{ id: 'pending', text: submittedGoal }]
+      : []),
   ];
 
   /** 导轨上只放首行摘要，完整问题由 title/aria-label 承载。 */
@@ -1483,7 +1521,7 @@ export default function Home() {
                     )}
                   </div>
                 )}
-                {(submittedGoal || submittedAttachments.length > 0) && (
+                {showPendingTurn && (submittedGoal || submittedAttachments.length > 0) && (
                   <div
                     className="wb-user-msg"
                     data-user-anchor={submittedGoal.trim() ? 'pending' : undefined}
