@@ -24,6 +24,7 @@ import type {
   AdminPlanDto,
   AdminPlanInput,
   AdminPlanPatch,
+  AdminQaCacheItemDto,
   AdminRunDetailDto,
   AdminRunTimelineDto,
   AdminSessionDetailDto,
@@ -139,6 +140,8 @@ export function adminErrorText(err: unknown): string {
     'admin_failed_409_task_snapshot_missing': '任务原始输入缺失，无法重试',
     'admin_failed_409_task_not_retryable': '任务当前状态不可重试',
     'admin_failed_404_run_not_found': '运行不存在或已被清理',
+    'admin_failed_503_cache_unavailable': '缓存服务不可用，请稍后重试',
+    'admin_failed_400_invalid_hash': '缓存条目标识不合法',
   };
   if (map[msg]) return map[msg];
   const failed = /^admin_failed_(\d{3})(?:_(.*))?$/.exec(msg);
@@ -413,6 +416,17 @@ export function updateAdminSetting(key: string, value: AdminSettingValue): Promi
 
 export function resetAdminSetting(key: string): Promise<void> {
   return request(`/api/admin/settings/${encodeURIComponent(key)}`, { method: 'DELETE' });
+}
+
+// ------------------------------------------------------------------ 问答缓存
+export function listAdminQaCache(
+  params: { page?: number; pageSize?: number } = {},
+): Promise<PageDto<AdminQaCacheItemDto>> {
+  return request(`/api/admin/qa-cache${query(params)}`);
+}
+
+export function deleteAdminQaCache(hash: string): Promise<void> {
+  return request(`/api/admin/qa-cache/${encodeURIComponent(hash)}`, { method: 'DELETE' });
 }
 
 export function listAdminAudit(

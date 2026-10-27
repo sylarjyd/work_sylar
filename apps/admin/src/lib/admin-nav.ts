@@ -47,6 +47,7 @@ export const ADMIN_NAV: AdminNavGroup[] = [
     items: [
       { href: '/models', label: '模型配置' },
       { href: '/settings', label: '参数配置' },
+      { href: '/qa-cache', label: '缓存管理' },
     ],
   },
   {
