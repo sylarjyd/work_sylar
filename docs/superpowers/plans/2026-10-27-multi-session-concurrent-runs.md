@@ -1323,6 +1323,45 @@ EOF
 
 （其余不变：切走时当前会话的运行条目留在 tracker，后台流继续消费。）
 
+- [ ] **Step 3b: 隔离后台会话的页面级副作用**
+
+后台会话的事件现在也会流经 `makeHandlers`，其中两处副作用是页面级的，必须按当前查看的会话过滤：
+
+```ts
+      onStep(ev) {
+        tracker.applyStep(id, ev);
+        // 产物区是页面级的：只为当前查看的会话乐观上屏，后台会话等切回后由快照/刷新补。
+        if (ev.type === 'artifact' && id === sessionIdRef.current) addOptimisticArtifact(ev);
+        syncRunMarker(id);
+      },
+```
+
+```ts
+      onError(message) {
+        // 错误提示是页面级的：后台会话的失败不弹到当前会话，条目自身已记为失败。
+        if (id === sessionIdRef.current) setError(message);
+        tracker.applyError(id);
+      },
+```
+
+纯附件轮没有正文，`pendingEchoed` 原先要求 `submittedGoal !== ''`，切回时会把同一轮附件连同历史再渲染一次。改成按「最后一条用户消息是否已包含全部提交附件」判断：
+
+```ts
+  // prepare 已把本轮提问落库：刷新或切回后历史里也有同一条，同一份提问只渲染一次（优先历史）。
+  // 纯附件轮没有正文，按附件 id 是否已全部出现在最后一条用户消息里判断。
+  const lastHistoryMsg = history[history.length - 1];
+  const pendingEchoed =
+    !!view &&
+    !view.terminal &&
+    lastHistoryMsg?.role === 'user' &&
+    (submittedGoal !== ''
+      ? lastHistoryMsg.content === submittedGoal
+      : submittedAttachments.length > 0 &&
+        submittedAttachments.every((a) =>
+          lastHistoryMsg.attachments.some((x) => x.id === a.id),
+        ));
+```
+
 - [ ] **Step 4: 去掉侧栏禁用**
 
 把 `<AppShell ...>` 里的：
