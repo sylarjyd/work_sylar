@@ -722,10 +722,14 @@ export default function Home() {
    */
   async function settleIntoTimeline(id: string) {
     if (id !== sessionIdRef.current) return;
+    const settledRunId = tracker.snapshot(id)?.runId ?? '';
     const req = ++historyReqRef.current;
     try {
       const list = await listSessionMessages(id);
       if (req !== historyReqRef.current || id !== sessionIdRef.current) return;
+      // 等待期间可能已经起了新的一轮：只交接仍然是同一 run 的终态条目。
+      const current = tracker.snapshot(id);
+      if (!current || !current.terminal || current.runId !== settledRunId) return;
       loadedHistoryRef.current = id;
       setHistory(list);
       stickToBottomRef.current = true;
@@ -742,6 +746,8 @@ export default function Home() {
       const target = sessions.find((s) => s.id === id);
       // 历史会话没有固化的模型：展示当前默认模型，实际运行由服务端按默认值解析。
       setSelectedModel(target?.model ?? defaultModel);
+      // 已终结的条目由落库历史接管；运行中的条目继续在后台消费。
+      dropFinishedEntry(id);
       setSessionId(id);
       resetConversation();
     } else if (needLoad) {
@@ -992,6 +998,8 @@ export default function Home() {
       }
       pendingRef.current = [];
       setPendingAttachments([]);
+      // 覆盖上一轮终态条目：先释放它的预览 URL，避免 object URL 泄漏。
+      if (tracker.snapshot(sid)?.terminal) releaseEntry(sid);
       // 新建的 run 在库里就是 queued，先按排队展示，等状态帧或首个步骤再切执行中。
       const st = tracker.begin(sid, currentGoal, submitted);
       syncRunMarker(sid);
@@ -1001,18 +1009,26 @@ export default function Home() {
         const detail = await res.text().catch(() => '');
         throw new Error(`stream_failed_${res.status}${detail ? `: ${detail}` : ''}`);
       }
-      await consumeRunStream(res, st, makeHandlers(sid, st));
+      // 流在读取阶段也可能抛错（网络中断）：先记录，再用游标重连一次补回断档。
+      let streamError: unknown = null;
+      try {
+        await consumeRunStream(res, st, makeHandlers(sid, st));
+      } catch (err) {
+        streamError = err;
+      }
       if (!st.terminal && st.runId) {
-        // 流在没有终态的情况下断开：用游标重连一次补回断档事件；
         // 取消也一样重连，终态帧丢失时由这次重连回放 status(canceled)+done 收尾。
         const retry = await streamRun(st.runId, st.lastSeq);
         if (!retry.ok) throw new Error(`stream_failed_${retry.status}`);
         setError('');
         await consumeRunStream(retry, st, makeHandlers(sid, st));
       }
+      // 重连已经拿到终态就不算失败；否则把最初的读取错误交给外层 catch。
+      if (streamError && !st.terminal) throw streamError;
       if (!st.terminal) {
         tracker.settle(sid, 'failed');
         syncRunMarker(sid);
+        void syncSessionTitle(sid);
         setError('连接已断开，可刷新恢复');
       }
     } catch (err) {
@@ -1025,9 +1041,17 @@ export default function Home() {
         // 起跑失败也要收尾，否则该会话输入框会一直只读。
         tracker.settle(sid, 'failed');
         syncRunMarker(sid);
+        void syncSessionTitle(sid);
       }
     } finally {
-      if (claimed) streamingRef.current.delete(sid);
+      if (claimed) {
+        // 任何未收尾的退出（如 401 跳转前）都本地收尾，避免条目永远只读。
+        if (!tracker.snapshot(sid)?.terminal) {
+          tracker.settle(sid, 'failed');
+          syncRunMarker(sid);
+        }
+        streamingRef.current.delete(sid);
+      }
     }
   }
 
