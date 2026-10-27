@@ -15,6 +15,7 @@ import type {
   UsageEvent,
 } from '@ai-office/shared';
 import { createRuntimeServer, filterTools, isLoopback, isValidResume } from './server';
+import { MockEmbeddingGateway } from './embedding/mock-embedding';
 import { createRuntimeMetrics } from './observability/metrics';
 import type { ModelGateway } from './model/types';
 import type { Storage } from './storage/s3';
@@ -52,7 +53,11 @@ let baseUrl: string;
 
 beforeAll(async () => {
   initTelemetry({ serviceName: 'agent-runtime-test', serviceVersion: '1' });
-  server = createRuntimeServer({ gateway: scripted, tools: [echo] });
+  server = createRuntimeServer({
+    gateway: scripted,
+    tools: [echo],
+    embedding: new MockEmbeddingGateway(1024),
+  });
   await new Promise<void>((r) => server.listen(0, r));
   const addr = server.address();
   if (!addr || typeof addr === 'string') throw new Error('no port');
