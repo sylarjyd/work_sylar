@@ -675,10 +675,11 @@ export class RunExecutor {
           ...(snapshot.assistant
             ? {
                 enabledTools: snapshot.assistant.enabledTools,
-                permissionMode: snapshot.assistant.permissionMode,
                 ...(snapshot.assistant.kbIds ? { kbIds: snapshot.assistant.kbIds } : {}),
               }
             : {}),
+          // Web 端不弹确认：除只读助手外，confirm 级工具默认放行（auto 模式）。
+          permissionMode: snapshot.assistant?.permissionMode === 'readonly' ? 'readonly' : 'auto',
         }),
         signal: abort.signal,
       });

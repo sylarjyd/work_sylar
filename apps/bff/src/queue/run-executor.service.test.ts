@@ -506,9 +506,12 @@ describe('RunExecutor', () => {
 
     const body = JSON.parse(String(deps.fetch.mock.calls[0]![1].body)) as {
       systemPrompt: string;
+      mode: string;
     };
     expect(body.systemPrompt.startsWith('你是写作助手')).toBe(true);
     expect(body.systemPrompt).toContain(SESSION_MODE_PROMPTS.code);
+    // runtime 依此在模型零产出时兜底落一份结果文件。
+    expect(body.mode).toBe('code');
   });
 
   it('未绑定助手时仍下发分类提示', async () => {
@@ -522,6 +525,28 @@ describe('RunExecutor', () => {
       systemPrompt: string;
     };
     expect(body.systemPrompt).toBe(SESSION_MODE_PROMPTS.chat);
+  });
+
+  it('web 端默认执行：confirm 级工具不再等确认，只读助手仍保持只读', async () => {
+    const { executor, deps } = makeExecutor();
+    deps.fetch.mockImplementation(async () =>
+      sseResponse([{ event: 'done', data: { runId: 'r1' } }]),
+    );
+
+    const modes: Array<{ assistant: RunSnapshot['assistant'] }> = [
+      { assistant: null },
+      { assistant: { permissionMode: 'standard' } },
+      { assistant: { permissionMode: 'readonly' } },
+    ];
+    for (const { assistant } of modes) {
+      deps.tasks.loadSnapshot.mockResolvedValue({ ...snapshot(), assistant });
+      await executor.execute(job());
+    }
+
+    const sent = deps.fetch.mock.calls.map(
+      (call) => JSON.parse(String(call[1]!.body)) as { permissionMode: string },
+    );
+    expect(sent.map((b) => b.permissionMode)).toEqual(['auto', 'auto', 'readonly']);
   });
 
   it('快照路由解密失败时释放预占、标记 failed 且不请求上游', async () => {
