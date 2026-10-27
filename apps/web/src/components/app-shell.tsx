@@ -67,7 +67,6 @@ interface AppShellProps {
   sessionId?: string;
   onSelectSession?: (id: string) => void;
   onNewSession?: () => void;
-  sessionDisabled?: boolean;
   /** 工作台自行维护会话列表，改名/置顶与删除交给它更新状态；其它页面由外壳兜底。 */
   onUpdateSession?: (id: string, patch: UpdateSessionRequest) => Promise<void>;
   onDeleteSession?: (id: string) => Promise<void>;
@@ -99,7 +98,6 @@ export function AppShell({
   sessionId,
   onSelectSession,
   onNewSession,
-  sessionDisabled,
   onUpdateSession,
   onDeleteSession,
 }: AppShellProps) {
@@ -468,7 +466,6 @@ export function AppShell({
             type="button"
             className="wb-new-task"
             onClick={onNewSession}
-            disabled={sessionDisabled}
             aria-label="新建任务"
             title="新建任务"
           >
@@ -512,7 +509,6 @@ export function AppShell({
                       className="wb-session"
                       aria-current={s.id === sessionId ? 'true' : undefined}
                       onClick={() => selectSession(s.id)}
-                      disabled={sessionDisabled}
                       title={s.title}
                     >
                       {s.pinned && (
@@ -521,7 +517,21 @@ export function AppShell({
                         </span>
                       )}
                       <span className="wb-session-title">{s.title}</span>
-                      <span className="wb-session-time">{relativeTime(s.createdAt)}</span>
+                      <span
+                        className={`wb-session-time${s.activeRun ? ' wb-session-running' : ''}`}
+                      >
+                        {s.activeRun && (
+                          <span
+                            className={`wb-session-dot is-${s.activeRun.status}`}
+                            aria-hidden="true"
+                          />
+                        )}
+                        {s.activeRun
+                          ? s.activeRun.status === 'queued'
+                            ? '排队中'
+                            : '运行中'
+                          : relativeTime(s.createdAt)}
+                      </span>
                     </button>
                     <Dropdown
                       trigger={['click']}

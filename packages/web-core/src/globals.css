@@ -2820,6 +2820,39 @@ a {
   color: var(--wb-ink-2);
 }
 
+.wb-session-time.wb-session-running {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--mint-strong);
+}
+
+.wb-session-dot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.wb-session-dot.is-queued {
+  opacity: 0.55;
+}
+
+.wb-session-dot.is-running {
+  animation: wb-session-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes wb-session-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
 .wb-side-empty {
   padding: 8px 10px;
   font-size: 12px;
