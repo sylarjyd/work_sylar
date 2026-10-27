@@ -492,7 +492,7 @@ CREATE TABLE "UserMemory" (
 CREATE UNIQUE INDEX "UserMemory_tenantId_userId_hash_key" ON "UserMemory"("tenantId", "userId", "hash");
 
 -- CreateIndex
-CREATE INDEX "UserMemory_tenantId_userId_createdAt_idx" ON "UserMemory"("tenantId", "userId", "createdAt" DESC);
+CREATE INDEX "UserMemory_tenantId_userId_createdAt_idx" ON "UserMemory"("tenantId", "userId", "createdAt");
 ```
 
 在文件末尾的 pgvector 索引段（`CREATE INDEX "kb_chunk_vec_idx" ...` 之后）追加：

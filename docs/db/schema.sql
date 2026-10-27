@@ -253,7 +253,7 @@ CREATE TABLE "UserMemory" (
 CREATE UNIQUE INDEX "UserMemory_tenantId_userId_hash_key" ON "UserMemory"("tenantId", "userId", "hash");
 
 -- CreateIndex
-CREATE INDEX "UserMemory_tenantId_userId_createdAt_idx" ON "UserMemory"("tenantId", "userId", "createdAt" DESC);
+CREATE INDEX "UserMemory_tenantId_userId_createdAt_idx" ON "UserMemory"("tenantId", "userId", "createdAt");
 
 -- CreateTable
 CREATE TABLE "Connector" (
