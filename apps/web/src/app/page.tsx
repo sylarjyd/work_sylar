@@ -480,13 +480,18 @@ export default function Home() {
         : 'running'
     : null;
   // prepare 已把本轮提问落库：刷新或切回后历史里也有同一条，同一份提问只渲染一次（优先历史）。
+  // 纯附件轮没有正文，按附件 id 是否已全部出现在最后一条用户消息里判断。
   const lastHistoryMsg = history[history.length - 1];
   const pendingEchoed =
     !!view &&
     !view.terminal &&
-    submittedGoal !== '' &&
     lastHistoryMsg?.role === 'user' &&
-    lastHistoryMsg.content === submittedGoal;
+    (submittedGoal !== ''
+      ? lastHistoryMsg.content === submittedGoal
+      : submittedAttachments.length > 0 &&
+        submittedAttachments.every((a) =>
+          lastHistoryMsg.attachments.some((x) => x.id === a.id),
+        ));
   const showPendingTurn = !!view && !pendingEchoed;
 
   useEffect(() => {
@@ -590,6 +595,8 @@ export default function Home() {
         setSessionId(pick.id);
         if (pick.model) setSelectedModel(pick.model);
         void loadHistory(pick.id);
+        // 刷新前就在跑的会话：relay 会回放已落库步骤并接续实时事件。
+        if (pick.activeRun) void attachRun(pick.id, pick.activeRun.id);
       }
     } catch (err) {
       if (isUnauthorized(err)) {
@@ -740,7 +747,6 @@ export default function Home() {
   }
 
   function handleSelect(id: string) {
-    if (running) return;
     const needLoad = loadedHistoryRef.current !== id;
     if (id !== sessionId) {
       const target = sessions.find((s) => s.id === id);
@@ -750,11 +756,16 @@ export default function Home() {
       dropFinishedEntry(id);
       setSessionId(id);
       resetConversation();
-    } else if (needLoad) {
+      if (needLoad) void loadHistory(id);
+      // 刷新、断线或别的标签页发起的运行：按 activeRun 回放挂回。
+      void ensureAttached(id);
+      return;
+    }
+    if (needLoad) {
       // 同一会话回看：落库历史接管已结束的那一轮，避免同一轮展示两次。
       dropFinishedEntry(id);
+      void loadHistory(id);
     }
-    if (needLoad) void loadHistory(id);
   }
 
   function markUserScroll() {
@@ -762,7 +773,6 @@ export default function Home() {
   }
 
   function handleNewSession() {
-    if (running) return;
     // 新任务先清成草稿：真正建会话推迟到首次发送，才能把用户选的模型/助手写进会话。
     // 同时去掉 ?session=，避免刷新后又跳回刚离开的会话。
     window.history.replaceState(null, '', '/');
@@ -894,7 +904,8 @@ export default function Home() {
     return {
       onStep(ev) {
         tracker.applyStep(id, ev);
-        if (ev.type === 'artifact') addOptimisticArtifact(ev);
+        // 产物区是页面级的：只为当前查看的会话乐观上屏，后台会话等切回后由快照/刷新补。
+        if (ev.type === 'artifact' && id === sessionIdRef.current) addOptimisticArtifact(ev);
         syncRunMarker(id);
       },
       onStatus(status, position) {
@@ -906,7 +917,8 @@ export default function Home() {
         tracker.applyDone(id, status);
       },
       onError(message) {
-        setError(message);
+        // 错误提示是页面级的：后台会话的失败不弹到当前会话，条目自身已记为失败。
+        if (id === sessionIdRef.current) setError(message);
         tracker.applyError(id);
       },
       onTerminal() {
@@ -1053,6 +1065,46 @@ export default function Home() {
         streamingRef.current.delete(sid);
       }
     }
+  }
+
+  /**
+   * 按 runId 从头回放并接续。页面刷新、切到由其他标签页发起的运行、
+   * 断线后重新选中会话都走这一条路径。
+   */
+  async function attachRun(id: string, runIdToAttach: string) {
+    // 已有在途条目（运行中或正在写流）就不要再挂一条；终态条目可以换成后端报的新 run。
+    const existing = tracker.snapshot(id);
+    if (streamingRef.current.has(id) || (existing && !existing.terminal)) return;
+    streamingRef.current.add(id);
+    const st = tracker.attach(id, runIdToAttach, -1);
+    try {
+      const res = await streamRun(runIdToAttach, -1);
+      if (!res.ok) throw new Error(`stream_failed_${res.status}`);
+      await consumeRunStream(res, st, makeHandlers(id, st));
+      if (!st.terminal) {
+        // relay 对终态 run 会回放终态帧；没有终态说明连上了但流提前结束。
+        tracker.settle(id, 'failed');
+        syncRunMarker(id);
+      }
+    } catch (err) {
+      if (isUnauthorized(err)) {
+        router.push('/login');
+        return;
+      }
+      tracker.settle(id, 'failed');
+      syncRunMarker(id);
+      setError('连接已断开，可刷新恢复');
+    } finally {
+      streamingRef.current.delete(id);
+    }
+  }
+
+  /** 本地没有在途流、但后端说该会话还在跑：按 activeRun 挂回。 */
+  async function ensureAttached(id: string) {
+    const existing = tracker.snapshot(id);
+    if (streamingRef.current.has(id) || (existing && !existing.terminal)) return;
+    const active = sessionsRef.current.find((s) => s.id === id)?.activeRun;
+    if (active) await attachRun(id, active.id);
   }
 
   async function stopRun() {
@@ -1414,7 +1466,6 @@ export default function Home() {
       sessionId={sessionId}
       onSelectSession={handleSelect}
       onNewSession={() => void handleNewSession()}
-      sessionDisabled={running}
       onUpdateSession={handleUpdateSession}
       onDeleteSession={handleDeleteSession}
     >
