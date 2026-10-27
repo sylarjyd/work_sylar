@@ -60,6 +60,15 @@ export function withCacheTimeout<T>(work: Promise<T>): Promise<T> {
   });
 }
 
+/** MULTI 的单命令错误在 exec 结果里返回而不会 reject，这里统一转成异常。 */
+async function execMulti(pipeline: { exec(): Promise<unknown> }): Promise<void> {
+  const results = await withCacheTimeout(pipeline.exec());
+  if (!Array.isArray(results)) return;
+  for (const item of results) {
+    if (Array.isArray(item) && item[0] instanceof Error) throw item[0];
+  }
+}
+
 function parseEntry(raw: string): QaCacheEntry | null {
   let data: unknown;
   try {
@@ -102,7 +111,7 @@ export class QaCacheService {
   constructor(@Optional() @Inject(RUN_REDIS) private readonly redis: Redis | null) {}
 
   get available(): boolean {
-    return this.redis !== null;
+    return Boolean(this.redis);
   }
 
   /** 命中返回条目；未命中、已过期、属主不符或数据损坏都返回 null。 */
@@ -157,12 +166,11 @@ export class QaCacheService {
       expiresAt: now + params.ttlSeconds * 1000,
     };
     const hash = qaCacheHash(params.userId, params.sessionId, question);
-    await withCacheTimeout(
+    await execMulti(
       redis
         .multi()
         .set(entryKey(hash), JSON.stringify(entry), 'EX', params.ttlSeconds)
-        .zadd(QA_CACHE_INDEX_KEY, entry.expiresAt, hash)
-        .exec(),
+        .zadd(QA_CACHE_INDEX_KEY, entry.expiresAt, hash),
     );
   }
 
@@ -178,9 +186,7 @@ export class QaCacheService {
   async remove(hash: string): Promise<void> {
     const redis = this.redis;
     if (!redis) throw new ServiceUnavailableException('cache_unavailable');
-    await withCacheTimeout(
-      redis.multi().del(entryKey(hash)).zrem(QA_CACHE_INDEX_KEY, hash).exec(),
-    );
+    await execMulti(redis.multi().del(entryKey(hash)).zrem(QA_CACHE_INDEX_KEY, hash));
   }
 
   /** 运营端未过期条目分页：索引按过期时间升序，条目已过期但索引残留时顺手清理。 */
@@ -226,7 +232,7 @@ export class QaCacheService {
       const pipeline = redis.multi();
       for (const hash of list) pipeline.del(entryKey(hash));
       pipeline.zrem(QA_CACHE_INDEX_KEY, ...list);
-      await withCacheTimeout(pipeline.exec());
+      await execMulti(pipeline);
     } catch (err) {
       this.logger.warn(`清理问答缓存失败: ${(err as Error).message}`);
     }

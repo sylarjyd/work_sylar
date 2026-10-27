@@ -1,6 +1,6 @@
 import 'reflect-metadata';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { ServiceUnavailableException } from '@nestjs/common';
+import { Logger, ServiceUnavailableException } from '@nestjs/common';
 import type { Redis } from 'ioredis';
 import {
   normalizeQuestion,
@@ -14,7 +14,7 @@ interface FakeMulti {
   set(key: string, value: string, mode: 'EX', ttl: number): FakeMulti;
   zadd(key: string, score: number, member: string): FakeMulti;
   del(key: string): FakeMulti;
-  zrem(key: string, member: string): FakeMulti;
+  zrem(key: string, ...members: string[]): FakeMulti;
   exec(): Promise<unknown[]>;
 }
 
@@ -59,8 +59,10 @@ function makeFakeRedis() {
         });
         return builder;
       },
-      zrem(_key, member) {
-        queued.push(() => void zindex().delete(member));
+      zrem(_key, ...members) {
+        queued.push(() => {
+          for (const member of members) zindex().delete(member);
+        });
         return builder;
       },
       async exec() {
@@ -250,8 +252,8 @@ describe('QaCacheService', () => {
     const h1 = qaCacheHash('u1', 's1', '问题一');
     const h2 = qaCacheHash('u1', 's1', '问题二');
     const h3 = qaCacheHash('u1', 's1', '问题三');
-    seedEntry(fake, h1, now + 3_000, { answer: '答案一' });
-    seedEntry(fake, h2, now + 1_000, { answer: '答案二' });
+    seedEntry(fake, h1, now + 180_000, { answer: '答案一' });
+    seedEntry(fake, h2, now + 60_000, { answer: '答案二' });
     seedEntry(fake, h3, now - 1_000, { answer: '已过期' });
 
     const first = await svc.list({ offset: 0, limit: 2 });
@@ -317,5 +319,55 @@ describe('QaCacheService', () => {
     );
     await expect(svc.get('a'.repeat(64))).rejects.toBeInstanceOf(ServiceUnavailableException);
     await expect(svc.remove('a'.repeat(64))).rejects.toBeInstanceOf(ServiceUnavailableException);
+  });
+
+  it('缓存命令超时后按失败返回，不会无限挂起', async () => {
+    vi.useFakeTimers();
+    try {
+      const svc = new QaCacheService({
+        get: () => new Promise<string | null>(() => {}),
+      } as unknown as Redis);
+      let caught: unknown;
+      const running = svc
+        .lookup({ userId: 'u1', sessionId: 's1', question: '问题' })
+        .catch((err) => {
+          caught = err;
+        });
+      await vi.advanceTimersByTimeAsync(300);
+      await running;
+      expect(caught).toBeInstanceOf(Error);
+      expect((caught as Error).message).toBe('cache_timeout');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('清理残留索引失败时列表仍返回有效条目', async () => {
+    const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    const { svc, fake } = makeService();
+    const now = Date.now();
+    const aliveHash = qaCacheHash('u1', 's1', '存活');
+    const stale = qaCacheHash('u1', 's1', '残留');
+    seedEntry(fake, aliveHash, now + 180_000);
+    seedEntry(fake, stale, now + 180_000);
+    fake.strings.delete(`qa:cache:entry:${stale}`);
+
+    interface FailingMulti {
+      del(): FailingMulti;
+      zrem(): FailingMulti;
+      exec(): Promise<unknown[]>;
+    }
+    const failing: FailingMulti = {
+      del: () => failing,
+      zrem: () => failing,
+      exec: async () => [[new Error('boom'), null]],
+    };
+    fake.redis.multi = (() => failing) as unknown as typeof fake.redis.multi;
+
+    const result = await svc.list({ offset: 0, limit: 10 });
+
+    expect(result.items.map((item) => item.hash)).toEqual([aliveHash]);
+    expect(fake.zindex().has(stale)).toBe(true);
+    expect(warn.mock.calls.some(([msg]) => String(msg).includes('清理问答缓存失败'))).toBe(true);
   });
 });
