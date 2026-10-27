@@ -1362,6 +1362,54 @@ EOF
         ));
 ```
 
+- [ ] **Step 3c: 收尾与横幅的会话边界**
+
+`attachRun` 的 401 分支原先直接跳转，条目留在非终态：导航被取消时该会话永久只读，且 `ensureAttached` 不会再重试。改为先收尾再跳转，并只给当前会话弹断线提示：
+
+```ts
+    } catch (err) {
+      // 先收尾再跳转：导航被取消时也不能留下永久只读的在途条目。
+      tracker.settle(id, 'failed');
+      syncRunMarker(id);
+      if (isUnauthorized(err)) {
+        router.push('/login');
+        return;
+      }
+      // 后台会话的失败不弹到当前会话的错误横幅。
+      if (id === sessionIdRef.current) setError('连接已断开，可刷新恢复');
+    } finally {
+```
+
+`run()` 里的错误横幅同样只在当前会话展示（`setError('')` 的重连清屏也一样）：
+
+```ts
+        if (sid === sessionIdRef.current) setError('');
+```
+```ts
+        if (sid === sessionIdRef.current) setError('连接已断开，可刷新恢复');
+```
+```ts
+      if (sid === sessionIdRef.current) setError(errorText(err));
+```
+
+`onTerminal` 对后台会话立即释放条目（终态条目切回时本就由落库历史接管，留着只会占内存与 object URL）：
+
+```ts
+      onTerminal() {
+        tracker.applyTerminal(id);
+        syncRunMarker(id);
+        // 自动命名按会话 id 更新侧栏，后台会话结束也要补。
+        void syncSessionTitle(id);
+        // 后台会话的终态由落库历史接管：条目与预览对象立即释放，避免长期占用内存。
+        if (id !== sessionIdRef.current) {
+          releaseEntry(id);
+          return;
+        }
+        void refreshArtifacts(id);
+        if (tracker.snapshot(id)?.finalStatus === 'done') void settleIntoTimeline(id);
+      },
+```
+
 - [ ] **Step 4: 去掉侧栏禁用**
 
 把 `<AppShell ...>` 里的：
