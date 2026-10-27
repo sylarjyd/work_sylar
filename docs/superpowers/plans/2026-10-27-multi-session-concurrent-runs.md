@@ -525,7 +525,7 @@ export class RunTracker {
         terminal: false,
         finalStatus: null,
         goal,
-        attachments,
+        attachments: attachments.slice(),
       },
     });
     this.notify();
@@ -538,7 +538,9 @@ export class RunTracker {
    */
   attach(sessionId: string, runId: string, afterSeq = -1): RunStreamState {
     const existing = this.runs.get(sessionId);
-    if (existing && existing.stream.runId === runId) return existing.stream;
+    if (existing && existing.stream.runId === runId && !existing.entry.terminal) {
+      return existing.stream;
+    }
     const stream = createRunStreamState();
     stream.runId = runId;
     stream.lastSeq = afterSeq;
@@ -583,12 +585,19 @@ export class RunTracker {
     this.notify();
   }
 
-  applyStatus(sessionId: string, status: RunStatus, position: number | null): void {
+  applyStatus(
+    sessionId: string,
+    status: RunStatus,
+    position: number | null,
+    runId = '',
+  ): void {
     const run = this.runs.get(sessionId);
     if (!run || run.entry.terminal) return;
     const { entry } = run;
+    // status 帧同样携带 runId：排队期间也要能停止、能在侧栏显示标记。
+    if (runId) entry.runId = runId;
     if (status === 'queued') {
-      entry.status = 'queued';
+      if (entry.status !== 'stopping') entry.status = 'queued';
       entry.queuePosition = position;
     } else if (status === 'running') {
       // 取消请求已发出时保持 stopping，等终态帧收尾。
@@ -637,7 +646,7 @@ export class RunTracker {
     const run = this.runs.get(sessionId);
     if (!run || run.entry.terminal) return;
     run.entry.terminal = true;
-    run.entry.finalStatus = status;
+    run.entry.finalStatus ??= status;
     run.entry.liveText = '';
     this.notify();
   }
@@ -665,7 +674,7 @@ export class RunTracker {
 
   undecide(sessionId: string, confirmId: string): void {
     const run = this.runs.get(sessionId);
-    if (!run || !(confirmId in run.entry.decisions)) return;
+    if (!run || !Object.prototype.hasOwnProperty.call(run.entry.decisions, confirmId)) return;
     const next = { ...run.entry.decisions };
     delete next[confirmId];
     run.entry.decisions = next;
@@ -738,7 +747,11 @@ import {
 改为：
 
 ```ts
-import { consumeRunStream, type RunStreamHandlers } from '../lib/run-stream';
+import {
+  consumeRunStream,
+  type RunStreamHandlers,
+  type RunStreamState,
+} from '../lib/run-stream';
 import { RunTracker, type RunAttachment } from '../lib/run-tracker';
 ```
 
@@ -941,7 +954,7 @@ const NO_DECISIONS: Record<string, boolean> = {};
   /**
    * 流事件统一走 tracker：初连、重连、挂回共用同一套处理，页面只有一份折叠逻辑。
    */
-  function makeHandlers(id: string): RunStreamHandlers {
+  function makeHandlers(id: string, st: RunStreamState): RunStreamHandlers {
     return {
       onStep(ev) {
         tracker.applyStep(id, ev);
@@ -949,7 +962,8 @@ const NO_DECISIONS: Record<string, boolean> = {};
         syncRunMarker(id);
       },
       onStatus(status, position) {
-        tracker.applyStatus(id, status, position);
+        // status 帧先写入 st.runId，再交给 tracker：排队期也有 runId 可停止、可标记。
+        tracker.applyStatus(id, status, position, st.runId);
         syncRunMarker(id);
       },
       onDone(status) {
@@ -1057,14 +1071,14 @@ const NO_DECISIONS: Record<string, boolean> = {};
         const detail = await res.text().catch(() => '');
         throw new Error(`stream_failed_${res.status}${detail ? `: ${detail}` : ''}`);
       }
-      await consumeRunStream(res, st, makeHandlers(sid));
+      await consumeRunStream(res, st, makeHandlers(sid, st));
       if (!st.terminal && st.runId) {
         // 流在没有终态的情况下断开：用游标重连一次补回断档事件；
         // 取消也一样重连，终态帧丢失时由这次重连回放 status(canceled)+done 收尾。
         const retry = await streamRun(st.runId, st.lastSeq);
         if (!retry.ok) throw new Error(`stream_failed_${retry.status}`);
         setError('');
-        await consumeRunStream(retry, st, makeHandlers(sid));
+        await consumeRunStream(retry, st, makeHandlers(sid, st));
       }
       if (!st.terminal) {
         tracker.settle(sid, 'failed');
@@ -1214,7 +1228,7 @@ EOF
     try {
       const res = await streamRun(runIdToAttach, -1);
       if (!res.ok) throw new Error(`stream_failed_${res.status}`);
-      await consumeRunStream(res, st, makeHandlers(id));
+      await consumeRunStream(res, st, makeHandlers(id, st));
       if (!st.terminal) {
         // relay 对终态 run 会回放终态帧；没有终态说明连上了但流提前结束。
         tracker.settle(id, 'failed');
