@@ -491,10 +491,13 @@ describe('SessionsService 软删除', () => {
 
 describe('SessionsService 运行标记', () => {
   const RUNS = [
+    // s1：排队在运行之前，覆盖「先写入者获胜」的回归。
     { id: 'r-queued', status: 'queued', startedAt: null, sessionId: 's1' },
     { id: 'r-running', status: 'running', startedAt: new Date('2026-01-03T00:00:00Z'), sessionId: 's1' },
-    { id: 'r-other', status: 'queued', startedAt: null, sessionId: 's3' },
-    { id: 'r-done', status: 'done', startedAt: new Date('2026-01-03T00:00:01Z'), sessionId: 's3' },
+    // s3：运行在排队之前，覆盖「后写入者获胜」的回归；done 行应被过滤。
+    { id: 'r-other-running', status: 'running', startedAt: new Date('2026-01-03T00:00:01Z'), sessionId: 's3' },
+    { id: 'r-other', status: 'queued', startedAt: new Date('2026-01-03T00:00:02Z'), sessionId: 's3' },
+    { id: 'r-done', status: 'done', startedAt: new Date('2026-01-03T00:00:03Z'), sessionId: 's3' },
   ];
 
   it('list 按会话回填活跃运行，同一会话运行中优先', async () => {
@@ -502,7 +505,18 @@ describe('SessionsService 运行标记', () => {
     const page = await svc.list('t1', 'u1');
     expect(page.items.map((s) => [s.id, s.activeRun])).toEqual([
       ['s1', { id: 'r-running', status: 'running' }],
-      ['s3', { id: 'r-other', status: 'queued' }],
+      ['s3', { id: 'r-other-running', status: 'running' }],
+    ]);
+  });
+
+  it('只有排队中的运行时回填 queued', async () => {
+    const { svc } = makeService(['m1'], 'm1', [ASSISTANT], all, [], [
+      { id: 'r-q', status: 'queued', startedAt: null, sessionId: 's3' },
+    ]);
+    const page = await svc.list('t1', 'u1');
+    expect(page.items.map((s) => [s.id, s.activeRun])).toEqual([
+      ['s1', null],
+      ['s3', { id: 'r-q', status: 'queued' }],
     ]);
   });
 
