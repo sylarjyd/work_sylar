@@ -177,6 +177,8 @@ export interface RunRequest {
   kbIds?: string[];
   /** 断点续跑：由 BFF 从 RunCheckpoint 读出后下发。 */
   resume?: RunResume;
+  /** 任务分类：办公/开发模式在没有任何产出物时由 runtime 兜底落一份结果文件。 */
+  mode?: SessionMode;
 }
 
 export interface RegisterRequest {
@@ -201,7 +203,7 @@ export interface AuthResponse {
   user: AuthUser;
 }
 
-/** 任务分类：决定运行时的行为取向（对话直答 / 多步任务 / 编码）。 */
+/** 任务分类：决定运行时的行为取向（对话直答 / 办公多步任务 / 开发编码）。 */
 export const SESSION_MODES = ['chat', 'task', 'code'] as const;
 export type SessionMode = (typeof SESSION_MODES)[number];
 
@@ -211,8 +213,8 @@ export function isSessionMode(v: unknown): v is SessionMode {
 
 export const SESSION_MODE_LABELS: Record<SessionMode, string> = {
   chat: '对话',
-  task: '任务',
-  code: '编码',
+  task: '办公',
+  code: '开发',
 };
 
 export interface CreateSessionRequest {
@@ -270,7 +272,11 @@ export interface CreateTaskRequest {
   attachmentIds?: string[];
 }
 
-export type ArtifactKind = 'docx' | 'xlsx' | 'pptx';
+/**
+ * 成果类型：docx/xlsx/pptx 为结构化文档；text 为代码、Markdown、CSV 等文本文件，
+ * 具体格式由 filename 的扩展名决定，下载时按纯文本返回。
+ */
+export type ArtifactKind = 'docx' | 'xlsx' | 'pptx' | 'text';
 
 /** 工具产出物的引用；`artifact` step 的 payload 即此类型。 */
 export interface ArtifactRef {

@@ -11,7 +11,18 @@ export type SseEventName = (typeof SSE_EVENT_NAMES)[number];
 /** 任务/运行的排队与执行状态；以 string 落库，DTO 层收窄为该联合类型。 */
 export type RunStatus = 'queued' | 'running' | 'done' | 'failed' | 'canceled';
 
-export type StepType = 'think' | 'tool_call' | 'tool_result' | 'artifact' | 'confirm_request' | 'notice';
+/**
+ * assistant_delta 是模型正文的增量片段：只用于实时渲染，不落库，
+ * 最终仍由一条完整的 think 事件承载整段回答（历史与重连都以它为准）。
+ */
+export type StepType =
+  | 'think'
+  | 'assistant_delta'
+  | 'tool_call'
+  | 'tool_result'
+  | 'artifact'
+  | 'confirm_request'
+  | 'notice';
 
 /** 排队/执行状态变更（非 Step，不入库）。 */
 export interface RunStatusEvent {

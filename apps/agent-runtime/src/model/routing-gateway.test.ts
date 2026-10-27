@@ -114,4 +114,29 @@ describe('RoutingGateway', () => {
       gw.chat({ ...req, models: ['text-only', 'vision'], requiredModalities: ['text', 'audio'] }),
     ).rejects.toThrow('model_modality_unsupported');
   });
+
+  it('已经输出增量后失败不再切换模型，避免两段回答拼接', async () => {
+    let bCalled = false;
+    const a: ModelGateway = {
+      async chat(_request, opts) {
+        opts?.onDelta?.('半截', 'a');
+        throw new ModelHttpError(500, 'a');
+      },
+    };
+    const b: ModelGateway = {
+      async chat() {
+        bCalled = true;
+        return ok('b');
+      },
+    };
+    const gw = new RoutingGateway([
+      { model: 'a', gateway: a },
+      { model: 'b', gateway: b },
+    ]);
+
+    await expect(
+      gw.chat({ ...req, models: ['a', 'b'] }, { onDelta: () => undefined }),
+    ).rejects.toBeInstanceOf(ModelHttpError);
+    expect(bCalled).toBe(false);
+  });
 });

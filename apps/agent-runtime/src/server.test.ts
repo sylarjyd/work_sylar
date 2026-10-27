@@ -17,6 +17,7 @@ import type {
 import { createRuntimeServer, filterTools, isLoopback, isValidResume } from './server';
 import { createRuntimeMetrics } from './observability/metrics';
 import type { ModelGateway } from './model/types';
+import type { Storage } from './storage/s3';
 import type { Tool } from './tools/types';
 
 // 测试不校验日志输出；保持 stdout 干净。
@@ -1001,6 +1002,117 @@ describe('run 级模型路由', () => {
     } finally {
       await new Promise<void>((r) => modelServer.close(() => r()));
     }
+  });
+});
+
+describe('任务/编码模式的兜底成果文件', () => {
+  const answer = '# 上传接口实现\n\n已完成 UploadController。';
+
+  async function runWithMode(mode: string, gateway: ModelGateway, tools: Tool[] = []) {
+    const puts: { key: string; body: Buffer; contentType: string }[] = [];
+    const storage: Storage = {
+      ensureBucket: async () => {},
+      putObject: async (key, body, contentType) => {
+        puts.push({ key, body, contentType });
+      },
+      getObjectStream: async () => {
+        throw new Error('unused');
+      },
+    };
+    const server = createRuntimeServer({ gateway, tools, storage });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
+    try {
+      const addr = server.address();
+      if (!addr || typeof addr === 'string') throw new Error('no port');
+      const res = await fetch(`http://127.0.0.1:${addr.port}/runs`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          runId: 'r-fb',
+          sessionId: 's1',
+          tenantId: 't1',
+          userId: 'u1',
+          goal: 'g',
+          messages: [{ role: 'user', content: 'g' }],
+          mode,
+        }),
+      });
+      const messages = decodeSseFrames(await res.text());
+      const artifacts = messages
+        .filter((m) => m.event === 'step')
+        .map((m) => m.data as AgentEvent)
+        .filter((ev) => ev.type === 'artifact');
+      return { artifacts, puts };
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  }
+
+  const plainGateway: ModelGateway = {
+    async chat() {
+      return { content: answer, toolCalls: [], usage: { input: 1, output: 1 }, model: 'mock' };
+    },
+  };
+
+  it('任务模式没有任何产出时，把最终回答兜底保存为 任务结果.md', async () => {
+    const { artifacts, puts } = await runWithMode('task', plainGateway);
+    expect(artifacts).toHaveLength(1);
+    expect(artifacts[0].payload).toMatchObject({ kind: 'text', filename: '任务结果.md' });
+    expect(puts).toHaveLength(1);
+    expect(puts[0].key).toMatch(/^artifacts\/t1\/r-fb\/[0-9a-f-]{36}-任务结果\.md$/);
+    expect(puts[0].contentType).toBe('text/plain; charset=utf-8');
+    expect(puts[0].body.toString('utf8')).toBe(answer);
+  });
+
+  it('编码模式兜底文件名为 代码结果.md', async () => {
+    const { artifacts } = await runWithMode('code', plainGateway);
+    expect(artifacts).toHaveLength(1);
+    expect(artifacts[0].payload).toMatchObject({ kind: 'text', filename: '代码结果.md' });
+  });
+
+  it('对话模式不强制产出成果文件', async () => {
+    const { artifacts, puts } = await runWithMode('chat', plainGateway);
+    expect(artifacts).toEqual([]);
+    expect(puts).toEqual([]);
+  });
+
+  it('模型已经产出成果文件时不再追加兜底文件', async () => {
+    const fileTool: Tool = {
+      name: 'file.write',
+      description: 'd',
+      parameters: {},
+      permission: 'safe',
+      async execute() {
+        return {
+          artifact: {
+            kind: 'text',
+            filename: 'UploadController.java',
+            storageKey: 'artifacts/t1/r-fb/x-UploadController.java',
+            size: 10,
+          },
+        };
+      },
+    };
+    let round = 0;
+    const toolGateway: ModelGateway = {
+      async chat() {
+        round++;
+        if (round === 1) {
+          return {
+            content: '写文件',
+            toolCalls: [{ id: 'c1', name: 'file.write', args: {} }],
+            usage: { input: 1, output: 1 },
+            model: 'mock',
+          };
+        }
+        return { content: '完成', toolCalls: [], usage: { input: 1, output: 1 }, model: 'mock' };
+      },
+    };
+    const { artifacts, puts } = await runWithMode('task', toolGateway, [fileTool]);
+    expect(artifacts).toHaveLength(1);
+    expect(artifacts[0].payload).toMatchObject({ filename: 'UploadController.java' });
+    // 兜底路径不会再写第二份对象。
+    expect(puts).toEqual([]);
   });
 });
 

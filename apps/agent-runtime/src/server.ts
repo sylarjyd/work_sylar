@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import { context, SpanKind, trace } from '@opentelemetry/api';
 import type { Logger } from 'pino';
 import { encodeSse } from '@ai-office/shared';
-import type { RunRequest, RunResume } from '@ai-office/shared';
+import type { AgentEvent, RunRequest, RunResume } from '@ai-office/shared';
 import {
   createLogger,
   endSpan,
@@ -21,6 +21,7 @@ import { resolveRunConfig } from './run-config';
 import { createGateway, createGatewayFromRoutes } from './model/create-gateway';
 import type { ModelGateway } from './model/types';
 import { createTools } from './tools/registry';
+import { emit } from './tools/doc';
 import type { Tool } from './tools/types';
 import { ConfirmBroker } from './confirm/broker';
 import { loadRootEnv } from './load-env';
@@ -262,6 +263,9 @@ export function createRuntimeServer(deps: RuntimeDeps = {}): Server {
                   // 本次运行优先使用 BFF 下发的厂商路由；缺省沿用启动网关。
                   const runGateway =
                     createGatewayFromRoutes(runReq.modelRoutes, observer) ?? gateway;
+                  let sawArtifact = false;
+                  let finalText = '';
+                  let lastSeq = -1;
                   for await (const ev of runAgent(runReq, {
                     gateway: runGateway,
                     tools: runTools,
@@ -281,7 +285,25 @@ export function createRuntimeServer(deps: RuntimeDeps = {}): Server {
                       }
                     },
                   })) {
+                    if (ev.type === 'artifact') sawArtifact = true;
+                    if (ev.type === 'think') finalText = String(ev.payload.text ?? '');
+                    lastSeq = ev.seq;
                     res.write(encodeSse({ event: 'step', data: ev }));
+                  }
+                  // 任务/编码模式的成果区不允许为空：模型一个文件都没产出时，
+                  // 把最终回答兜底保存为 Markdown，至少留下可下载的结果文件。
+                  if (
+                    !sawArtifact &&
+                    (runReq.mode === 'task' || runReq.mode === 'code') &&
+                    finalText.trim()
+                  ) {
+                    try {
+                      const ev = await writeFallbackArtifact(storage, runReq, finalText, lastSeq + 1);
+                      res.write(encodeSse({ event: 'step', data: ev }));
+                    } catch (err) {
+                      // 对象存储故障不应把已完成的运行判为失败。
+                      logger.warn({ msg: 'fallback_artifact_failed', runId: runReq.runId, err });
+                    }
                   }
                   res.write(encodeSse({ event: 'done', data: { runId: runReq.runId } }));
                   finalizeRun(true);
@@ -487,6 +509,24 @@ function recordToolObservation(
     status: obs.status,
     durationMs: obs.durationMs,
   });
+}
+
+/** 兜底产物：任务/编码模式没有任何成果文件时，把最终回答保存为可下载的 Markdown。 */
+async function writeFallbackArtifact(
+  storage: Storage,
+  req: RunRequest,
+  text: string,
+  seq: number,
+): Promise<AgentEvent> {
+  const filename = req.mode === 'code' ? '代码结果.md' : '任务结果.md';
+  const { artifact } = await emit(
+    storage,
+    { tenantId: req.tenantId, userId: req.userId, sessionId: req.sessionId, runId: req.runId },
+    'text',
+    filename,
+    Buffer.from(text, 'utf8'),
+  );
+  return { runId: req.runId, seq, type: 'artifact', payload: { ...artifact }, ts: Date.now() };
 }
 
 /**

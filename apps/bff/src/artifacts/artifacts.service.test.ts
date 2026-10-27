@@ -85,6 +85,16 @@ describe('ArtifactService', () => {
     expect(rows.map((r) => r.version)).toEqual([1, 2]);
   });
 
+  it('record 接受 text（代码/文本类成果），按原文落库', async () => {
+    await service.record('r1', 's1', 't1', {
+      kind: 'text',
+      filename: 'UploadController.java',
+      storageKey: 'artifacts/t1/r1/x-UploadController.java',
+      size: 10,
+    });
+    expect(rows[0]).toMatchObject({ version: 1, kind: 'text', filename: 'UploadController.java' });
+  });
+
   it('record 拒绝非法 kind，不落库', async () => {
     await expect(
       service.record('r1', 's1', 't1', { ...ref, kind: 'exe' as ArtifactRef['kind'] }),

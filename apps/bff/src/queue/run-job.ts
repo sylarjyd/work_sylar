@@ -40,9 +40,17 @@ export interface RunSnapshot {
  * 追加在助手系统提示词之后，避免覆盖用户自定义的角色设定。
  */
 export const SESSION_MODE_PROMPTS: Record<SessionMode, string> = {
-  chat: '当前为对话模式：直接、简洁地回答问题，通常不必调用工具，确有必要时再使用。',
-  task: '当前为任务模式：先把目标拆解为可执行步骤，按需调用工具逐步完成，最后汇总结果与产出。',
-  code: '当前为编码模式：优先给出可直接运行的代码并说明运行方式，需要验证时调用代码执行工具。',
+  chat: '当前为对话模式：直接、简洁地回答问题，通常不必调用工具；只有用户要求导出文件时才生成成果文件。',
+  task: [
+    '当前为办公模式：先把目标拆解为可执行步骤，按需调用工具逐步完成。',
+    '完成后必须至少产出一个成果文件：结构化文档用 doc.docx / doc.xlsx / doc.pptx，',
+    '其余用 file.write 保存（如报告.md、数据.csv）；最终回答简要说明产出了哪些文件。',
+  ].join(''),
+  code: [
+    '当前为开发模式：必须用 file.write 把完整代码写成源文件（如 UploadController.java），',
+    '不得只在回答里贴代码；多个文件逐个保存，最终回答列出文件清单与运行方式，',
+    '需要验证时调用 code.exec。',
+  ].join(''),
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {

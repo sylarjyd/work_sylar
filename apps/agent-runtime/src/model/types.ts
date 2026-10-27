@@ -51,7 +51,15 @@ export interface ChatResponse {
   model: string;
 }
 
-/** 模型网关：M1 只暴露「一次 chat 补全」；多模型路由/限流/埋点留到 M5，不动上层。 */
+export interface ChatOptions {
+  /**
+   * 正文增量回调。提供时网关走流式协议，每收到一段正文就回调一次；
+   * 未提供时保持一次性补全，兼容不支持流式/无需实时的调用方。
+   */
+  onDelta?: (text: string, model: string) => void;
+}
+
+/** 模型网关：默认一次性补全；支持流式的实现可通过 ChatOptions.onDelta 逐块输出正文。 */
 export interface ModelGateway {
-  chat(req: ChatRequest): Promise<ChatResponse>;
+  chat(req: ChatRequest, opts?: ChatOptions): Promise<ChatResponse>;
 }

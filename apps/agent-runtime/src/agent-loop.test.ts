@@ -64,6 +64,21 @@ describe('runAgent', () => {
     ]);
   });
 
+  it('流式正文逐块产出 assistant_delta，随后用完整 think 收口', async () => {
+    const gateway: ModelGateway = {
+      async chat(_request, opts) {
+        opts?.onDelta?.('上', 'mock');
+        opts?.onDelta?.('传', 'mock');
+        return { content: '上传', toolCalls: [], usage: { input: 1, output: 2 }, model: 'mock' };
+      },
+    };
+    const events = await collect(runAgent(req, { gateway, tools: [] }));
+
+    expect(events.map((e) => e.type)).toEqual(['assistant_delta', 'assistant_delta', 'think']);
+    expect(events.map((e) => e.payload.text)).toEqual(['上', '传', '上传']);
+    expect(events[0].payload.model).toBe('mock');
+  });
+
   it('发送前把附件转成多模态消息，并把所需模态传给路由', async () => {
     const seen: { parts?: unknown; requiredModalities?: string[] }[] = [];
     const gateway: ModelGateway = {

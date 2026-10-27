@@ -148,12 +148,27 @@ export async function* runAgent(req: RunRequest, deps: RunDeps): AsyncGenerator<
       const models = selected
         ? [selected, ...(allowed ?? []).filter((m) => m !== selected)]
         : allowed;
-      const resp = await deps.gateway.chat({
-        messages,
-        tools: schemas,
-        models,
-        ...(requiredModalities.length > 0 ? { requiredModalities } : {}),
-      });
+      // 网关边收边回调正文；用通道把回调推入转成 async 迭代，
+      // 让生成器在模型调用尚未结束时就能逐块 yield，而不是等整段返回后一次性发出。
+      const deltas = new StreamChannel<{ text: string; model: string }>();
+      const pending = deps.gateway.chat(
+        {
+          messages,
+          tools: schemas,
+          models,
+          ...(requiredModalities.length > 0 ? { requiredModalities } : {}),
+        },
+        { onDelta: (text, model) => deltas.push({ text, model }) },
+      );
+      // 无论成功失败都要关通道，否则 for await 会一直等下去；错误在下方 await 原样抛出。
+      pending.then(
+        () => deltas.close(),
+        () => deltas.close(),
+      );
+      for await (const delta of deltas) {
+        yield step('assistant_delta', { text: delta.text, model: delta.model });
+      }
+      const resp = await pending;
       const prev = usageByModel.get(resp.model) ?? { input: 0, output: 0 };
       usageByModel.set(resp.model, {
         input: prev.input + resp.usage.input,
@@ -330,4 +345,55 @@ function extractArtifact(result: unknown): Record<string, unknown> | undefined {
   const ref = (result as { artifact?: unknown }).artifact;
   if (ref === null || typeof ref !== 'object' || Array.isArray(ref)) return undefined;
   return ref as Record<string, unknown>;
+}
+
+/**
+ * 把回调式增量转成异步迭代：单个消费者、无背压需求，命中等待者就直接交付，
+ * 否则先缓冲。close 只结束迭代，不吞掉网关 Promise 的异常。
+ */
+class StreamChannel<T> implements AsyncIterable<T> {
+  private readonly buffer: T[] = [];
+  private waiter: ((result: IteratorResult<T>) => void) | null = null;
+  private closed = false;
+
+  push(item: T): void {
+    if (this.closed) return;
+    const waiter = this.waiter;
+    if (waiter) {
+      this.waiter = null;
+      waiter({ value: item, done: false });
+      return;
+    }
+    this.buffer.push(item);
+  }
+
+  close(): void {
+    if (this.closed) return;
+    this.closed = true;
+    const waiter = this.waiter;
+    if (waiter) {
+      this.waiter = null;
+      waiter({ value: undefined, done: true });
+    }
+  }
+
+  [Symbol.asyncIterator](): AsyncIterator<T> {
+    return {
+      next: () => {
+        if (this.buffer.length > 0) {
+          return Promise.resolve({ value: this.buffer.shift() as T, done: false });
+        }
+        if (this.closed) return Promise.resolve({ value: undefined, done: true });
+        return new Promise((resolve) => {
+          this.waiter = resolve;
+        });
+      },
+      // 消费方提前退出（取消/异常）时置关闭，避免其余增量继续堆积。
+      return: () => {
+        this.closed = true;
+        this.waiter = null;
+        return Promise.resolve({ value: undefined, done: true });
+      },
+    };
+  }
 }

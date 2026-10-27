@@ -1,6 +1,6 @@
 import { endSpan, startSpan } from '@ai-office/telemetry';
 import type { ModelModality } from '@ai-office/shared';
-import type { ChatRequest, ChatResponse, ModelGateway } from './types';
+import type { ChatOptions, ChatRequest, ChatResponse, ModelGateway } from './types';
 import type { ModelObserver } from './observed-gateway';
 import { ModelHttpError } from './errors';
 
@@ -27,7 +27,7 @@ export class RoutingGateway implements ModelGateway {
     private readonly observer?: ModelObserver,
   ) {}
 
-  async chat(req: ChatRequest): Promise<ChatResponse> {
+  async chat(req: ChatRequest, opts?: ChatOptions): Promise<ChatResponse> {
     const allowed = req.models;
     let candidates = this.routes.filter((r) => !allowed || allowed.includes(r.model));
     if (allowed) {
@@ -55,8 +55,18 @@ export class RoutingGateway implements ModelGateway {
       const started = Date.now();
       // 每次尝试单独成 span：失败重试在 trace 里可见，而不是只看到最终成功那一次。
       const span = startSpan('model.chat', { 'gen_ai.request.model': route.model });
+      // 已经向调用方输出过增量正文就不能再换模型：重试会让两段回答拼接在一起。
+      let emitted = false;
+      const attemptOpts: ChatOptions | undefined = opts?.onDelta
+        ? {
+            onDelta: (text, model) => {
+              emitted = true;
+              opts.onDelta?.(text, model);
+            },
+          }
+        : opts;
       try {
-        const res = await route.gateway.chat(req);
+        const res = await route.gateway.chat(req, attemptOpts);
         endSpan(span, true);
         this.observer?.onAttempt(route.model, true, Date.now() - started);
         return res;
@@ -64,7 +74,7 @@ export class RoutingGateway implements ModelGateway {
         endSpan(span, false, err);
         this.observer?.onAttempt(route.model, false, Date.now() - started);
         lastErr = err;
-        if (!isRetryable(err)) throw err;
+        if (emitted || !isRetryable(err)) throw err;
         const next = candidates[i + 1];
         if (next) this.observer?.onFallback(route.model, next.model);
       }

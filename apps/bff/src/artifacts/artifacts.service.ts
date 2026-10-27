@@ -5,7 +5,7 @@ import { PrismaService } from '../db/prisma.service';
 import { SessionsService } from '../sessions/sessions.service';
 import { ARTIFACT_STORAGE, type ArtifactStorage } from './storage';
 
-const KINDS = ['docx', 'xlsx', 'pptx'] as const;
+const KINDS = ['docx', 'xlsx', 'pptx', 'text'] as const;
 
 /**
  * 校验 runtime SSE 传来的产物引用：runtime 是独立进程、走 HTTP 送达，不能信任其 payload。

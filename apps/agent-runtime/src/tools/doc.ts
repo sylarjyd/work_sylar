@@ -8,6 +8,7 @@ const MIME: Record<ArtifactKind, string> = {
   docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  text: 'text/plain; charset=utf-8',
 };
 
 /** 去掉控制字符（含 CR/LF，防止注入 HTTP 头）与路径分隔符 / `..`，防止模型给的 filename 越出 `artifacts/{tenantId}/{runId}/` 前缀。 */
@@ -30,7 +31,7 @@ function str(args: Record<string, unknown>, key: string): string {
   return v;
 }
 
-async function emit(
+export async function emit(
   storage: Storage,
   ctx: RunContext,
   kind: ArtifactKind,

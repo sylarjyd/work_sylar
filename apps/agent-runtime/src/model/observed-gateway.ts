@@ -1,4 +1,4 @@
-import type { ChatRequest, ChatResponse, ModelGateway } from './types';
+import type { ChatOptions, ChatRequest, ChatResponse, ModelGateway } from './types';
 
 /** 模型调用观测钩子；实现方不应抛错，否则会污染业务调用链。 */
 export interface ModelObserver {
@@ -18,10 +18,10 @@ export class ObservedGateway implements ModelGateway {
     private readonly now: () => number = Date.now,
   ) {}
 
-  async chat(req: ChatRequest): Promise<ChatResponse> {
+  async chat(req: ChatRequest, opts?: ChatOptions): Promise<ChatResponse> {
     const started = this.now();
     try {
-      const res = await this.inner.chat(req);
+      const res = await this.inner.chat(req, opts);
       this.observer.onAttempt(this.model, true, this.now() - started);
       return res;
     } catch (err) {

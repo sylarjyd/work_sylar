@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { ChatRequest, ChatResponse, ModelGateway, ModelMessage } from './types';
+import type { ChatOptions, ChatRequest, ChatResponse, ModelGateway, ModelMessage } from './types';
 import { ModelHttpError } from './errors';
 
 interface OpenAIResponse {
@@ -10,6 +10,22 @@ interface OpenAIResponse {
     };
   }[];
   usage?: { prompt_tokens: number; completion_tokens: number };
+}
+
+/** 流式分片：正文与 tool_calls 都按增量下发，usage 只在末尾（include_usage）出现。 */
+interface OpenAIStreamChunk {
+  choices?: {
+    delta?: {
+      content?: string | null;
+      tool_calls?: {
+        index: number;
+        id?: string;
+        function?: { name?: string; arguments?: string };
+      }[];
+    };
+  }[];
+  usage?: { prompt_tokens?: number; completion_tokens?: number };
+  error?: { message?: string };
 }
 
 export interface OpenAICompatConfig {
@@ -25,10 +41,24 @@ const toWireName = (name: string): string => name.replace(/[^a-zA-Z0-9_-]/g, '_'
 export class OpenAICompatGateway implements ModelGateway {
   constructor(private readonly cfg: OpenAICompatConfig) {}
 
-  async chat(req: ChatRequest): Promise<ChatResponse> {
+  async chat(req: ChatRequest, opts?: ChatOptions): Promise<ChatResponse> {
     // 反向表：wire 名（web_search）→ 逻辑名（web.search），把 provider 回传的名字还原。
     const wireToLogical = new Map(req.tools.map((t) => [toWireName(t.name), t.name]));
-    const res = await fetch(`${this.cfg.baseUrl}/chat/completions`, {
+    if (opts?.onDelta) return this.stream(req, wireToLogical, opts.onDelta);
+
+    const res = await this.post(req, false);
+    if (!res.ok) throw new ModelHttpError(res.status, this.cfg.model);
+    let data: OpenAIResponse;
+    try {
+      data = (await res.json()) as OpenAIResponse;
+    } catch {
+      throw new Error('model_bad_json');
+    }
+    return toChatResponse(data, this.cfg.model, wireToLogical);
+  }
+
+  private post(req: ChatRequest, stream: boolean): Promise<Response> {
+    return fetch(`${this.cfg.baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -40,31 +70,137 @@ export class OpenAICompatGateway implements ModelGateway {
         tools: req.tools.length
           ? req.tools.map((t) => ({ type: 'function', function: { ...t, name: toWireName(t.name) } }))
           : undefined,
+        // include_usage：OpenAI/DeepSeek 在末尾补一帧 usage，否则流式拿不到 token 数。
+        ...(stream ? { stream: true, stream_options: { include_usage: true } } : {}),
       }),
     });
+  }
+
+  private async stream(
+    req: ChatRequest,
+    wireToLogical: Map<string, string>,
+    onDelta: (text: string, model: string) => void,
+  ): Promise<ChatResponse> {
+    const res = await this.post(req, true);
     if (!res.ok) throw new ModelHttpError(res.status, this.cfg.model);
-    let data: OpenAIResponse;
-    try {
-      data = (await res.json()) as OpenAIResponse;
-    } catch {
-      throw new Error('model_bad_json');
+    // 少数 provider 会忽略 stream 直接回 JSON：按一次性补全消费，不能白跑一趟。
+    const contentType = res.headers.get('content-type') ?? '';
+    if (!contentType.includes('text/event-stream')) {
+      let data: OpenAIResponse;
+      try {
+        data = (await res.json()) as OpenAIResponse;
+      } catch {
+        throw new Error('model_bad_json');
+      }
+      const out = toChatResponse(data, this.cfg.model, wireToLogical);
+      if (out.content) onDelta(out.content, this.cfg.model);
+      return out;
     }
-    const msg = data.choices?.[0]?.message;
+    if (!res.body) throw new Error('model_stream_no_body');
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    // tool_calls 按 index 分片下发，必须累积后在上游结束后一次性解析，不能逐片 JSON.parse。
+    const toolAcc = new Map<number, { id: string; name: string; arguments: string }>();
+    let content = '';
+    let usage = { input: 0, output: 0 };
+    let buffer = '';
+
+    const handlePayload = (payload: string): void => {
+      if (!payload || payload === '[DONE]') return;
+      let chunk: OpenAIStreamChunk;
+      try {
+        chunk = JSON.parse(payload) as OpenAIStreamChunk;
+      } catch {
+        return;
+      }
+      if (chunk.error) throw new Error('model_stream_error');
+      if (chunk.usage) {
+        usage = {
+          input: chunk.usage.prompt_tokens ?? 0,
+          output: chunk.usage.completion_tokens ?? 0,
+        };
+      }
+      const delta = chunk.choices?.[0]?.delta;
+      if (!delta) return;
+      if (delta.content) {
+        content += delta.content;
+        onDelta(delta.content, this.cfg.model);
+      }
+      for (const tc of delta.tool_calls ?? []) {
+        const prev = toolAcc.get(tc.index) ?? { id: '', name: '', arguments: '' };
+        toolAcc.set(tc.index, {
+          id: tc.id || prev.id,
+          name: prev.name + (tc.function?.name ?? ''),
+          arguments: prev.arguments + (tc.function?.arguments ?? ''),
+        });
+      }
+    };
+
+    const handleFrame = (frame: string): void => {
+      for (const line of frame.split('\n')) {
+        const trimmed = line.trim();
+        if (trimmed.startsWith('data:')) handlePayload(trimmed.slice(5).trim());
+      }
+    };
+
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        // 部分代理回 CRLF；先归一化行尾，切帧逻辑才只需要处理 \n\n。
+        buffer += decoder.decode(value, { stream: true }).replace(/\r/g, '');
+        for (;;) {
+          const idx = buffer.indexOf('\n\n');
+          if (idx < 0) break;
+          const frame = buffer.slice(0, idx);
+          buffer = buffer.slice(idx + 2);
+          handleFrame(frame);
+        }
+      }
+      // 流末尾可能缺空行，残留帧也要消费，否则最后一段正文会丢。
+      if (buffer.trim()) handleFrame(buffer);
+    } catch (err) {
+      await reader.cancel().catch(() => undefined);
+      throw err;
+    }
+
     return {
-      content: msg?.content ?? '',
-      toolCalls: (msg?.tool_calls ?? []).map((tc) => ({
-        id: tc.id || randomUUID(),
-        // 命中反向表则还原逻辑名；未命中（如幻觉出来的名字）原样透传。
-        name: wireToLogical.get(tc.function.name) ?? tc.function.name,
-        args: safeParse(tc.function.arguments),
-      })),
-      usage: {
-        input: data.usage?.prompt_tokens ?? 0,
-        output: data.usage?.completion_tokens ?? 0,
-      },
+      content,
+      toolCalls: [...toolAcc.entries()]
+        .sort(([a], [b]) => a - b)
+        .map(([, tc]) => ({
+          id: tc.id || randomUUID(),
+          // 命中反向表则还原逻辑名；未命中（如幻觉出来的名字）原样透传。
+          name: wireToLogical.get(tc.name) ?? tc.name,
+          args: safeParse(tc.arguments),
+        })),
+      usage,
       model: this.cfg.model,
     };
   }
+}
+
+function toChatResponse(
+  data: OpenAIResponse,
+  model: string,
+  wireToLogical: Map<string, string>,
+): ChatResponse {
+  const msg = data.choices?.[0]?.message;
+  return {
+    content: msg?.content ?? '',
+    toolCalls: (msg?.tool_calls ?? []).map((tc) => ({
+      id: tc.id || randomUUID(),
+      // 命中反向表则还原逻辑名；未命中（如幻觉出来的名字）原样透传。
+      name: wireToLogical.get(tc.function.name) ?? tc.function.name,
+      args: safeParse(tc.function.arguments),
+    })),
+    usage: {
+      input: data.usage?.prompt_tokens ?? 0,
+      output: data.usage?.completion_tokens ?? 0,
+    },
+    model,
+  };
 }
 
 /** OpenAI 兼容协议要求：assistant 消息回带 tool_calls，tool 消息回带 tool_call_id。 */

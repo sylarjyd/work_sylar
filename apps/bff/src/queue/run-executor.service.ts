@@ -670,6 +670,7 @@ export class RunExecutor {
           ...(modelRoutes.length > 0 ? { modelRoutes } : {}),
           // 续跑指令由断点还原；runtime 会从该 round/seq 继续并把断点用量并入结算。
           ...(resume ? { resume } : {}),
+          ...(snapshot.mode ? { mode: snapshot.mode } : {}),
           ...(systemPrompt ? { systemPrompt } : {}),
           ...(snapshot.assistant
             ? {
@@ -744,6 +745,12 @@ export class RunExecutor {
         for (const m of parse(chunk)) {
           if (m.event === 'step') {
             const ev = m.data as AgentEvent;
+            if (ev.type === 'assistant_delta') {
+              // 增量正文只服务实时渲染：逐 token 落库会撑爆 Step 表，
+              // 最终整段回答由随后一条 think 事件持久化，断线重连后以它为准。
+              await this.publish(runId, { event: 'step', data: ev });
+              continue;
+            }
             if (ev.type === 'think') thinkTexts.push(String(ev.payload.text ?? ''));
             try {
               await this.tasks.recordStep(runId, ev);

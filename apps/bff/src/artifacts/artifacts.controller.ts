@@ -11,6 +11,7 @@ const MIME: Record<string, string> = {
   docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  text: 'text/plain; charset=utf-8',
 };
 
 /** 兼容非 ASCII 文件名：ASCII 回退 + RFC 5987 的 filename*。 */
