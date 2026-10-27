@@ -480,11 +480,11 @@ export default function Home() {
         : 'running'
     : null;
   // prepare 已把本轮提问落库：刷新或切回后历史里也有同一条，同一份提问只渲染一次（优先历史）。
+  // 只要 prepare 跑过历史就含本轮提问，故对在途与终态条目同样成立。
   // 纯附件轮没有正文，按附件 id 是否已全部出现在最后一条用户消息里判断。
   const lastHistoryMsg = history[history.length - 1];
   const pendingEchoed =
     !!view &&
-    !view.terminal &&
     lastHistoryMsg?.role === 'user' &&
     (submittedGoal !== ''
       ? lastHistoryMsg.content === submittedGoal
@@ -659,7 +659,14 @@ export default function Home() {
     try {
       const list = await listArtifacts(sid);
       if (req !== artifactReqRef.current) return;
-      setArtifacts(list);
+      setArtifacts((prev) => {
+        // 保留乐观卡片（id 为空），同名的以服务端列表为准；切换会话时 prev 已被清空，等价于整体替换。
+        const optimistic = prev.filter((a) => !a.id);
+        return [
+          ...optimistic.filter((o) => !list.some((l) => l.filename === o.filename)),
+          ...list,
+        ];
+      });
     } catch (err) {
       if (req !== artifactReqRef.current) return;
       if (isUnauthorized(err)) {
@@ -671,9 +678,7 @@ export default function Home() {
   }
 
   useEffect(() => {
-    // 跑流期间不刷新：新会话在建流时会 setSessionId 触发本 effect，若并发拉取会覆盖乐观卡片；
-    // 结束后 running 归位，由本 effect 统一刷新落库产物（新会话与已有会话同一路径）。
-    if (running) return;
+    // 运行中也刷新，用 merge 保住乐观卡片；终态 running 归位后再刷新一次拿到落库版本。
     void refreshArtifacts(sessionId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, running]);
@@ -1089,6 +1094,7 @@ export default function Home() {
         // relay 对终态 run 会回放终态帧；没有终态说明连上了但流提前结束。
         tracker.settle(id, 'failed');
         syncRunMarker(id);
+        if (id === sessionIdRef.current) setError('连接已断开，可刷新恢复');
       }
     } catch (err) {
       // 先收尾再跳转：导航被取消时也不能留下永久只读的在途条目。
