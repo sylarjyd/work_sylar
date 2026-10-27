@@ -113,7 +113,7 @@ CREATE INDEX "user_memory_vec_idx"
 2. 调用会话选定模型提炼（超时 8s，`max_tokens 300`）：输入用户问题前 4000 字符 + 回答前 8000 字符，输出 JSON 字符串数组（0–3 条），每条为一句中文长期信息；提示词明确「只记录跨会话仍有价值的内容：稳定偏好、身份/角色、长期目标、重要事实；一次性任务细节、寒暄、敏感凭据一律不记」。
 3. 清洗：去空白、去重、每条 ≤ 500 字符、丢弃空串；整体失败或空数组则结束。
 4. 调运行时 `/embed` 批量向量化（见 §4）。
-5. `INSERT ... ON CONFLICT ("tenantId","userId","hash") DO NOTHING`，`hash = sha256(normalizedContent)`（NFKC 归一 + 折叠空白 + 小写），保证同一用户重复事实不膨胀。
+5. `INSERT ... ON CONFLICT ("tenantId","userId","hash") DO NOTHING`，`hash = sha256(normalizedContent)`（NFKC 归一 + 折叠空白 + 小写 + 删除全部空白；中文里「喜欢简洁」与「喜欢 简洁」视为同一事实），保证同一用户重复事实不膨胀。hash 仅作去重键，不参与展示与检索。
 6. 修剪：保留该用户最近 500 条（按 `createdAt DESC`），删除更旧的；失败只记日志。
 
 ### 3.3 检索
