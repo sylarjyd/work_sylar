@@ -2654,11 +2654,6 @@ a {
   border-color: rgba(0, 0, 0, 0.28);
 }
 
-.wb-new-task:disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
-}
-
 .wb-nav {
   display: flex;
   flex-direction: column;
@@ -2761,11 +2756,6 @@ a {
   font-weight: 600;
 }
 
-.wb-session:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
 /* 操作入口只在悬停/聚焦当前行时出现，避免每行常驻图标干扰阅读。 */
 .wb-session-action {
   display: inline-flex;
@@ -2824,7 +2814,7 @@ a {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  color: var(--mint-strong);
+  color: var(--mint-ink);
 }
 
 .wb-session-dot {
@@ -2832,7 +2822,7 @@ a {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: currentColor;
+  background: var(--mint-strong);
 }
 
 .wb-session-dot.is-queued {
