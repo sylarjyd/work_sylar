@@ -86,11 +86,16 @@ export class LongTermMemoryService {
       const hash = memoryHash(content);
       if (seen.has(hash)) continue;
       seen.add(hash);
-      await this.prisma.$executeRaw`
-        INSERT INTO "UserMemory" ("id", "tenantId", "userId", "sessionId", "content", "hash", "vector", "createdAt")
-        VALUES (${randomUUID()}, ${tenantId}, ${userId}, ${sessionId}, ${content}, ${hash}, ${toVectorLiteral(item.vector)}::vector, NOW())
-        ON CONFLICT ("tenantId", "userId", "hash") DO NOTHING
-      `;
+      // 长期记忆是增强能力：单条写入失败只记日志，不能让整批中断。
+      try {
+        await this.prisma.$executeRaw`
+          INSERT INTO "UserMemory" ("id", "tenantId", "userId", "sessionId", "content", "hash", "vector", "createdAt")
+          VALUES (${randomUUID()}, ${tenantId}, ${userId}, ${sessionId}, ${content}, ${hash}, ${toVectorLiteral(item.vector)}::vector, NOW())
+          ON CONFLICT ("tenantId", "userId", "hash") DO NOTHING
+        `;
+      } catch (err) {
+        this.logger.warn(`写入长期记忆失败（tenant=${tenantId}）: ${(err as Error).message}`);
+      }
     }
     await this.prune(tenantId, userId);
   }

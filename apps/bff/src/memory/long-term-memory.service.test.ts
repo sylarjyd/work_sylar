@@ -31,6 +31,7 @@ let execCalls: RawCall[];
 let searchRows: { id: string; content: string; score: unknown }[];
 let failDelete: boolean;
 let failUpdate: boolean;
+let failInsert: boolean;
 
 const fakePrisma = {
   $queryRaw: async (strings: TemplateStringsArray, ...values: unknown[]) => {
@@ -46,6 +47,9 @@ const fakePrisma = {
     if (failUpdate && call.sql.includes('lastUsedAt')) {
       throw new Error('update_boom');
     }
+    if (failInsert && call.sql.includes('INSERT INTO "UserMemory"')) {
+      throw new Error('insert_boom');
+    }
     return 1;
   },
 } as unknown as PrismaService;
@@ -60,6 +64,7 @@ beforeEach(() => {
   searchRows = [];
   failDelete = false;
   failUpdate = false;
+  failInsert = false;
 });
 
 describe('记忆归一化', () => {
@@ -131,6 +136,24 @@ describe('LongTermMemoryService.remember', () => {
     const prune = execCalls.at(-1)!;
     expect(prune.sql).toContain('DELETE FROM "UserMemory"');
     expect(prune.values).toContain(MEMORY_MAX_PER_USER);
+  });
+
+  it('单条写入失败不影响其余写入，且仍执行修剪', async () => {
+    failInsert = true;
+    await expect(
+      makeService().remember({
+        tenantId: 't1',
+        userId: 'u1',
+        sessionId: 's1',
+        items: [
+          { content: '偏好一', vector: [1] },
+          { content: '偏好二', vector: [1] },
+        ],
+      }),
+    ).resolves.toBeUndefined();
+    const inserts = execCalls.filter((c) => c.sql.includes('INSERT INTO "UserMemory"'));
+    expect(inserts).toHaveLength(2);
+    expect(execCalls.at(-1)!.sql).toContain('DELETE FROM "UserMemory"');
   });
 
   it('修剪失败只记日志，不向调用方抛出', async () => {
