@@ -607,6 +607,55 @@ describe('RunExecutor', () => {
     expect(body.systemPrompt).not.toContain('TAIL-AFTER-LIMIT');
   });
 
+  it('截断恰好切在代理对中间时丢弃半个字符，不留下孤立高代理', async () => {
+    const { executor, deps } = makeExecutor();
+    // 3999 个 A 占据码元 0-3998；emoji 占据 3999-4000，朴素的 slice(0, 4000)
+    // 会把高代理（3999）留在末尾，产生孤立代理。
+    const longAnswer = `${'A'.repeat(3_999)}😀TAIL`;
+    deps.qaCache.lookup.mockResolvedValue({
+      tenantId: 't1',
+      userId: 'u1',
+      sessionId: 's1',
+      question: '写个总结',
+      answer: longAnswer,
+      createdAt: Date.now(),
+      expiresAt: Date.now() + 60_000,
+    });
+    deps.fetch.mockResolvedValue(sseResponse([{ event: 'done', data: { runId: 'r1' } }]));
+
+    await executor.execute(job());
+
+    const body = JSON.parse(String(deps.fetch.mock.calls[0]![1].body)) as {
+      systemPrompt: string;
+    };
+    // 修复后截断部分正好停在 3999 个 A，随后紧跟截断标记；半个 emoji 与尾部内容都不得注入。
+    expect(body.systemPrompt).toContain(`${'A'.repeat(3_999)}\n…（已截断）`);
+    expect(body.systemPrompt).not.toContain('😀');
+    expect(body.systemPrompt).not.toContain('TAIL');
+    // 孤立代理（高代理后面不跟低代理）一旦出现就会破坏提示词编码。
+    expect(body.systemPrompt).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+  });
+
+  it('缓存服务不可用时短路：不读配置，也不读/写缓存，仍正常收尾', async () => {
+    const { executor, deps } = makeExecutor();
+    deps.qaCache.available = false;
+    // 非空成功答案确保 remember 的断言不是空转：短路必须发生在写入判断之前。
+    deps.fetch.mockResolvedValue(
+      sseResponse([
+        { event: 'step', data: stepEvent(0, 'think', { text: '最终答案' }) },
+        { event: 'done', data: { runId: 'r1' } },
+      ]),
+    );
+
+    await executor.execute(job());
+
+    // 读取与写入两条路径都应在读配置前短路。
+    expect(deps.settings.getQaCacheConfig).not.toHaveBeenCalled();
+    expect(deps.qaCache.lookup).not.toHaveBeenCalled();
+    expect(deps.qaCache.remember).not.toHaveBeenCalled();
+    expect(deps.tasks.finish).toHaveBeenCalledWith('r1', 't1', 'done', '最终答案', 's1');
+  });
+
   it('缓存开关关闭时不读取也不注入参考', async () => {
     const { executor, deps } = makeExecutor();
     deps.settings.getQaCacheConfig.mockResolvedValue({ enabled: false, ttlSeconds: 300 });

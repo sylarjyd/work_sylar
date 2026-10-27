@@ -634,9 +634,12 @@ export class RunExecutor {
         question,
       });
       if (!hit) return undefined;
+      // 按 UTF-16 码元截断可能切在代理对中间：留下孤立的高代理会让提示词编解码异常，
+      // 因此截断后再丢掉尾部半个字符。只有超限时才标注截断。
+      const clipped = hit.answer.slice(0, QA_CACHE_REF_MAX_CHARS).replace(/[\uD800-\uDBFF]$/, '');
       const answer =
         hit.answer.length > QA_CACHE_REF_MAX_CHARS
-          ? `${hit.answer.slice(0, QA_CACHE_REF_MAX_CHARS)}\n…（已截断）`
+          ? `${clipped}\n…（已截断）`
           : hit.answer;
       return [
         '## 会话内历史回答参考',
