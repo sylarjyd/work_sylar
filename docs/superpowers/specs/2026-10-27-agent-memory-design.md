@@ -89,7 +89,7 @@ CREATE TABLE "UserMemory" (
   "sessionId" TEXT,
   "content" TEXT NOT NULL,
   "hash" TEXT NOT NULL,
-  "vector" vector(1024),
+  "vector" vector(1024) NOT NULL,
   "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   "lastUsedAt" TIMESTAMP(3),
   CONSTRAINT "UserMemory_pkey" PRIMARY KEY ("id")
@@ -97,7 +97,7 @@ CREATE TABLE "UserMemory" (
 CREATE UNIQUE INDEX "UserMemory_tenantId_userId_hash_key"
   ON "UserMemory" ("tenantId", "userId", "hash");
 CREATE INDEX "UserMemory_tenantId_userId_createdAt_idx"
-  ON "UserMemory" ("tenantId", "userId", "createdAt" DESC);
+  ON "UserMemory" ("tenantId", "userId", "createdAt");
 CREATE INDEX "user_memory_vec_idx"
   ON "UserMemory" USING hnsw ("vector" vector_cosine_ops);
 ```
