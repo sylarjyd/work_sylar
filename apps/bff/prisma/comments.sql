@@ -48,6 +48,7 @@ COMMENT ON COLUMN "Run"."taskId" IS '所属任务 ID';
 COMMENT ON COLUMN "Run"."status" IS '执行状态：running / succeeded / failed';
 COMMENT ON COLUMN "Run"."startedAt" IS '开始时间';
 COMMENT ON COLUMN "Run"."endedAt" IS '结束时间';
+COMMENT ON COLUMN "Run"."traceId" IS '发起本次运行的前端/BFF traceId，用于串联调用链';
 
 COMMENT ON TABLE "Step" IS '步骤表：执行过程中的思考、工具调用与产物事件';
 COMMENT ON COLUMN "Step"."id" IS '步骤 ID';
@@ -180,3 +181,59 @@ COMMENT ON COLUMN "ModelPrice"."model" IS '模型名（与 runtime 上报一致�
 COMMENT ON COLUMN "ModelPrice"."inputMilliCreditsPer1k" IS '输入每千 token 毫积分费率';
 COMMENT ON COLUMN "ModelPrice"."outputMilliCreditsPer1k" IS '输出每千 token 毫积分费率';
 COMMENT ON COLUMN "ModelPrice"."updatedAt" IS '更新时间';
+
+COMMENT ON TABLE "Setting" IS '系统配置表：运营平台可调的运行参数，取值优先级为 DB > 环境变量 > 默认值';
+COMMENT ON COLUMN "Setting"."key" IS '配置键（见 SETTING_SPECS，如 maxRounds / confirmTimeoutMs / alertsEnabled）';
+COMMENT ON COLUMN "Setting"."value" IS '配置值（JSON 标量：数字 / 布尔 / 字符串）';
+COMMENT ON COLUMN "Setting"."updatedBy" IS '最后修改的管理员用户 ID';
+COMMENT ON COLUMN "Setting"."updatedAt" IS '更新时间';
+
+COMMENT ON TABLE "AdminAuditLog" IS '管理员操作审计表：记录运营平台关键操作，只追加不修改';
+COMMENT ON COLUMN "AdminAuditLog"."id" IS '审计日志 ID';
+COMMENT ON COLUMN "AdminAuditLog"."actorId" IS '操作者用户 ID';
+COMMENT ON COLUMN "AdminAuditLog"."actorEmail" IS '操作者邮箱快照（用户变更后仍可追溯）';
+COMMENT ON COLUMN "AdminAuditLog"."action" IS '操作类型，如 user.update / setting.update / run.view';
+COMMENT ON COLUMN "AdminAuditLog"."targetType" IS '操作对象类型，如 user / tenant / session / setting';
+COMMENT ON COLUMN "AdminAuditLog"."targetId" IS '操作对象 ID';
+COMMENT ON COLUMN "AdminAuditLog"."summary" IS '操作摘要（JSON，密钥类字段已脱敏）';
+COMMENT ON COLUMN "AdminAuditLog"."ip" IS '操作来源 IP';
+COMMENT ON COLUMN "AdminAuditLog"."createdAt" IS '创建时间';
+
+COMMENT ON TABLE "MetricBucket" IS '小时级指标快照表：运营端可观测统计的预聚合结果';
+COMMENT ON COLUMN "MetricBucket"."id" IS '快照 ID';
+COMMENT ON COLUMN "MetricBucket"."bucketStart" IS '统计窗口起点（整点 UTC）';
+COMMENT ON COLUMN "MetricBucket"."metric" IS '指标名，如 runs_started / runs_failed / input_tokens / tool_calls';
+COMMENT ON COLUMN "MetricBucket"."dimensionType" IS '维度类型：global（全局）/ model（模型）/ tenant（租户）/ tool（工具）';
+COMMENT ON COLUMN "MetricBucket"."dimensionId" IS '维度值：模型名、租户 ID 或工具名；global 维度为空串';
+COMMENT ON COLUMN "MetricBucket"."value" IS '指标值，语义由 metric 决定（计数类为求和，时长类为累计毫秒）';
+COMMENT ON COLUMN "MetricBucket"."count" IS '参与统计的样本数';
+COMMENT ON COLUMN "MetricBucket"."updatedAt" IS '更新时间';
+
+COMMENT ON TABLE "AlertRule" IS '告警规则表：运营平台配置的指标阈值规则';
+COMMENT ON COLUMN "AlertRule"."id" IS '规则 ID';
+COMMENT ON COLUMN "AlertRule"."key" IS '规则唯一标识（用于种子数据与幂等更新）';
+COMMENT ON COLUMN "AlertRule"."name" IS '规则展示名';
+COMMENT ON COLUMN "AlertRule"."metric" IS '监控指标名（对应 MetricBucket.metric）';
+COMMENT ON COLUMN "AlertRule"."comparator" IS '比较方式：gt（大于阈值）/ lt（小于阈值）';
+COMMENT ON COLUMN "AlertRule"."threshold" IS '阈值';
+COMMENT ON COLUMN "AlertRule"."windowMinutes" IS '评估窗口（分钟）';
+COMMENT ON COLUMN "AlertRule"."cooldownMinutes" IS '告警冷却时间（分钟），避免重复通知';
+COMMENT ON COLUMN "AlertRule"."severity" IS '严重级别：warning / critical';
+COMMENT ON COLUMN "AlertRule"."enabled" IS '是否启用';
+COMMENT ON COLUMN "AlertRule"."createdAt" IS '创建时间';
+COMMENT ON COLUMN "AlertRule"."updatedAt" IS '更新时间';
+
+COMMENT ON TABLE "AlertEvent" IS '告警事件表：规则的触发与恢复记录';
+COMMENT ON COLUMN "AlertEvent"."id" IS '事件 ID';
+COMMENT ON COLUMN "AlertEvent"."ruleId" IS '所属规则 ID';
+COMMENT ON COLUMN "AlertEvent"."ruleName" IS '规则名称快照（规则删除后仍可追溯）';
+COMMENT ON COLUMN "AlertEvent"."status" IS '事件状态：firing（告警中）/ resolved（已恢复）';
+COMMENT ON COLUMN "AlertEvent"."value" IS '触发时的指标值';
+COMMENT ON COLUMN "AlertEvent"."message" IS '告警描述';
+COMMENT ON COLUMN "AlertEvent"."startedAt" IS '告警开始时间';
+COMMENT ON COLUMN "AlertEvent"."resolvedAt" IS '恢复时间；未恢复为空';
+COMMENT ON COLUMN "AlertEvent"."notifiedAt" IS '最近一次 webhook 通知时间';
+COMMENT ON COLUMN "AlertEvent"."deliveryStatus" IS '通知投递状态：sent / failed / skipped';
+COMMENT ON COLUMN "AlertEvent"."deliveryError" IS '投递失败原因';
+COMMENT ON COLUMN "AlertEvent"."openKey" IS '未恢复事件唯一键：firing 为 ruleId，resolved 为 NULL，保证每条规则最多一个未恢复事件';
+COMMENT ON COLUMN "AlertEvent"."createdAt" IS '创建时间';
