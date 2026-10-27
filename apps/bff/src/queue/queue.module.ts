@@ -13,6 +13,7 @@ import { ArtifactsModule } from '../artifacts/artifacts.module';
 import { AttachmentsModule } from '../attachments/attachments.module';
 import { BillingModule } from '../billing/billing.module';
 import { PrismaModule } from '../db/prisma.module';
+import { MemoryModule } from '../memory/memory.module';
 import { ObservabilityModule } from '../observability/observability.module';
 import { SettingsModule } from '../settings/settings.module';
 import { QaCacheService } from '../qa-cache/qa-cache.service';
@@ -118,6 +119,7 @@ export class QueueModule implements OnApplicationShutdown {
         AttachmentsModule,
         BillingModule,
         SettingsModule,
+        MemoryModule,
       ],
       providers,
       exports: [
@@ -126,6 +128,7 @@ export class QueueModule implements OnApplicationShutdown {
         RunRelayService,
         RUN_EVENT_BUS,
         RUN_CONTROL_BUS,
+        RUN_REDIS,
         QaCacheService,
       ],
     };
