@@ -160,9 +160,13 @@ export default function AdminQaCachePage() {
     try {
       await updateAdminSetting('qaCacheEnabled', enabled);
       await updateAdminSetting('qaCacheTtlSeconds', ttlSeconds);
-      await loadSettings();
-      setSettingsFromDb(true);
-      setNotice('操作已成功。');
+      const ok = await loadSettings();
+      if (ok) {
+        setSettingsFromDb(true);
+        setNotice('操作已成功。');
+      } else {
+        setNotice('操作已成功，但设置刷新失败，请刷新页面确认。');
+      }
     } catch (err) {
       // 两个 key 分两次写入：后一个失败时前一个可能已生效，先回读服务端实际值再提示错误。
       await loadSettings();
@@ -283,7 +287,7 @@ export default function AdminQaCachePage() {
             <Typography.Text>启用问答缓存</Typography.Text>
             <Switch
               checked={enabled}
-              disabled={saving || settingsFailed}
+              disabled={saving || busy || settingsFailed}
               aria-label="启用问答缓存"
               onChange={setEnabled}
             />
@@ -295,7 +299,7 @@ export default function AdminQaCachePage() {
               max={MAX_TTL}
               precision={0}
               value={ttlSeconds}
-              disabled={saving || settingsFailed}
+              disabled={saving || busy || settingsFailed}
               aria-label="缓存有效期（秒）"
               onChange={setTtlSeconds}
               style={{ width: 140 }}
@@ -305,14 +309,22 @@ export default function AdminQaCachePage() {
             <Button
               type="primary"
               loading={saving}
-              disabled={saving || settingsFailed}
+              disabled={saving || busy || settingsFailed}
               onClick={() => void saveSettings()}
             >
               保存
             </Button>
-            <Button disabled={saving || settingsFailed || !settingsFromDb} onClick={resetSettings}>
+            <Button
+              disabled={saving || busy || settingsFailed || !settingsFromDb}
+              onClick={resetSettings}
+            >
               恢复默认
             </Button>
+            {settingsFailed ? (
+              <Button disabled={saving} onClick={() => void loadSettings()}>
+                重新加载设置
+              </Button>
+            ) : null}
           </Space>
         </Space>
       </Card>
