@@ -12,6 +12,7 @@ import { MemoryRateLimiter } from '../billing/billing.rate-limit';
 import type { PrismaService } from '../db/prisma.service';
 import type { SettingsService } from '../settings/settings.service';
 import type { QaCacheService } from '../qa-cache/qa-cache.service';
+import type { MemoryService } from '../memory/memory.service';
 import type { RunEventBus } from './run-event-bus';
 import type { RunControlBus, RunControlMessage } from './run-control-bus';
 import { InsufficientCreditsError, PlanExpiredError } from '../billing/billing.errors';
@@ -54,6 +55,10 @@ interface ExecutorDeps {
     available: boolean;
     lookup: ReturnType<typeof vi.fn>;
     remember: ReturnType<typeof vi.fn>;
+  };
+  memory: {
+    prepareContext: ReturnType<typeof vi.fn>;
+    rememberAfterRun: ReturnType<typeof vi.fn>;
   };
   /** 控制总线退订函数，用于断言所有退出路径都只退订一次。 */
   off: ReturnType<typeof vi.fn>;
@@ -187,6 +192,15 @@ function makeExecutor(config: { maxAttempts?: number; billing?: BillingService }
       lookup: vi.fn().mockResolvedValue(null),
       remember: vi.fn().mockResolvedValue(undefined),
     },
+    memory: {
+      prepareContext: vi
+        .fn()
+        .mockImplementation(async ({ snapshot }: { snapshot: RunSnapshot }) => ({
+          messages: snapshot.messages,
+          sections: [],
+        })),
+      rememberAfterRun: vi.fn().mockResolvedValue(undefined),
+    },
     off,
   };
   vi.stubGlobal('fetch', deps.fetch);
@@ -201,6 +215,7 @@ function makeExecutor(config: { maxAttempts?: number; billing?: BillingService }
     metrics,
     deps.settings as unknown as SettingsService,
     deps.qaCache as unknown as QaCacheService,
+    deps.memory as unknown as MemoryService,
   );
   return { executor, deps, metrics };
 }
@@ -1695,6 +1710,84 @@ describe('RunExecutor', () => {
     expect(deps.tasks.markRunning.mock.invocationCallOrder[0]!).toBeLessThan(
       deps.fetch.mock.invocationCallOrder[0]!,
     );
+  });
+
+  it('记忆窗口替换下发消息，段落按长期记忆→会话摘要顺序进入 systemPrompt', async () => {
+    const { executor, deps } = makeExecutor();
+    deps.memory.prepareContext.mockResolvedValueOnce({
+      messages: [{ role: 'user', content: '最近问题', attachments: [] }],
+      sections: ['## 用户长期记忆\n- 偏好简洁', '## 会话早期摘要\n早前内容'],
+    });
+    deps.fetch.mockResolvedValue(
+      sseResponse([
+        { event: 'step', data: stepEvent(0, 'think', { text: 'hi' }) },
+        { event: 'done', data: { runId: 'r1' } },
+      ]),
+    );
+
+    await executor.execute(job());
+
+    expect(deps.memory.prepareContext).toHaveBeenCalledWith({
+      job: job(),
+      snapshot: expect.objectContaining({ goal: '写个总结' }),
+      modelRoutes: [],
+    });
+    expect(deps.attachments.hydrateForRun).toHaveBeenCalledWith([
+      { role: 'user', content: '最近问题', attachments: [] },
+    ]);
+    const body = JSON.parse(String((deps.fetch.mock.calls[0][1] as RequestInit).body)) as {
+      messages: unknown;
+      systemPrompt: string;
+    };
+    expect(body.messages).toEqual([{ role: 'user', content: '最近问题', attachments: [] }]);
+    const longTermIdx = body.systemPrompt.indexOf('## 用户长期记忆');
+    const summaryIdx = body.systemPrompt.indexOf('## 会话早期摘要');
+    expect(longTermIdx).toBeGreaterThanOrEqual(0);
+    expect(summaryIdx).toBeGreaterThan(longTermIdx);
+  });
+
+  it('done 后调用 rememberAfterRun；写入失败不影响终态', async () => {
+    const { executor, deps } = makeExecutor();
+    deps.memory.rememberAfterRun.mockRejectedValueOnce(new Error('boom'));
+    deps.fetch.mockResolvedValue(
+      sseResponse([
+        { event: 'step', data: stepEvent(0, 'think', { text: '完成' }) },
+        { event: 'done', data: { runId: 'r1' } },
+      ]),
+    );
+
+    await executor.execute(job());
+
+    expect(deps.memory.rememberAfterRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'done',
+        assistantText: '完成',
+        job: job(),
+      }),
+    );
+    expect(deps.tasks.finish).toHaveBeenCalledWith('r1', 't1', 'done', '完成', 's1');
+    expect(deps.events.publish).toHaveBeenCalledWith('r1', {
+      event: 'done',
+      data: { runId: 'r1' },
+    });
+  });
+
+  it('记忆准备抛错时退回全量历史，运行照常完成', async () => {
+    const { executor, deps } = makeExecutor();
+    deps.memory.prepareContext.mockRejectedValueOnce(new Error('memory down'));
+    deps.fetch.mockResolvedValue(
+      sseResponse([
+        { event: 'step', data: stepEvent(0, 'think', { text: 'hi' }) },
+        { event: 'done', data: { runId: 'r1' } },
+      ]),
+    );
+
+    await executor.execute(job());
+
+    expect(deps.attachments.hydrateForRun).toHaveBeenCalledWith(
+      snapshot().messages,
+    );
+    expect(deps.tasks.finish).toHaveBeenCalledWith('r1', 't1', 'done', 'hi', 's1');
   });
 });
 

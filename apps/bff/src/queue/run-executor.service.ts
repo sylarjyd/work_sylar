@@ -29,6 +29,7 @@ import { RunTelemetry } from '../observability/run-telemetry';
 import { unsealRoutes } from '../models/run-routes';
 import { SettingsService } from '../settings/settings.service';
 import { QaCacheService } from '../qa-cache/qa-cache.service';
+import { MemoryService, type MemoryContext } from '../memory/memory.service';
 import { errorPayload, type RunErrorCode } from './run-errors';
 
 /** 上游建连超时：只约束 fetch 拿到响应头，不中断已建立的长流。 */
@@ -166,6 +167,8 @@ interface AttemptOptions {
   job: RunJob;
   snapshot: RunSnapshot;
   messages: ChatMessage[];
+  /** 记忆段落：长期记忆在前、会话摘要在后，拼在模式提示之后。 */
+  memorySections: string[];
   billing: RunBilling;
   modelRoutes: RunModelRoute[];
   runtimeUrl: string;
@@ -216,6 +219,7 @@ export class RunExecutor {
     @Inject(BFF_METRICS) private readonly metrics: BffMetrics,
     private readonly settings: SettingsService,
     private readonly qaCache: QaCacheService,
+    private readonly memory: MemoryService,
   ) {}
 
   async execute(job: RunJob): Promise<void> {
@@ -409,6 +413,10 @@ export class RunExecutor {
       return;
     }
 
+    // 记忆上下文必须在附件水合之前算好：被窗口截掉的历史不该再读取附件字节。
+    // 记忆自身已逐层降级，这里再兜一层，确保任何意外异常都不会让运行失败。
+    const memoryContext = await this.prepareMemoryContext(job, snapshot, modelRoutes);
+
     // 历史会话在首次成功预占后固化模型；失败只记日志，不影响本次运行。
     if (snapshot.model == null) {
       try {
@@ -421,7 +429,7 @@ export class RunExecutor {
     // 附件字节在事务外读取；读取失败时 task/run 已存在，必须失败收尾并归还预占。
     let messages: ChatMessage[];
     try {
-      messages = await this.attachments.hydrateForRun(snapshot.messages);
+      messages = await this.attachments.hydrateForRun(memoryContext.messages);
     } catch (err) {
       this.logger.error(`run ${runId} 读取附件失败: ${(err as Error).message}`);
       await this.releaseHold(runId);
@@ -517,6 +525,7 @@ export class RunExecutor {
           job,
           snapshot,
           messages,
+          memorySections: memoryContext.sections,
           billing,
           modelRoutes,
           runtimeUrl,
@@ -610,6 +619,45 @@ export class RunExecutor {
       // 缓存写入是尽力而为的收尾步骤：必须排在终止事件之后，Redis 抖动不能拖慢
       // 客户端可见的收尾。成功且答案非空才写，失败/取消不覆盖旧条目，让其自然过期。
       await this.rememberQaCache(job, snapshot, status, finalText);
+      // 长期记忆与问答缓存同层：必须在终止事件之后、且失败不影响终态。
+      await this.rememberMemory(job, snapshot, status, finalText, modelRoutes);
+    }
+  }
+
+  /** 记忆准备失败时退回全量历史：记忆是增强能力，不能成为运行的失败点。 */
+  private async prepareMemoryContext(
+    job: RunJob,
+    snapshot: RunSnapshot,
+    modelRoutes: RunModelRoute[],
+  ): Promise<MemoryContext> {
+    try {
+      return await this.memory.prepareContext({ job, snapshot, modelRoutes });
+    } catch (err) {
+      this.logger.warn(
+        `run ${job.runId} 准备记忆上下文失败，使用全量历史: ${(err as Error).message}`,
+      );
+      return { messages: snapshot.messages, sections: [] };
+    }
+  }
+
+  /** 运行成功后写入长期记忆；MemoryService 内部已降级，这里再兜一层。 */
+  private async rememberMemory(
+    job: RunJob,
+    snapshot: RunSnapshot,
+    status: 'done' | 'failed' | 'canceled',
+    assistantText: string,
+    modelRoutes: RunModelRoute[],
+  ): Promise<void> {
+    try {
+      await this.memory.rememberAfterRun({
+        job,
+        snapshot,
+        status,
+        assistantText,
+        modelRoutes,
+      });
+    } catch (err) {
+      this.logger.warn(`run ${job.runId} 写入长期记忆失败: ${(err as Error).message}`);
     }
   }
 
@@ -716,6 +764,8 @@ export class RunExecutor {
     const systemPrompt = [
       snapshot.assistant?.systemPrompt?.trim(),
       snapshot.mode ? SESSION_MODE_PROMPTS[snapshot.mode] : undefined,
+      // 记忆段落顺序由 MemoryService 固定：长期记忆 → 会话摘要。
+      ...opts.memorySections,
       qaReference,
     ]
       .filter(Boolean)
