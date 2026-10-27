@@ -9,6 +9,7 @@ import {
   ApiOutlined,
   AuditOutlined,
   BookOutlined,
+  CloudServerOutlined,
   CommentOutlined,
   ContactsOutlined,
   CrownOutlined,
@@ -49,6 +50,7 @@ const ICONS: Record<string, ReactNode> = {
   '/kb': <DatabaseOutlined />,
   '/models': <ApiOutlined />,
   '/settings': <SettingOutlined />,
+  '/qa-cache': <CloudServerOutlined />,
   '/audit': <SafetyCertificateOutlined />,
 };
 
@@ -115,16 +117,20 @@ export function AdminShell({ children }: { children: ReactNode }) {
     label: <Link href={item.href}>{item.label}</Link>,
   });
 
-  // 分组做二级菜单，可点击标题收起/展开；折叠后只保留图标轨，
-  // 分组标题在 80px 内会被截断，因此改为扁平列表。
+  // 分组做二级菜单，可点击标题收起/展开，独立页面直接作为一级菜单；
+  // 折叠后只保留图标轨，分组标题在 80px 内会被截断，因此改为扁平列表。
   const menuItems = collapsed
     ? ADMIN_NAV_ITEMS.map(navItem)
-    : ADMIN_NAV.map((group) => ({
-        key: group.key,
-        icon: GROUP_ICONS[group.key],
-        label: group.label,
-        children: group.items.map(navItem),
-      }));
+    : ADMIN_NAV.map((entry) =>
+        'href' in entry
+          ? navItem({ href: entry.href, label: entry.label })
+          : {
+              key: entry.key,
+              icon: GROUP_ICONS[entry.key],
+              label: entry.label,
+              children: entry.items.map(navItem),
+            },
+      );
 
   return (
     <Layout style={{ minHeight: '100vh' }}>

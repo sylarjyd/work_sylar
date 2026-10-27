@@ -3,14 +3,13 @@ export interface AdminNavItem {
   label: string;
 }
 
-export interface AdminNavGroup {
-  key: string;
-  label: string;
-  items: AdminNavItem[];
-}
+/** 一级菜单：带 href 的直接跳转，否则渲染为可折叠分组。 */
+export type AdminNavEntry =
+  | { key: string; label: string; href: string }
+  | { key: string; label: string; items: AdminNavItem[] };
 
-/** 运营端分组导航：按业务域分组；组名作为二级菜单，可点击折叠。 */
-export const ADMIN_NAV: AdminNavGroup[] = [
+/** 运营端导航：按业务域分组；分组标题可点击折叠，独立页面直接作为一级菜单。 */
+export const ADMIN_NAV: AdminNavEntry[] = [
   {
     key: 'monitor',
     label: '运行监测',
@@ -47,9 +46,9 @@ export const ADMIN_NAV: AdminNavGroup[] = [
     items: [
       { href: '/models', label: '模型配置' },
       { href: '/settings', label: '参数配置' },
-      { href: '/qa-cache', label: '缓存管理' },
     ],
   },
+  { key: 'cache', label: '缓存管理', href: '/qa-cache' },
   {
     key: 'security',
     label: '安全审计',
@@ -57,7 +56,9 @@ export const ADMIN_NAV: AdminNavGroup[] = [
   },
 ];
 
-export const ADMIN_NAV_ITEMS: AdminNavItem[] = ADMIN_NAV.flatMap((group) => group.items);
+export const ADMIN_NAV_ITEMS: AdminNavItem[] = ADMIN_NAV.flatMap((entry) =>
+  'href' in entry ? [{ href: entry.href, label: entry.label }] : entry.items,
+);
 
 /** 当前路径命中的菜单 key；用最长前缀匹配，避免 /tasks 误命中其它路由。 */
 export function selectedNavKey(pathname: string | null | undefined): string {
