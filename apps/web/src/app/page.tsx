@@ -659,9 +659,12 @@ export default function Home() {
     try {
       const list = await listArtifacts(sid);
       if (req !== artifactReqRef.current) return;
+      // 终态后服务端列表即权威：未被落库的乐观卡片（如产物写入失败）必须丢弃，避免留下无法下载的幽灵条目。
+      const entry = tracker.snapshot(sid);
+      const keepOptimistic = sid === sessionIdRef.current && !!entry && !entry.terminal;
       setArtifacts((prev) => {
-        // 保留乐观卡片（id 为空），同名的以服务端列表为准；切换会话时 prev 已被清空，等价于整体替换。
-        const optimistic = prev.filter((a) => !a.id);
+        // 在途时保留乐观卡片（id 为空），同名的以服务端列表为准；终态或无条目时整体以服务端为准。
+        const optimistic = keepOptimistic ? prev.filter((a) => !a.id) : [];
         return [
           ...optimistic.filter((o) => !list.some((l) => l.filename === o.filename)),
           ...list,
