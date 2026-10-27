@@ -56,6 +56,11 @@ describe('computeCut', () => {
     const messages = Array.from({ length: 5 }, () => msg('😀'.repeat(10)));
     expect(computeCut(messages, 45)).toBe(1);
   });
+
+  it('minRecent 为 0 且预算为 0 时仍保留最后一条', () => {
+    const messages = [msg('a'), msg('b'), msg('c'), msg('d'), msg('e')];
+    expect(computeCut(messages, 0, 0)).toBe(messages.length - 1);
+  });
 });
 
 describe('fallbackSummary', () => {
@@ -73,6 +78,22 @@ describe('fallbackSummary', () => {
     const summary = fallbackSummary([msg('新增内容')], '已有摘要');
     expect(summary.startsWith('已有摘要')).toBe(true);
     expect(summary).toContain('用户: 新增内容');
+  });
+
+  it('旧摘要超长时裁剪而不是整段丢弃', () => {
+    const summary = fallbackSummary([], '旧'.repeat(2500));
+    expect(Array.from(summary).length).toBeLessThanOrEqual(2000);
+    expect(summary.startsWith('旧')).toBe(true);
+  });
+
+  it('处理 2000 条消息时保持线性耗时', () => {
+    const messages = Array.from({ length: 2000 }, (_, i) =>
+      msg(`消息${i}-` + 'x'.repeat(300)),
+    );
+    const start = performance.now();
+    const summary = fallbackSummary(messages);
+    expect(performance.now() - start).toBeLessThan(1000);
+    expect(Array.from(summary).length).toBeLessThanOrEqual(2000);
   });
 });
 

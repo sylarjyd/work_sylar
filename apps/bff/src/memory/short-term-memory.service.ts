@@ -80,7 +80,7 @@ export function computeCut(
 ): number {
   const total = messages.length;
   if (total === 0) return 0;
-  const keepMax = Math.min(minRecent, total);
+  const keepMax = Math.max(1, Math.min(minRecent, total));
   let cut = total;
   let chars = 0;
   for (let i = total - 1; i >= 0; i--) {
@@ -102,7 +102,8 @@ export function computeCut(
 export function fallbackSummary(older: PreparedMessage[], previous?: string): string {
   const lines: string[] = [];
   const head = previous?.trim();
-  if (head) lines.push(head);
+  // 旧摘要可能本身超长：先裁剪再加，避免被后续 shift 整行丢弃。
+  if (head) lines.push(clipChars(head, SUMMARY_MAX_CHARS));
   for (const m of older) {
     const text = m.content.replace(/\s+/g, ' ').trim();
     if (text === '') continue;
@@ -112,10 +113,16 @@ export function fallbackSummary(older: PreparedMessage[], previous?: string): st
         (names ? `（附件：${names}）` : ''),
     );
   }
-  while (lines.length > 0 && charCount(lines.join('\n')) > SUMMARY_MAX_CHARS) {
-    lines.shift();
+  // 逐行累计字符数（含行间换行），只在最后 join 一次：避免每丢一行都重新
+  // join 并分配码点数组，否则长会话下退化为 O(n²) 阻塞事件循环。
+  let totalChars = Math.max(0, lines.length - 1);
+  for (const line of lines) totalChars += charCount(line);
+  let first = 0;
+  while (first < lines.length && totalChars > SUMMARY_MAX_CHARS) {
+    totalChars -= charCount(lines[first]) + (first < lines.length - 1 ? 1 : 0);
+    first++;
   }
-  return lines.join('\n');
+  return lines.slice(first).join('\n');
 }
 
 function parseState(raw: string): ShortMemoryState | null {
