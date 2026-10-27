@@ -51,6 +51,7 @@ interface ExecutorDeps {
     getQaCacheConfig: ReturnType<typeof vi.fn>;
   };
   qaCache: {
+    available: boolean;
     lookup: ReturnType<typeof vi.fn>;
     remember: ReturnType<typeof vi.fn>;
   };
@@ -182,6 +183,7 @@ function makeExecutor(config: { maxAttempts?: number; billing?: BillingService }
       getQaCacheConfig: vi.fn().mockResolvedValue({ enabled: true, ttlSeconds: 300 }),
     },
     qaCache: {
+      available: true,
       lookup: vi.fn().mockResolvedValue(null),
       remember: vi.fn().mockResolvedValue(undefined),
     },
@@ -564,9 +566,14 @@ describe('RunExecutor', () => {
     const body = JSON.parse(String(deps.fetch.mock.calls[0]![1].body)) as {
       systemPrompt: string;
     };
-    // 助手提示词仍排在最前，缓存参考只能追加。
+    // 顺序必须是：助手提示词 → 任务分类提示 → 缓存参考，后者不能插队覆盖前两者。
+    const assistantIdx = body.systemPrompt.indexOf('你是写作助手');
+    const modeIdx = body.systemPrompt.indexOf(SESSION_MODE_PROMPTS.chat);
+    const cacheRefIdx = body.systemPrompt.indexOf('## 会话内历史回答参考');
+    expect(assistantIdx).toBeGreaterThanOrEqual(0);
+    expect(modeIdx).toBeGreaterThan(assistantIdx);
+    expect(cacheRefIdx).toBeGreaterThan(modeIdx);
     expect(body.systemPrompt.startsWith('你是写作助手')).toBe(true);
-    expect(body.systemPrompt).toContain('## 会话内历史回答参考');
     expect(body.systemPrompt).toContain('【问题】写个总结');
     expect(body.systemPrompt).toContain('【此前回答】上次的回答');
     expect(deps.qaCache.lookup).toHaveBeenCalledWith({
@@ -576,13 +583,44 @@ describe('RunExecutor', () => {
     });
   });
 
-  it('缓存开关关闭时不读取也不注入参考', async () => {
+  it('命中答案超过上限时截断注入，避免挤占上下文', async () => {
     const { executor, deps } = makeExecutor();
-    deps.settings.getQaCacheConfig.mockResolvedValue({ enabled: false, ttlSeconds: 300 });
+    const longAnswer = `${'A'.repeat(4_000)}TAIL-AFTER-LIMIT`;
+    deps.qaCache.lookup.mockResolvedValue({
+      tenantId: 't1',
+      userId: 'u1',
+      sessionId: 's1',
+      question: '写个总结',
+      answer: longAnswer,
+      createdAt: Date.now(),
+      expiresAt: Date.now() + 60_000,
+    });
     deps.fetch.mockResolvedValue(sseResponse([{ event: 'done', data: { runId: 'r1' } }]));
 
     await executor.execute(job());
 
+    const body = JSON.parse(String(deps.fetch.mock.calls[0]![1].body)) as {
+      systemPrompt: string;
+    };
+    // 只保留前 4000 字并显式标注截断，尾部内容绝不能进入提示词。
+    expect(body.systemPrompt).toContain(`${'A'.repeat(4_000)}\n…（已截断）`);
+    expect(body.systemPrompt).not.toContain('TAIL-AFTER-LIMIT');
+  });
+
+  it('缓存开关关闭时不读取也不注入参考', async () => {
+    const { executor, deps } = makeExecutor();
+    deps.settings.getQaCacheConfig.mockResolvedValue({ enabled: false, ttlSeconds: 300 });
+    // 必须有非空成功答案，否则 remember 的断言是空转的。
+    deps.fetch.mockResolvedValue(
+      sseResponse([
+        { event: 'step', data: stepEvent(0, 'think', { text: '最终答案' }) },
+        { event: 'done', data: { runId: 'r1' } },
+      ]),
+    );
+
+    await executor.execute(job());
+
+    expect(deps.tasks.finish).toHaveBeenCalledWith('r1', 't1', 'done', '最终答案', 's1');
     expect(deps.qaCache.lookup).not.toHaveBeenCalled();
     expect(deps.qaCache.remember).not.toHaveBeenCalled();
     const body = JSON.parse(String(deps.fetch.mock.calls[0]![1].body)) as {
@@ -604,6 +642,25 @@ describe('RunExecutor', () => {
       systemPrompt?: string;
     };
     expect(body.systemPrompt).toBeUndefined();
+    expect(warn.mock.calls.some(([msg]) => String(msg).includes('读取问答缓存失败'))).toBe(true);
+  });
+
+  it('问答缓存配置读取失败时跳过缓存且不影响运行', async () => {
+    const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    const { executor, deps } = makeExecutor();
+    deps.settings.getQaCacheConfig.mockRejectedValue(new Error('db down'));
+    deps.fetch.mockResolvedValue(
+      sseResponse([
+        { event: 'step', data: stepEvent(0, 'think', { text: '最终答案' }) },
+        { event: 'done', data: { runId: 'r1' } },
+      ]),
+    );
+
+    await expect(executor.execute(job())).resolves.toBeUndefined();
+
+    expect(deps.tasks.finish).toHaveBeenCalledWith('r1', 't1', 'done', '最终答案', 's1');
+    expect(deps.qaCache.lookup).not.toHaveBeenCalled();
+    expect(deps.qaCache.remember).not.toHaveBeenCalled();
     expect(warn.mock.calls.some(([msg]) => String(msg).includes('读取问答缓存失败'))).toBe(true);
   });
 
@@ -1334,6 +1391,30 @@ describe('RunExecutor', () => {
     // 最终回答只取最后一次尝试的 think 文本，不能把重放轮次拼出重复内容。
     expect(deps.tasks.finish).toHaveBeenCalledWith('r1', 't1', 'done', '完整回答', 's1');
     expect(resumed).toHaveBeenCalledTimes(1);
+  });
+
+  it('重试时每次尝试都查一次缓存，最终成功只写一次', async () => {
+    const { executor, deps } = makeExecutor({ maxAttempts: 2 });
+    deps.fetch
+      .mockResolvedValueOnce(
+        sseResponse([{ event: 'step', data: stepEvent(0, 'think', { text: '半截回答' }) }]),
+      )
+      .mockResolvedValueOnce(
+        sseResponse([
+          { event: 'step', data: stepEvent(0, 'think', { text: '完整回答' }) },
+          { event: 'done', data: { runId: 'r1' } },
+        ]),
+      );
+
+    await executor.execute(job());
+
+    expect(deps.fetch).toHaveBeenCalledTimes(2);
+    // 注入属于每次尝试的准备阶段；写入只在最终成功收尾时发生一次。
+    expect(deps.qaCache.lookup).toHaveBeenCalledTimes(2);
+    expect(deps.qaCache.remember).toHaveBeenCalledTimes(1);
+    expect(deps.qaCache.remember).toHaveBeenCalledWith(
+      expect.objectContaining({ answer: '完整回答' }),
+    );
   });
 
   it('无断点重试时先清空 seq 0 的旧步骤，再从头发起第二次尝试', async () => {
