@@ -16,8 +16,10 @@ export interface OpenAICompatEmbeddingConfig {
 /** 走 OpenAI 兼容的 /embeddings（SiliconFlow / OpenAI / 兼容网关）。 */
 export class OpenAICompatEmbeddingGateway implements EmbeddingGateway {
   readonly dim: number;
+  readonly model: string;
   constructor(private readonly cfg: OpenAICompatEmbeddingConfig) {
     this.dim = cfg.dim;
+    this.model = cfg.model;
   }
 
   async embed(texts: string[]): Promise<number[][]> {

@@ -49,6 +49,7 @@ export function cosine(a: number[], b: number[]): number {
 /** 无 key / 测试用的确定性嵌入。 */
 export class MockEmbeddingGateway implements EmbeddingGateway {
   readonly dim: number;
+  readonly model = 'mock';
   constructor(dim = 1024) {
     this.dim = dim;
   }

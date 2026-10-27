@@ -41,6 +41,12 @@ import { buildMcpTools } from './mcp/discovery';
  */
 const MAX_RUN_BODY_BYTES = 48 * 1024 * 1024;
 
+/** /embed 请求体上限：64 条 × 4000 字符（UTF-8 最多 4 字节）再留 JSON 余量。 */
+const MAX_EMBED_BODY_BYTES = 1024 * 1024;
+const EMBED_MAX_TEXTS = 64;
+const EMBED_MAX_TEXT_CHARS = 4000;
+const EMBED_MAX_TOTAL_CHARS = 32_000;
+
 export interface RuntimeDeps {
   gateway?: ModelGateway;
   tools?: Tool[];
@@ -364,6 +370,85 @@ export function createRuntimeServer(deps: RuntimeDeps = {}): Server {
       return;
     }
 
+    if (req.method === 'POST' && req.url === '/embed') {
+      if (!authorized(req)) {
+        res.writeHead(401, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: 'unauthorized' }));
+        return;
+      }
+      let body = '';
+      let bytes = 0;
+      let tooLarge = false;
+      req.on('data', (chunk: Buffer) => {
+        if (tooLarge) return;
+        bytes += chunk.length;
+        if (bytes > MAX_EMBED_BODY_BYTES) {
+          tooLarge = true;
+          body = '';
+          return;
+        }
+        body += chunk;
+      });
+      req.on('end', () => {
+        void (async () => {
+          if (tooLarge) {
+            res.writeHead(413, { 'content-type': 'application/json' });
+            res.end(JSON.stringify({ error: 'payload_too_large' }));
+            return;
+          }
+          let texts: unknown;
+          try {
+            const parsed: unknown = JSON.parse(body || '{}');
+            if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+              throw new Error('not_object');
+            }
+            texts = (parsed as { texts?: unknown }).texts;
+          } catch {
+            res.writeHead(400, { 'content-type': 'application/json' });
+            res.end(JSON.stringify({ error: 'invalid_params' }));
+            return;
+          }
+          if (
+            !Array.isArray(texts) ||
+            texts.length < 1 ||
+            texts.length > EMBED_MAX_TEXTS ||
+            !texts.every(
+              (t) => typeof t === 'string' && t !== '' && countChars(t) <= EMBED_MAX_TEXT_CHARS,
+            )
+          ) {
+            res.writeHead(400, { 'content-type': 'application/json' });
+            res.end(JSON.stringify({ error: 'invalid_params' }));
+            return;
+          }
+          const total = (texts as string[]).reduce((sum, t) => sum + countChars(t), 0);
+          if (total > EMBED_MAX_TOTAL_CHARS) {
+            res.writeHead(400, { 'content-type': 'application/json' });
+            res.end(JSON.stringify({ error: 'invalid_params' }));
+            return;
+          }
+          try {
+            const vectors = await embedding.embed(texts as string[]);
+            // 条数或维度不符时不能把坏向量交给 BFF 写库，直接按上游故障拒绝。
+            if (
+              vectors.length !== texts.length ||
+              vectors.some((v) => v.length !== embedding.dim)
+            ) {
+              throw new Error('embedding_dim_mismatch');
+            }
+            res.writeHead(200, { 'content-type': 'application/json' });
+            res.end(
+              JSON.stringify({ vectors, dim: embedding.dim, model: embedding.model ?? 'unknown' }),
+            );
+          } catch (err) {
+            logger.error({ msg: 'embed_failed', err });
+            res.writeHead(500, { 'content-type': 'application/json' });
+            res.end(JSON.stringify({ error: 'embedding_failed' }));
+          }
+        })();
+      });
+      return;
+    }
+
     if (req.method === 'POST' && req.url === '/kb/ingest') {
       if (!authorized(req)) {
         res.writeHead(401, { 'content-type': 'application/json' });
@@ -607,6 +692,11 @@ function isIntInRange(v: unknown): v is number {
 /** 用量必须是有限非负数：NaN/Infinity 会污染预算计算与结算金额。 */
 function isFiniteNonNegative(v: unknown): v is number {
   return typeof v === 'number' && Number.isFinite(v) && v >= 0;
+}
+
+/** 按 Unicode 码点计数：中文与 emoji 各算 1，与 BFF 侧预算口径一致。 */
+function countChars(text: string): number {
+  return Array.from(text).length;
 }
 
 /** 判断请求来源是否为回环地址；未配置共享密钥时仅信任本机调用。 */

@@ -1132,3 +1132,78 @@ describe('filterTools', () => {
   });
 });
 
+describe('POST /embed', () => {
+  async function postEmbed(payload: unknown, headers: Record<string, string> = {}) {
+    return fetch(`${baseUrl}/embed`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...headers },
+      body: JSON.stringify(payload),
+    });
+  }
+
+  it('批量向量化返回 vectors/dim/model', async () => {
+    const res = await postEmbed({ texts: ['你好', '世界'] });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      vectors: number[][];
+      dim: number;
+      model: string;
+    };
+    expect(body.vectors).toHaveLength(2);
+    expect(body.dim).toBe(1024);
+    expect(body.vectors[0]).toHaveLength(1024);
+    expect(typeof body.model).toBe('string');
+  });
+
+  it('参数越界返回 400 invalid_params', async () => {
+    expect((await postEmbed({ texts: [] })).status).toBe(400);
+    expect((await postEmbed({ texts: ['a'.repeat(4001)] })).status).toBe(400);
+    expect(
+      (await postEmbed({ texts: Array.from({ length: 65 }, () => 'x') })).status,
+    ).toBe(400);
+  });
+
+  it('注入的网关维度不符时返回 500 embedding_failed', async () => {
+    const badServer = createRuntimeServer({
+      gateway: scripted,
+      tools: [echo],
+      embedding: {
+        dim: 3,
+        model: 'bad',
+        async embed(texts) {
+          return texts.map(() => [1, 0]);
+        },
+      },
+    });
+    await new Promise<void>((r) => badServer.listen(0, r));
+    const addr = badServer.address();
+    if (!addr || typeof addr === 'string') throw new Error('no port');
+    try {
+      const res = await fetch(`http://127.0.0.1:${addr.port}/embed`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ texts: ['x'] }),
+      });
+      expect(res.status).toBe(500);
+      expect(await res.json()).toMatchObject({ error: 'embedding_failed' });
+    } finally {
+      await new Promise<void>((r) => badServer.close(() => r()));
+    }
+  });
+
+  it('设置 AGENT_RUNTIME_TOKEN 后缺 token 返回 401', async () => {
+    process.env.AGENT_RUNTIME_TOKEN = 'secret-tok';
+    try {
+      expect((await postEmbed({ texts: ['x'] })).status).toBe(401);
+      const ok = await postEmbed(
+        { texts: ['x'] },
+        { 'x-agent-runtime-token': 'secret-tok' },
+      );
+      expect(ok.status).toBe(200);
+      await ok.text();
+    } finally {
+      delete process.env.AGENT_RUNTIME_TOKEN;
+    }
+  });
+});
+
