@@ -16,6 +16,7 @@ import { AdminObservabilityService } from './admin-observability.service';
 import { AdminAlertsController } from './admin-alerts.controller';
 import { AdminAlertsService } from './admin-alerts.service';
 import { AdminKbController } from './admin-kb.controller';
+import { AdminQaCacheController } from './admin-qa-cache.controller';
 import { AdminTasksService } from './admin-tasks.service';
 import { AuditService } from '../audit/audit.service';
 import { SettingsService } from '../settings/settings.service';
@@ -100,7 +101,7 @@ describe('管理端鉴权', () => {
 });
 
 describe('AppModule 装配', () => {
-  it('管理端 11 个控制器均已装配', async () => {
+  it('管理端 12 个控制器均已装配', async () => {
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
       .overrideProvider(PrismaService)
       .useValue(fakePrisma)
@@ -119,6 +120,7 @@ describe('AppModule 装配', () => {
       );
       expect(moduleRef.get(AdminAlertsController)).toBeInstanceOf(AdminAlertsController);
       expect(moduleRef.get(AdminKbController)).toBeInstanceOf(AdminKbController);
+      expect(moduleRef.get(AdminQaCacheController)).toBeInstanceOf(AdminQaCacheController);
     } finally {
       await moduleRef.close();
     }

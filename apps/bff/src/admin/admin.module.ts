@@ -25,8 +25,10 @@ import { AdminAlertsController } from './admin-alerts.controller';
 import { AdminAlertsService } from './admin-alerts.service';
 import { AdminKbController } from './admin-kb.controller';
 import { AdminKbService } from './admin-kb.service';
+import { AdminQaCacheController } from './admin-qa-cache.controller';
+import { AdminQaCacheService } from './admin-qa-cache.service';
 
-/** 管理端模块：用户/租户/套餐/会话/任务/模型/参数/审计/概览/告警/知识库十一组路由统一装配。 */
+/** 管理端模块：用户/租户/套餐/会话/任务/模型/参数/审计/概览/告警/知识库/问答缓存十二组路由统一装配。 */
 @Module({
   imports: [AuditModule, SettingsModule, BillingModule, AlertsModule, KbModule, RunsModule],
   controllers: [
@@ -41,6 +43,7 @@ import { AdminKbService } from './admin-kb.service';
     AdminObservabilityController,
     AdminAlertsController,
     AdminKbController,
+    AdminQaCacheController,
   ],
   providers: [
     AdminUsersService,
@@ -52,6 +55,7 @@ import { AdminKbService } from './admin-kb.service';
     AdminObservabilityService,
     AdminAlertsService,
     AdminKbService,
+    AdminQaCacheService,
   ],
 })
 export class AdminModule {}

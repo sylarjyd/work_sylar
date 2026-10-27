@@ -773,6 +773,21 @@ export interface AdminSessionDetailDto extends AdminSessionItemDto {
   artifactCount: number;
 }
 
+/** 运营端问答缓存条目：会话或用户缺失时回退展示原始 id。 */
+export interface AdminQaCacheItemDto {
+  hash: string;
+  userId: string;
+  userEmail: string;
+  sessionId: string;
+  sessionTitle: string;
+  question: string;
+  answer: string;
+  createdAt: string;
+  expiresAt: string;
+}
+
+export type AdminQaCacheListDto = PageDto<AdminQaCacheItemDto>;
+
 export interface AdminMessageDto extends MessageDto {
   createdAt: string;
 }
