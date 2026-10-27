@@ -24,6 +24,12 @@ const entry = {
 
 const auditRows: Array<Record<string, unknown>> = [];
 
+/** 会话查询结果可替换，便于模拟会话存在但 user 关系为空的行。 */
+let sessionRows: Array<{ id: string; title: string; user: { email: string } | null }> = [];
+const defaultSessionRows = () => [
+  { id: 's1', title: '缓存会话', user: { email: 'user1@test.local' } },
+];
+
 const fakePrisma = {
   user: {
     findUnique: async ({ where }: { where: { id: string } }) => ({
@@ -35,9 +41,7 @@ const fakePrisma = {
   },
   session: {
     findMany: async ({ where }: { where: { id: { in: string[] } } }) =>
-      where.id.in.includes('s1')
-        ? [{ id: 's1', title: '缓存会话', user: { email: 'user1@test.local' } }]
-        : [],
+      sessionRows.filter((row) => where.id.in.includes(row.id)),
   },
   adminAuditLog: {
     create: async ({ data }: { data: Record<string, unknown> }) => {
@@ -77,6 +81,7 @@ afterAll(async () => {
 
 beforeEach(() => {
   auditRows.length = 0;
+  sessionRows = defaultSessionRows();
   qaCache.list.mockReset().mockResolvedValue({ items: [entry], total: 1 });
   qaCache.get.mockReset().mockResolvedValue(entry);
   qaCache.remove.mockReset().mockResolvedValue(undefined);
@@ -127,6 +132,30 @@ describe('问答缓存接口', () => {
       createdAt: new Date(entry.createdAt).toISOString(),
       expiresAt: new Date(entry.expiresAt).toISOString(),
     });
+
+    expect(auditRows[0]).toMatchObject({
+      action: 'qa_cache.list',
+      targetType: 'qa_cache',
+    });
+    // 审计只记分页与条数，绝不能带出问答正文。
+    expect(auditRows[0].summary).toEqual({ page: 1, pageSize: 20, count: 1 });
+  });
+
+  it('会话存在但 user 关系为空时回退展示用户 id', async () => {
+    sessionRows = [{ id: 's1', title: '缓存会话', user: null }];
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/admin/qa-cache',
+      headers: auth('admin'),
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.payload) as { items: Array<Record<string, unknown>> };
+    expect(body.items[0]).toMatchObject({
+      userEmail: 'u1',
+      sessionTitle: '缓存会话',
+    });
   });
 
   it('会话或用户缺失时回退展示原始 id', async () => {
@@ -176,8 +205,8 @@ describe('问答缓存接口', () => {
       action: 'qa_cache.delete',
       targetType: 'qa_cache',
       targetId: HASH,
-      summary: { userId: 'u1', sessionId: 's1' },
     });
+    expect(auditRows[0].summary).toEqual({ userId: 'u1', sessionId: 's1' });
   });
 
   it('非法 hash 返回 400 invalid_hash，且不触碰缓存', async () => {
@@ -189,7 +218,28 @@ describe('问答缓存接口', () => {
 
     expect(res.statusCode).toBe(400);
     expect(JSON.parse(res.payload)).toMatchObject({ message: 'invalid_hash' });
+    expect(qaCache.get).not.toHaveBeenCalled();
     expect(qaCache.remove).not.toHaveBeenCalled();
+  });
+
+  it('删除时缓存普通错误也转成 503 cache_unavailable', async () => {
+    qaCache.remove.mockRejectedValueOnce(new Error('connection lost'));
+    const removeFailed = await app.inject({
+      method: 'DELETE',
+      url: `/api/admin/qa-cache/${HASH}`,
+      headers: auth('admin'),
+    });
+    expect(removeFailed.statusCode).toBe(503);
+    expect(JSON.parse(removeFailed.payload)).toMatchObject({ message: 'cache_unavailable' });
+
+    qaCache.get.mockRejectedValueOnce(new Error('connection lost'));
+    const getFailed = await app.inject({
+      method: 'DELETE',
+      url: `/api/admin/qa-cache/${HASH}`,
+      headers: auth('admin'),
+    });
+    expect(getFailed.statusCode).toBe(503);
+    expect(JSON.parse(getFailed.payload)).toMatchObject({ message: 'cache_unavailable' });
   });
 
   it('缓存命令失败时列表与删除都返回 503 cache_unavailable', async () => {

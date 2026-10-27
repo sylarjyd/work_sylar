@@ -22,7 +22,10 @@ export class AdminQaCacheService {
     private readonly cache: QaCacheService,
   ) {}
 
-  async list(query: Record<string, unknown>): Promise<AdminQaCacheListDto> {
+  async list(
+    query: Record<string, unknown>,
+    actor: AdminActor,
+  ): Promise<AdminQaCacheListDto> {
     const { page, pageSize, skip, take } = parsePage(query.page, query.pageSize);
     // 缓存命令失败（连接断开/超时）与未配置同等处理：运营端只看到 503。
     let result: Awaited<ReturnType<QaCacheService['list']>>;
@@ -43,25 +46,30 @@ export class AdminQaCacheService {
       : [];
     const byId = new Map(sessions.map((session) => [session.id, session]));
 
-    return {
-      items: result.items.map((item) => {
-        const session = byId.get(item.sessionId);
-        return {
-          hash: item.hash,
-          userId: item.userId,
-          userEmail: session?.user.email ?? item.userId,
-          sessionId: item.sessionId,
-          sessionTitle: session?.title ?? item.sessionId,
-          question: item.question,
-          answer: item.answer,
-          createdAt: new Date(item.createdAt).toISOString(),
-          expiresAt: new Date(item.expiresAt).toISOString(),
-        };
-      }),
-      total: result.total,
-      page,
-      pageSize,
-    };
+    const items = result.items.map((item) => {
+      const session = byId.get(item.sessionId);
+      return {
+        hash: item.hash,
+        userId: item.userId,
+        userEmail: session?.user?.email ?? item.userId,
+        sessionId: item.sessionId,
+        sessionTitle: session?.title ?? item.sessionId,
+        question: item.question,
+        answer: item.answer,
+        createdAt: new Date(item.createdAt).toISOString(),
+        expiresAt: new Date(item.expiresAt).toISOString(),
+      };
+    });
+
+    // 列表直接暴露跨租户问答正文，与消息/运行详情一样留痕；审计只记分页与条数。
+    await this.audit.bestEffort(actor, {
+      action: 'qa_cache.list',
+      targetType: 'qa_cache',
+      summary: { page, pageSize, count: items.length },
+    });
+
+    // total 来自索引计数，是上限：条目被淘汰或恰好过期时实际返回会少于它。
+    return { items, total: result.total, page, pageSize };
   }
 
   async remove(hash: string, actor: AdminActor): Promise<void> {

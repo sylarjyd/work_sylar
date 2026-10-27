@@ -24,8 +24,12 @@ export class AdminQaCacheController {
   constructor(private readonly cache: AdminQaCacheService) {}
 
   @Get()
-  list(@Query() query: Record<string, unknown>): Promise<AdminQaCacheListDto> {
-    return this.cache.list(query ?? {});
+  list(
+    @CurrentUser() user: JwtPayload,
+    @Req() req: FastifyRequest,
+    @Query() query: Record<string, unknown>,
+  ): Promise<AdminQaCacheListDto> {
+    return this.cache.list(query ?? {}, actorOf(user, req));
   }
 
   @Delete(':hash')
