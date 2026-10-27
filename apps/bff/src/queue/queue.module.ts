@@ -15,6 +15,8 @@ import { BillingModule } from '../billing/billing.module';
 import { PrismaModule } from '../db/prisma.module';
 import { ObservabilityModule } from '../observability/observability.module';
 import { SettingsModule } from '../settings/settings.module';
+import { QaCacheService } from '../qa-cache/qa-cache.service';
+import { QaCacheSweeper } from '../qa-cache/qa-cache.sweeper';
 import { TasksModule } from '../tasks/tasks.module';
 import { readQueueConfig, type QueueRuntimeConfig } from './queue.config';
 import {
@@ -98,6 +100,8 @@ export class QueueModule implements OnApplicationShutdown {
       RunRelayService,
       // 启动 + 周期恢复：仅队列模式生效，内部按 config/queue 自行短路。
       RunRecoveryService,
+      QaCacheService,
+      QaCacheSweeper,
       RunWorker,
     ];
 
@@ -116,7 +120,14 @@ export class QueueModule implements OnApplicationShutdown {
         SettingsModule,
       ],
       providers,
-      exports: [RunQueueService, RunExecutor, RunRelayService, RUN_EVENT_BUS, RUN_CONTROL_BUS],
+      exports: [
+        RunQueueService,
+        RunExecutor,
+        RunRelayService,
+        RUN_EVENT_BUS,
+        RUN_CONTROL_BUS,
+        QaCacheService,
+      ],
     };
   }
 

@@ -11,6 +11,7 @@ import { BillingService } from '../billing/billing.service';
 import { MemoryRateLimiter } from '../billing/billing.rate-limit';
 import type { PrismaService } from '../db/prisma.service';
 import type { SettingsService } from '../settings/settings.service';
+import type { QaCacheService } from '../qa-cache/qa-cache.service';
 import type { RunEventBus } from './run-event-bus';
 import type { RunControlBus, RunControlMessage } from './run-control-bus';
 import { InsufficientCreditsError, PlanExpiredError } from '../billing/billing.errors';
@@ -45,7 +46,14 @@ interface ExecutorDeps {
   };
   events: { publish: ReturnType<typeof vi.fn> };
   control: { subscribe: ReturnType<typeof vi.fn> };
-  settings: { getQueueConfig: ReturnType<typeof vi.fn> };
+  settings: {
+    getQueueConfig: ReturnType<typeof vi.fn>;
+    getQaCacheConfig: ReturnType<typeof vi.fn>;
+  };
+  qaCache: {
+    lookup: ReturnType<typeof vi.fn>;
+    remember: ReturnType<typeof vi.fn>;
+  };
   /** 控制总线退订函数，用于断言所有退出路径都只退订一次。 */
   off: ReturnType<typeof vi.fn>;
 }
@@ -171,6 +179,11 @@ function makeExecutor(config: { maxAttempts?: number; billing?: BillingService }
         perTenantConcurrency: 2,
         maxPerTenant: 50,
       }),
+      getQaCacheConfig: vi.fn().mockResolvedValue({ enabled: true, ttlSeconds: 300 }),
+    },
+    qaCache: {
+      lookup: vi.fn().mockResolvedValue(null),
+      remember: vi.fn().mockResolvedValue(undefined),
     },
     off,
   };
@@ -185,6 +198,7 @@ function makeExecutor(config: { maxAttempts?: number; billing?: BillingService }
     deps.control as unknown as RunControlBus,
     metrics,
     deps.settings as unknown as SettingsService,
+    deps.qaCache as unknown as QaCacheService,
   );
   return { executor, deps, metrics };
 }
@@ -525,6 +539,155 @@ describe('RunExecutor', () => {
     };
     expect(body.modelRoutes[0]!.apiKey).toBe('sk-plain');
     expect(body.modelRoutes[0]!.apiKey).not.toBe(sealed);
+  });
+
+  it('命中问答缓存时把此前回答作为参考追加到系统提示词', async () => {
+    const { executor, deps } = makeExecutor();
+    deps.tasks.loadSnapshot.mockResolvedValue({
+      ...snapshot(),
+      mode: 'chat',
+      assistant: { systemPrompt: '你是写作助手' },
+    });
+    deps.qaCache.lookup.mockResolvedValue({
+      tenantId: 't1',
+      userId: 'u1',
+      sessionId: 's1',
+      question: '写个总结',
+      answer: '上次的回答',
+      createdAt: Date.now(),
+      expiresAt: Date.now() + 60_000,
+    });
+    deps.fetch.mockResolvedValue(sseResponse([{ event: 'done', data: { runId: 'r1' } }]));
+
+    await executor.execute(job());
+
+    const body = JSON.parse(String(deps.fetch.mock.calls[0]![1].body)) as {
+      systemPrompt: string;
+    };
+    // 助手提示词仍排在最前，缓存参考只能追加。
+    expect(body.systemPrompt.startsWith('你是写作助手')).toBe(true);
+    expect(body.systemPrompt).toContain('## 会话内历史回答参考');
+    expect(body.systemPrompt).toContain('【问题】写个总结');
+    expect(body.systemPrompt).toContain('【此前回答】上次的回答');
+    expect(deps.qaCache.lookup).toHaveBeenCalledWith({
+      userId: 'u1',
+      sessionId: 's1',
+      question: '写个总结',
+    });
+  });
+
+  it('缓存开关关闭时不读取也不注入参考', async () => {
+    const { executor, deps } = makeExecutor();
+    deps.settings.getQaCacheConfig.mockResolvedValue({ enabled: false, ttlSeconds: 300 });
+    deps.fetch.mockResolvedValue(sseResponse([{ event: 'done', data: { runId: 'r1' } }]));
+
+    await executor.execute(job());
+
+    expect(deps.qaCache.lookup).not.toHaveBeenCalled();
+    expect(deps.qaCache.remember).not.toHaveBeenCalled();
+    const body = JSON.parse(String(deps.fetch.mock.calls[0]![1].body)) as {
+      systemPrompt?: string;
+    };
+    expect(body.systemPrompt).toBeUndefined();
+  });
+
+  it('缓存读取异常只记日志，不注入且不影响运行', async () => {
+    const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    const { executor, deps } = makeExecutor();
+    deps.qaCache.lookup.mockRejectedValue(new Error('redis down'));
+    deps.fetch.mockResolvedValue(sseResponse([{ event: 'done', data: { runId: 'r1' } }]));
+
+    await expect(executor.execute(job())).resolves.toBeUndefined();
+
+    expect(deps.tasks.finish).toHaveBeenCalledWith('r1', 't1', 'done', '', 's1');
+    const body = JSON.parse(String(deps.fetch.mock.calls[0]![1].body)) as {
+      systemPrompt?: string;
+    };
+    expect(body.systemPrompt).toBeUndefined();
+    expect(warn.mock.calls.some(([msg]) => String(msg).includes('读取问答缓存失败'))).toBe(true);
+  });
+
+  it('运行成功且答案非空时写入问答缓存', async () => {
+    const { executor, deps } = makeExecutor();
+    deps.fetch.mockResolvedValue(
+      sseResponse([
+        { event: 'step', data: stepEvent(0, 'think', { text: '最终答案' }) },
+        { event: 'done', data: { runId: 'r1' } },
+      ]),
+    );
+
+    await executor.execute(job());
+
+    expect(deps.qaCache.remember).toHaveBeenCalledWith({
+      tenantId: 't1',
+      userId: 'u1',
+      sessionId: 's1',
+      question: '写个总结',
+      answer: '最终答案',
+      ttlSeconds: 300,
+    });
+  });
+
+  it('失败、取消或空答案不写入问答缓存', async () => {
+    const failed = makeExecutor({ maxAttempts: 1 });
+    failed.deps.fetch.mockResolvedValue(
+      sseResponse([
+        { event: 'step', data: stepEvent(0, 'think', { text: '半截回答' }) },
+        { event: 'error', data: { message: 'boom' } },
+      ]),
+    );
+    await failed.executor.execute(job());
+    expect(failed.deps.qaCache.remember).not.toHaveBeenCalled();
+
+    const canceled = makeExecutor();
+    let handler: ((msg: RunControlMessage) => void) | undefined;
+    canceled.deps.control.subscribe.mockImplementation(
+      async (_runId: string, h: typeof handler) => {
+        handler = h;
+        return canceled.deps.off;
+      },
+    );
+    let stepConsumed!: () => void;
+    const consumed = new Promise<void>((resolve) => {
+      stepConsumed = resolve;
+    });
+    canceled.deps.tasks.recordStep.mockImplementation(async () => stepConsumed());
+    canceled.deps.fetch.mockImplementation((_url: unknown, init: { signal: AbortSignal }) =>
+      Promise.resolve(
+        hangingSseResponse(
+          [{ event: 'step', data: stepEvent(0, 'think', { text: '半截回答' }) }],
+          init.signal,
+        ),
+      ),
+    );
+    const running = canceled.executor.execute(job());
+    await consumed;
+    handler!({ type: 'cancel' });
+    await expect(running).resolves.toBeUndefined();
+    expect(canceled.deps.qaCache.remember).not.toHaveBeenCalled();
+
+    const empty = makeExecutor();
+    empty.deps.fetch.mockResolvedValue(sseResponse([{ event: 'done', data: { runId: 'r1' } }]));
+    await empty.executor.execute(job());
+    expect(empty.deps.qaCache.remember).not.toHaveBeenCalled();
+  });
+
+  it('缓存写入异常不改变 run 终态', async () => {
+    const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    const { executor, deps } = makeExecutor();
+    deps.qaCache.remember.mockRejectedValue(new Error('redis down'));
+    deps.fetch.mockResolvedValue(
+      sseResponse([
+        { event: 'step', data: stepEvent(0, 'think', { text: '最终答案' }) },
+        { event: 'done', data: { runId: 'r1' } },
+      ]),
+    );
+
+    await expect(executor.execute(job())).resolves.toBeUndefined();
+
+    expect(deps.tasks.finish).toHaveBeenCalledWith('r1', 't1', 'done', '最终答案', 's1');
+    expect(publishedEvents(deps)).toEqual(['step', 'done']);
+    expect(warn.mock.calls.some(([msg]) => String(msg).includes('写入问答缓存失败'))).toBe(true);
   });
 
   it('任务分类提示追加在助手提示词之后', async () => {
