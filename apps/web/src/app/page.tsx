@@ -926,8 +926,12 @@ export default function Home() {
         syncRunMarker(id);
         // 自动命名按会话 id 更新侧栏，后台会话结束也要补。
         void syncSessionTitle(id);
+        // 后台会话的终态由落库历史接管：条目与预览对象立即释放，避免长期占用内存。
+        if (id !== sessionIdRef.current) {
+          releaseEntry(id);
+          return;
+        }
         // 产物与界面是页面级的：只为当前查看的会话刷新，避免后台会话把别人的成果区覆盖掉。
-        if (id !== sessionIdRef.current) return;
         void refreshArtifacts(id);
         // 完成的那一轮已落库，交给历史接管；取消/失败保留实时条目，才能看到「已取消」与错误步骤。
         if (tracker.snapshot(id)?.finalStatus === 'done') void settleIntoTimeline(id);
@@ -1032,7 +1036,7 @@ export default function Home() {
         // 取消也一样重连，终态帧丢失时由这次重连回放 status(canceled)+done 收尾。
         const retry = await streamRun(st.runId, st.lastSeq);
         if (!retry.ok) throw new Error(`stream_failed_${retry.status}`);
-        setError('');
+        if (sid === sessionIdRef.current) setError('');
         await consumeRunStream(retry, st, makeHandlers(sid, st));
       }
       // 重连已经拿到终态就不算失败；否则把最初的读取错误交给外层 catch。
@@ -1041,14 +1045,14 @@ export default function Home() {
         tracker.settle(sid, 'failed');
         syncRunMarker(sid);
         void syncSessionTitle(sid);
-        setError('连接已断开，可刷新恢复');
+        if (sid === sessionIdRef.current) setError('连接已断开，可刷新恢复');
       }
     } catch (err) {
       if (isUnauthorized(err)) {
         router.push('/login');
         return;
       }
-      setError(errorText(err));
+      if (sid === sessionIdRef.current) setError(errorText(err));
       if (sid) {
         // 起跑失败也要收尾，否则该会话输入框会一直只读。
         tracker.settle(sid, 'failed');
@@ -1087,13 +1091,15 @@ export default function Home() {
         syncRunMarker(id);
       }
     } catch (err) {
+      // 先收尾再跳转：导航被取消时也不能留下永久只读的在途条目。
+      tracker.settle(id, 'failed');
+      syncRunMarker(id);
       if (isUnauthorized(err)) {
         router.push('/login');
         return;
       }
-      tracker.settle(id, 'failed');
-      syncRunMarker(id);
-      setError('连接已断开，可刷新恢复');
+      // 后台会话的失败不弹到当前会话的错误横幅。
+      if (id === sessionIdRef.current) setError('连接已断开，可刷新恢复');
     } finally {
       streamingRef.current.delete(id);
     }
