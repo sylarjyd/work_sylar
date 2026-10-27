@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { Tabs } from 'antd';
 import {
   ATTACHMENT_ACCEPT,
   ATTACHMENT_MAX_PER_MESSAGE,
@@ -24,6 +25,7 @@ import {
 } from '@ai-office/shared';
 import { AppShell } from '../components/app-shell';
 import { ArtifactDrawer } from '../components/artifact-drawer';
+import { Markdown } from '../components/markdown';
 import {
   IconArrowUpRight,
   IconCheck,
@@ -89,12 +91,176 @@ interface SubmittedAttachment extends AttachmentRef {
   previewUrl?: string;
 }
 
-const SUGGESTIONS = [
+interface SuggestionCategory {
+  key: string;
+  label: string;
+  questions: { label: string; goal: string }[];
+}
+
+const CHAT_SUGGESTIONS = [
   { label: '写一份周报', goal: '整理本周工作进展，生成一份周报文档' },
   { label: '调研竞品', goal: '调研竞品并给出结论' },
   { label: '做一张数据表', goal: '把项目数据整理成表格，包含汇总与趋势' },
   { label: '生成演示稿', goal: '根据项目方案生成一份演示稿' },
 ];
+
+/** 办公/开发的常见问题分类与推荐问题，参考 WorkBuddy 首页的分类组织方式。 */
+const MODE_SUGGESTION_CATEGORIES: Partial<Record<SessionMode, SuggestionCategory[]>> = {
+  task: [
+    {
+      key: 'doc',
+      label: '文档处理',
+      questions: [
+        {
+          label: '把 Markdown 转成精美 PDF',
+          goal: '帮我把上传的 Markdown 文件转换成排版精美的 PDF 文档：包含封面、目录、代码高亮、表格交替底色和页码。',
+        },
+        {
+          label: '整理本周工作周报',
+          goal: '整理本周工作进展，生成一份结构化的周报文档，包含已完成事项、风险与下周计划。',
+        },
+        {
+          label: '会议纪要转正式文档',
+          goal: '把会议纪要整理成结构清晰的 Word 文档，列出结论、待办事项与负责人。',
+        },
+      ],
+    },
+    {
+      key: 'data',
+      label: '数据分析及可视化',
+      questions: [
+        {
+          label: '做退休计划测算工具',
+          goal: '帮我创建一个易于使用的退休计划工具，面向金融新手，支持复利计算并把结果可视化。',
+        },
+        {
+          label: '销售数据分析报告',
+          goal: '分析这份销售数据，产出带汇总与趋势图表的 Excel 分析报告。',
+        },
+        {
+          label: '项目数据看板',
+          goal: '把项目数据整理成表格并生成可视化看板，包含汇总与趋势。',
+        },
+      ],
+    },
+    {
+      key: 'research',
+      label: '深度研究',
+      questions: [
+        {
+          label: '对比全球 10 个 AI 模型',
+          goal: '请研究 2026 年全球表现最优的 10 个 AI 模型，对比分析它们在编码、多模态等关键能力上的表现，并总结各自的技术特点和优势场景。',
+        },
+        {
+          label: '调研竞品并输出结论',
+          goal: '调研竞品并输出结论：功能对比矩阵、用户评价、差异化与机会点。',
+        },
+        {
+          label: '猎豹种群保护现状',
+          goal: '研究非洲草原猎豹种群的生存困境与保护现状，输出一份研究报告。',
+        },
+      ],
+    },
+    {
+      key: 'slides',
+      label: '幻灯片',
+      questions: [
+        {
+          label: '生成 AI Agent 趋势 PPT',
+          goal: '请生成一个 AI Agent 2026 年发展趋势的 PPT。',
+        },
+        {
+          label: '项目方案演示稿',
+          goal: '根据项目方案生成一份演示稿，包含背景、目标、方案与里程碑。',
+        },
+        {
+          label: '季度经营汇报',
+          goal: '根据经营数据生成一份季度汇报演示稿，突出增长、问题与下一步计划。',
+        },
+      ],
+    },
+  ],
+  code: [
+    {
+      key: 'daily',
+      label: '日常开发',
+      questions: [
+        {
+          label: '开发日程管理应用',
+          goal: '开发一个日程管理应用，可以创建、编辑、删除待办事项，支持邮箱密码注册登录和 Google 登录。',
+        },
+        {
+          label: '批量重命名脚本',
+          goal: '用 Node.js 写一个批量重命名文件的脚本，支持按规则预览与回滚。',
+        },
+        {
+          label: '文件上传接口',
+          goal: '实现一个文件上传接口，支持分片上传、断点续传与进度回调。',
+        },
+      ],
+    },
+    {
+      key: 'web',
+      label: '网站开发',
+      questions: [
+        {
+          label: 'AI 热点信息追踪网页',
+          goal: '做一个大模型实时信息追踪网页，自动检索海外和中国的主流模型、AI 应用公司的最新动态，每天自动更新。页面分两层：首页按日期展示当天的资讯总结，点进去可以看到具体的资讯详情。',
+        },
+        {
+          label: '个人博客网站',
+          goal: '我想做一个个人博客网站，用来记录和分享生活。希望支持 Google 登录，并且可以方便地创建、编辑和修改文章，博客内容采用 Markdown 格式展示。',
+        },
+        {
+          label: '企业官网首页',
+          goal: '做一个企业官网首页，包含产品介绍、客户案例与联系我们，并适配手机端。',
+        },
+      ],
+    },
+    {
+      key: 'agent',
+      label: 'Agent 应用',
+      questions: [
+        {
+          label: '知识库客服 Agent',
+          goal: '做一个客服 Agent 应用，能读取知识库回答售后问题，答不上来时转人工。',
+        },
+        {
+          label: '自动日报 Agent',
+          goal: '做一个自动生成日报的 Agent：每天汇总数据、生成摘要并推送到邮箱。',
+        },
+        {
+          label: '接入 MCP 工具服务',
+          goal: '给 Agent 接入一个 MCP 服务，让它可以查询和更新内部工单系统。',
+        },
+      ],
+    },
+    {
+      key: 'skill',
+      label: 'Skill 开发',
+      questions: [
+        {
+          label: '合同条款抽取 Skill',
+          goal: '开发一个自定义 Skill：读取指定文件夹的合同，抽取关键条款并生成汇总表。',
+        },
+        {
+          label: '网页抓取 Skill',
+          goal: '开发一个网页抓取 Skill，把目标页面的正文和表格提取为 Markdown。',
+        },
+        {
+          label: '数据清洗 Skill',
+          goal: '开发一个数据清洗 Skill，自动识别重复行、空值和格式异常并输出清洗报告。',
+        },
+      ],
+    },
+  ],
+};
+
+const HERO_SUB: Record<SessionMode, string> = {
+  chat: '把目标交给智能体：它会调研、写文档、做表格、生成演示稿。',
+  task: '把目标交给智能体：它会调研、写文档、做表格、生成演示稿。',
+  code: '描述要开发的应用，智能体会规划步骤、编写代码并把完整源码保存成文件。',
+};
 
 function EventRow({
   ev,
@@ -197,6 +363,21 @@ function EventRow({
   );
 }
 
+/** 助手正文与历史消息共用同一套 Markdown 排版；live 表示仍在流式追加。 */
+function AssistantBubble({ text, live = false }: { text: string; live?: boolean }) {
+  if (!text) return null;
+  return (
+    <div className={`wb-assistant-msg${live ? ' wb-assistant-live' : ''}`}>
+      <span className="wb-assistant-avatar" aria-hidden="true">
+        <IconSpark size={16} />
+      </span>
+      <div className="wb-assistant-text wb-assistant-md">
+        <Markdown>{text}</Markdown>
+      </div>
+    </div>
+  );
+}
+
 export default function Home() {
   const router = useRouter();
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
@@ -211,6 +392,8 @@ export default function Home() {
   const [goal, setGoal] = useState('');
   const [submittedGoal, setSubmittedGoal] = useState('');
   const [events, setEvents] = useState<AgentEvent[]>([]);
+  // 正在流式输出的正文：由 assistant_delta 逐块累加，收到完整 think 后清空并由它接管。
+  const [liveText, setLiveText] = useState('');
   // 历史消息：切换/打开会话时回填，新一轮运行只追加到 events，不回写这里。
   const [history, setHistory] = useState<MessageDto[]>([]);
   const [artifacts, setArtifacts] = useState<ArtifactDto[]>([]);
@@ -232,9 +415,13 @@ export default function Home() {
   const [selectedAssistantId, setSelectedAssistantId] = useState('');
   // 任务分类：随会话创建固定，运行期由 BFF 追加对应取向的提示词。
   const [selectedMode, setSelectedMode] = useState<SessionMode>('chat');
+  // 首页推荐问题的当前分类；空值表示取该任务类型的第一个分类。
+  const [categoryKey, setCategoryKey] = useState('');
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
   const [submittedAttachments, setSubmittedAttachments] = useState<SubmittedAttachment[]>([]);
   const [dragOver, setDragOver] = useState(false);
+  // 左侧问题导航当前高亮的问题 id（历史消息用 m.id，尚未落库的当轮用 pending）。
+  const [activeAnchor, setActiveAnchor] = useState('');
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
   const composerRef = useRef<HTMLTextAreaElement>(null);
@@ -255,6 +442,11 @@ export default function Home() {
   useEffect(() => {
     sessionsRef.current = sessions;
   }, [sessions]);
+
+  // 切换任务类型后旧分类可能不存在，回到该类型的首个分类。
+  useEffect(() => {
+    setCategoryKey('');
+  }, [selectedMode]);
 
   useEffect(() => {
     if (!getToken()) {
@@ -343,12 +535,11 @@ export default function Home() {
           // 会话已归档或不存在：与历史行为一致，打开最新会话。
         }
       }
-      const target = pick ?? page.items[0];
-      if (target) {
-        setSessionId(target.id);
-        if (target.model) setSelectedModel(target.model);
-        // 只有显式指定会话（跨页面跳回）才自动展开历史，正常进入仍停在草稿首页。
-        if (preferred === target.id) void loadHistory(target.id);
+      // 只有显式指定会话（跨页面跳回）才自动打开；普通进入保持草稿，任务类型可切换。
+      if (pick) {
+        setSessionId(pick.id);
+        if (pick.model) setSelectedModel(pick.model);
+        void loadHistory(pick.id);
       }
     } catch (err) {
       if (isUnauthorized(err)) {
@@ -456,6 +647,7 @@ export default function Home() {
 
   function resetConversation() {
     setEvents([]);
+    setLiveText('');
     setHistory([]);
     historyReqRef.current += 1;
     loadedHistoryRef.current = '';
@@ -474,6 +666,7 @@ export default function Home() {
   /** 只清实时视图，保留成果区与待发送附件：切回当前会话回看历史时用。 */
   function clearLiveTurn() {
     setEvents([]);
+    setLiveText('');
     setSubmittedGoal('');
     setSubmittedAttachments([]);
     setDecisions({});
@@ -495,7 +688,6 @@ export default function Home() {
       // 同一会话但还没回看过（例如刚跑完一轮）：实时视图换成落库消息，避免同一轮展示两次。
       clearLiveTurn();
     }
-    // 首次进入时 sessionId 已被 refresh() 预选，这里补上历史消息。
     if (needLoad) void loadHistory(id);
   }
 
@@ -645,6 +837,7 @@ export default function Home() {
     stickToBottomRef.current = true;
     artifactReqRef.current += 1;
     setEvents([]);
+    setLiveText('');
     setSubmittedGoal(currentGoal);
     setSubmittedAttachments(submitted);
     setGoal('');
@@ -666,6 +859,13 @@ export default function Home() {
         // 收到步骤说明已经开始执行，清掉排队提示。
         setRunStatus((prev) => (prev === 'queued' ? 'running' : prev));
         setQueuePosition(null);
+        if (ev.type === 'assistant_delta') {
+          // 增量只喂给实时气泡；完整 think 到达时会用全文替换，避免两处重复。
+          const text = typeof ev.payload.text === 'string' ? ev.payload.text : '';
+          if (text) setLiveText((prev) => prev + text);
+          return;
+        }
+        if (ev.type === 'think') setLiveText('');
         setEvents((prev) => [...prev, ev]);
         if (ev.type === 'artifact') {
           setArtifacts((prev) => [
@@ -693,10 +893,13 @@ export default function Home() {
         setError(message);
         setRunStatus((prev) => (prev === 'canceled' ? prev : 'failed'));
         setQueuePosition(null);
+        // 未完成的增量不会落库，留在界面上会误导用户以为回答已保存。
+        setLiveText('');
       },
       onTerminal() {
         // 终态到达即结束「正在停止…」，不必等 run() 的 finally（重连期间保持禁用）。
         setStopping(false);
+        setLiveText('');
       },
     };
     composerRef.current?.focus();
@@ -737,6 +940,7 @@ export default function Home() {
         return;
       }
       setError(errorText(err));
+      setLiveText('');
     } finally {
       // 流在没有终态的情况下断开（网络抖动/中间层超时）：本次发送已有 runId 时重连一次，
       // 用 afterSeq 补回断档事件。历史会话不会走到这里（run() 只在发送时调用）。
@@ -808,6 +1012,10 @@ export default function Home() {
   }
 
   const current = sessions.find((s) => s.id === sessionId);
+  // 首页可能停在自动选中的已有会话上，推荐内容跟随会话固化的任务类型。
+  const heroMode = sessionId ? (current?.mode ?? selectedMode) : selectedMode;
+  const heroCategories = MODE_SUGGESTION_CATEGORIES[heroMode] ?? [];
+  const heroCategory = heroCategories.find((c) => c.key === categoryKey) ?? heroCategories[0];
   // 历史会话没有固化模型时展示运营端默认值（与服务端 resolveForRun 的缺省一致）。
   const modelValue = sessionId ? (current?.model || defaultModel || selectedModel) : selectedModel;
   const modelAvailable =
@@ -837,11 +1045,61 @@ export default function Home() {
     submittedAttachments.length > 0;
   const confirmCard = currentConfirmCard(events);
 
+  // 左侧问题导航：只收有正文的用户消息（附件-only 的消息不值得作为定位点）。
+  const userAnchors = [
+    ...history
+      .filter((m) => m.role === 'user' && m.content.trim() !== '')
+      .map((m) => ({ id: m.id, text: m.content })),
+    ...(submittedGoal.trim() !== '' ? [{ id: 'pending', text: submittedGoal }] : []),
+  ];
+
+  /** 导轨上只放首行摘要，完整问题由 title/aria-label 承载。 */
+  function anchorLabel(text: string): string {
+    const line = text.trim().split(/\r?\n/, 1)[0] ?? '';
+    return line.length > 42 ? `${line.slice(0, 42)}…` : line;
+  }
+
+  /** 高亮与视口顶部最近（已划过）的那个问题；导轨点击后也用它即时反馈。 */
+  function syncActiveAnchor() {
+    const root = scrollRef.current;
+    if (!root) return;
+    const items = root.querySelectorAll<HTMLElement>('[data-user-anchor]');
+    if (items.length === 0) {
+      setActiveAnchor('');
+      return;
+    }
+    // 贴底时高亮最后一个问题：用户正看着最新一轮问答。
+    if (root.scrollHeight - root.scrollTop - root.clientHeight < 40) {
+      setActiveAnchor(items[items.length - 1]!.dataset.userAnchor ?? '');
+      return;
+    }
+    const threshold = root.getBoundingClientRect().top + 24;
+    let current = items[0]!.dataset.userAnchor ?? '';
+    for (const item of items) {
+      if (item.getBoundingClientRect().top <= threshold) current = item.dataset.userAnchor ?? '';
+    }
+    setActiveAnchor(current);
+  }
+
+  function jumpToAnchor(id: string) {
+    const root = scrollRef.current;
+    if (!root) return;
+    const target = Array.from(root.querySelectorAll<HTMLElement>('[data-user-anchor]')).find(
+      (el) => el.dataset.userAnchor === id,
+    );
+    if (!target) return;
+    // 跳转后关闭“跟随底部”，否则下一条流式增量会把视图又拽回末尾。
+    stickToBottomRef.current = false;
+    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    setActiveAnchor(id);
+  }
+
   useEffect(() => {
     const el = scrollRef.current;
-    if (!el || !stickToBottomRef.current) return;
-    el.scrollTop = el.scrollHeight;
-  }, [history.length, events.length, running, confirmCard?.confirmId, submittedGoal]);
+    if (el && stickToBottomRef.current) el.scrollTop = el.scrollHeight;
+    // 历史加载、新问题出现或增量增长时都重新判定高亮项。
+    syncActiveAnchor();
+  }, [history.length, events.length, running, confirmCard?.confirmId, submittedGoal, liveText]);
 
   useEffect(() => {
     // 发送后视图从 Hero 切到会话，输入器会重新挂载，run() 里的同步 focus 会随旧节点卸载丢失。
@@ -883,25 +1141,39 @@ export default function Home() {
           addFiles(files);
         }}
       />
-      <div className="wb-composer">
-        <div className="wb-composer-model">
-          {!sessionId && (
-            <select
-              className="wb-model-select"
-              value={selectedMode}
-              onChange={(e) => setSelectedMode(e.target.value as SessionMode)}
-              disabled={running}
-              aria-label="任务分类"
-              title="选择任务分类，创建后不可更改"
+      {!sessionId && (
+        <Tabs
+          className="wb-mode-tabs"
+          size="small"
+          centered
+          activeKey={selectedMode}
+          onChange={(key) => setSelectedMode(key as SessionMode)}
+          items={SESSION_MODES.map((mode) => ({
+            key: mode,
+            label: SESSION_MODE_LABELS[mode],
+            disabled: running,
+          }))}
+        />
+      )}
+      {!sessionId && heroCategory && (
+        <div className="wb-sugg-cats" role="tablist" aria-label="常见问题分类">
+          {heroCategories.map((c) => (
+            <button
+              key={c.key}
+              type="button"
+              role="tab"
+              aria-selected={c.key === heroCategory.key}
+              className="wb-sugg-cat"
+              onClick={() => setCategoryKey(c.key)}
             >
-              {SESSION_MODES.map((mode) => (
-                <option key={mode} value={mode}>
-                  {SESSION_MODE_LABELS[mode]}
-                </option>
-              ))}
-            </select>
-          )}
-          {!sessionId && assistants.length > 0 && (
+              {c.label}
+            </button>
+          ))}
+        </div>
+      )}
+      <div className="wb-composer">
+        {!sessionId && assistants.length > 0 && (
+          <div className="wb-composer-model">
             <select
               className="wb-model-select"
               value={selectedAssistantId}
@@ -917,28 +1189,8 @@ export default function Home() {
                 </option>
               ))}
             </select>
-          )}
-          <select
-            className="wb-model-select"
-            value={modelValue}
-            onChange={(e) => setSelectedModel(e.target.value)}
-            disabled={running || !!sessionId || models.length === 0}
-            aria-label="选择模型"
-            title={sessionId ? '切换模型请新建任务' : '选择本次任务使用的模型'}
-          >
-            {!modelAvailable && modelValue && (
-              <option value={modelValue}>{modelValue}（已停用）</option>
-            )}
-            {models.map((m) => (
-              <option key={m.model} value={m.model}>
-                {m.displayName && m.displayName !== m.model
-                  ? `${m.displayName} · ${m.model} · ${m.providerName}`
-                  : `${m.model} · ${m.providerName}`}
-              </option>
-            ))}
-          </select>
-          {sessionId && <span className="wb-model-lock">切换模型请新建任务</span>}
-        </div>
+          </div>
+        )}
         {modelsLoaded && models.length === 0 && (
           <div className="wb-model-empty">当前套餐暂无可用模型，请联系管理员。</div>
         )}
@@ -1021,6 +1273,25 @@ export default function Home() {
           </button>
           <span className="wb-composer-hint">Enter 发送 · Shift + Enter 换行</span>
           <div className="spacer" />
+          <select
+            className="wb-model-select"
+            value={modelValue}
+            onChange={(e) => setSelectedModel(e.target.value)}
+            disabled={running || !!sessionId || models.length === 0}
+            aria-label="选择模型"
+            title={sessionId ? '切换模型请新建任务' : '选择本次任务使用的模型'}
+          >
+            {!modelAvailable && modelValue && (
+              <option value={modelValue}>{modelValue}（已停用）</option>
+            )}
+            {models.map((m) => (
+              <option key={m.model} value={m.model}>
+                {m.displayName && m.displayName !== m.model
+                  ? `${m.displayName} · ${m.model} · ${m.providerName}`
+                  : `${m.model} · ${m.providerName}`}
+              </option>
+            ))}
+          </select>
           {running && runId && (
             <button
               type="button"
@@ -1076,6 +1347,7 @@ export default function Home() {
             onClick={() => setDrawerOpen((v) => !v)}
             aria-label={artifacts.length ? `成果（${artifacts.length} 个文件）` : '成果'}
             aria-expanded={drawerOpen}
+            aria-controls="wb-artifacts-panel"
             title="成果"
           >
             <IconFile size={17} />
@@ -1092,7 +1364,7 @@ export default function Home() {
         {/* 唯一的读屏播报区：可见状态块只是视觉反馈，不再各自注册 live region，避免重复朗读。 */}
         {running
           ? runStatus === 'queued'
-            ? `排队中…${queuePosition !== null ? `（前方 ${queuePosition} 个任务）` : ''}`
+            ? `排队中…${queuePosition !== null && queuePosition > 0 ? `（前方 ${queuePosition} 个任务）` : ''}`
             : '智能体执行中…'
           : runStatus === 'canceled'
             ? '已取消'
@@ -1111,13 +1383,40 @@ export default function Home() {
         {inConversation ? (
           <div className="wb-conv">
             <div
-              ref={scrollRef}
-              className="wb-conv-scroll"
-              onScroll={(e) => {
-                if (Date.now() - lastUserScrollRef.current > 400) return;
-                const el = e.currentTarget;
-                stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+              className="wb-conv-body"
+              onWheel={(e) => {
+                // 滚动区收窄到消息栏后，两侧留白里的滚轮事件转发给消息区，
+                // 否则在宽屏空白处滚动没有反应。
+                const root = scrollRef.current;
+                if (!root || (e.target instanceof Node && root.contains(e.target))) return;
+                markUserScroll();
+                root.scrollTop += e.deltaY;
               }}
+            >
+              {userAnchors.length > 0 && (
+                <nav className="wb-msg-nav" aria-label="问题快速定位">
+                  {userAnchors.map((u) => (
+                    <button
+                      key={u.id}
+                      type="button"
+                      className={`wb-msg-nav-item${u.id === activeAnchor ? ' is-active' : ''}`}
+                      onClick={() => jumpToAnchor(u.id)}
+                      title={anchorLabel(u.text)}
+                      aria-label={`定位到问题：${anchorLabel(u.text)}`}
+                      aria-current={u.id === activeAnchor ? 'location' : undefined}
+                    />
+                  ))}
+                </nav>
+              )}
+              <div
+                ref={scrollRef}
+                className="wb-conv-scroll"
+                onScroll={(e) => {
+                  syncActiveAnchor();
+                  if (Date.now() - lastUserScrollRef.current > 400) return;
+                  const el = e.currentTarget;
+                  stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+                }}
               onWheel={markUserScroll}
               onTouchMove={markUserScroll}
               onPointerDown={markUserScroll}
@@ -1128,7 +1427,11 @@ export default function Home() {
                   <div className="wb-chat">
                     {history.map((m) =>
                       m.role === 'user' ? (
-                        <div className="wb-user-msg" key={m.id}>
+                        <div
+                          className="wb-user-msg"
+                          key={m.id}
+                          data-user-anchor={m.content.trim() ? m.id : undefined}
+                        >
                           {m.content && <div className="wb-user-text">{m.content}</div>}
                           {m.attachments.length > 0 && (
                             <div className="wb-user-attachments">
@@ -1149,14 +1452,19 @@ export default function Home() {
                           <span className="wb-assistant-avatar" aria-hidden="true">
                             <IconSpark size={16} />
                           </span>
-                          <div className="wb-assistant-text">{m.content}</div>
+                          <div className="wb-assistant-text wb-assistant-md">
+                            <Markdown>{m.content}</Markdown>
+                          </div>
                         </div>
                       ),
                     )}
                   </div>
                 )}
                 {(submittedGoal || submittedAttachments.length > 0) && (
-                  <div className="wb-user-msg">
+                  <div
+                    className="wb-user-msg"
+                    data-user-anchor={submittedGoal.trim() ? 'pending' : undefined}
+                  >
                     {submittedGoal && <div className="wb-user-text">{submittedGoal}</div>}
                     {submittedAttachments.length > 0 && (
                       <div className="wb-user-attachments">
@@ -1177,19 +1485,24 @@ export default function Home() {
                     )}
                   </div>
                 )}
-                {events.map((ev) => (
-                  <EventRow
-                    key={ev.seq}
-                    ev={ev}
-                    expectedModel={modelValue}
-                    onOpenArtifacts={() => setDrawerOpen(true)}
-                  />
-                ))}
+                {events.map((ev) =>
+                  ev.type === 'think' ? (
+                    <AssistantBubble key={ev.seq} text={String(ev.payload.text ?? '')} />
+                  ) : (
+                    <EventRow
+                      key={ev.seq}
+                      ev={ev}
+                      expectedModel={modelValue}
+                      onOpenArtifacts={() => setDrawerOpen(true)}
+                    />
+                  ),
+                )}
+                {liveText && <AssistantBubble text={liveText} live />}
                 {running && (
                   <div className="wb-running">
                     <span className="wb-spinner" />
                     {runStatus === 'queued'
-                      ? `排队中…${queuePosition !== null ? `（前方 ${queuePosition} 个任务）` : ''}`
+                      ? `排队中…${queuePosition !== null && queuePosition > 0 ? `（前方 ${queuePosition} 个任务）` : ''}`
                       : '智能体执行中…'}
                   </div>
                 )}
@@ -1232,6 +1545,7 @@ export default function Home() {
                     </div>
                   );
                 })()}
+              </div>
             </div>
             <div className="wb-composer-dock">
               {composer}
@@ -1243,21 +1557,38 @@ export default function Home() {
             <h1 className="wb-hero-title">
               AI 办公智能体，<em>我帮你</em>
             </h1>
-            <p className="wb-hero-sub">把目标交给智能体：它会调研、写文档、做表格、生成演示稿。</p>
+            <p className="wb-hero-sub">{HERO_SUB[heroMode]}</p>
             {composer}
-            <div className="wb-suggestions">
-              {SUGGESTIONS.map((s) => (
-                <button
-                  key={s.label}
-                  type="button"
-                  className="wb-suggestion"
-                  onClick={() => setGoal(s.goal)}
-                >
-                  <span>{s.label}</span>
-                  <IconArrowUpRight size={15} />
-                </button>
-              ))}
-            </div>
+            {heroCategory ? (
+              <div className="wb-suggestion-grid">
+                {heroCategory.questions.map((q) => (
+                  <button
+                    key={q.label}
+                    type="button"
+                    className="wb-suggestion"
+                    title={q.goal}
+                    onClick={() => setGoal(q.goal)}
+                  >
+                    <span>{q.label}</span>
+                    <IconArrowUpRight size={15} />
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div className="wb-suggestions">
+                {CHAT_SUGGESTIONS.map((s) => (
+                  <button
+                    key={s.label}
+                    type="button"
+                    className="wb-suggestion"
+                    onClick={() => setGoal(s.goal)}
+                  >
+                    <span>{s.label}</span>
+                    <IconArrowUpRight size={15} />
+                  </button>
+                ))}
+              </div>
+            )}
             <p className="wb-disclaimer">内容由 AI 生成，请核实重要信息。</p>
           </div>
         )}

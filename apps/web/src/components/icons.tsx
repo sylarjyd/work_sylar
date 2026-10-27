@@ -203,6 +203,22 @@ export function IconCopy(props: IconProps) {
   );
 }
 
+export function IconFolder(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M3 7a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2V18a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" />
+    </Svg>
+  );
+}
+
+export function IconChevron(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M6 9l6 6 6-6" />
+    </Svg>
+  );
+}
+
 export function IconArrowUpRight(props: IconProps) {
   return (
     <Svg {...props}>

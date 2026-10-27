@@ -2256,49 +2256,31 @@ a {
   background: var(--amber-soft);
 }
 
-/* ============================ 工作台成果抽屉 ============================ */
+/* ============================ 工作台成果栏 ============================ */
 
+/* 固定在对话区右侧：作为布局中的一列参与排版，展开时挤压正文而不是浮在内容之上。 */
 .wb-drawer-layer {
-  position: fixed;
-  inset: 0;
-  z-index: 40;
-  visibility: hidden;
-  pointer-events: none;
-  transition: visibility 0s linear 0.18s;
+  --wb-drawer-w: 320px;
+  display: flex;
+  flex: 0 0 auto;
+  width: 0;
+  overflow: hidden;
+  border-left: 1px solid transparent;
+  transition: width 0.18s ease, border-color 0.18s ease;
 }
 
 .wb-drawer-layer.open {
-  visibility: visible;
-  pointer-events: auto;
-  transition-delay: 0s;
-}
-
-.wb-drawer-backdrop {
-  position: absolute;
-  inset: 0;
-  background: transparent;
+  width: var(--wb-drawer-w);
+  border-left-color: var(--wb-line);
 }
 
 .wb-drawer {
-  position: absolute;
-  top: 16px;
-  right: 16px;
-  bottom: 16px;
   display: flex;
+  flex: 0 0 var(--wb-drawer-w);
   flex-direction: column;
-  width: 360px;
+  width: var(--wb-drawer-w);
+  min-height: 0;
   background: #fff;
-  border: 1px solid var(--wb-line);
-  border-radius: 16px;
-  box-shadow: var(--shadow-2);
-  opacity: 0;
-  transform: translateX(12px);
-  transition: opacity 0.18s ease, transform 0.18s ease;
-}
-
-.wb-drawer-layer.open .wb-drawer {
-  opacity: 1;
-  transform: none;
 }
 
 .wb-drawer-head {
@@ -2338,105 +2320,175 @@ a {
   border-radius: 12px;
 }
 
-.wb-artifact-list {
+/* 成果目录树：一级文件夹 + 缩进文件行，文件名过长省略并保留 title。 */
+.wb-tree {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 4px;
 }
 
-.wb-artifact-card {
+.wb-tree-folder-head {
   display: flex;
-  gap: 10px;
-  align-items: flex-start;
-  padding: 12px;
-  background: #fff;
-  border: 1px solid var(--wb-line);
-  border-radius: 12px;
-}
-
-.wb-artifact-icon {
-  display: grid;
-  flex: 0 0 auto;
-  place-items: center;
-  width: 34px;
-  height: 34px;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-  color: #fff;
-  border-radius: 9px;
-  background: #6b6b6b;
-}
-
-.wb-artifact-icon.docx {
-  background: #2f6fed;
-}
-
-.wb-artifact-icon.xlsx {
-  background: #16713f;
-}
-
-.wb-artifact-icon.pptx {
-  background: #b24a12;
-}
-
-.wb-artifact-main {
-  flex: 1;
-  min-width: 0;
-}
-
-.wb-artifact-name {
-  font-size: 12.5px;
-  font-weight: 600;
-  line-height: 1.35;
-  word-break: break-all;
-  color: var(--wb-ink);
-}
-
-.wb-artifact-meta {
-  margin-top: 2px;
-  font-size: 11px;
-  color: var(--wb-ink-2);
-}
-
-.wb-download {
-  display: inline-flex;
+  gap: 6px;
   align-items: center;
-  gap: 5px;
-  margin-top: 7px;
-  padding: 4px 9px;
-  font-size: 12px;
+  width: 100%;
+  padding: 7px 8px;
+  font-size: 12.5px;
   color: var(--wb-ink);
-  background: #fff;
-  border: 1px solid var(--wb-line-strong);
+  text-align: left;
+  background: transparent;
+  border: 0;
   border-radius: 8px;
   cursor: pointer;
 }
 
-.wb-download:hover {
+.wb-tree-folder-head:hover {
   background: var(--wb-hover);
 }
 
-@media (max-width: 760px) {
-  .wb-drawer-backdrop {
-    background: rgba(0, 0, 0, 0.24);
-  }
+.wb-tree-caret {
+  flex: 0 0 auto;
+  color: var(--wb-ink-2);
+  transition: transform 0.15s ease;
+}
 
-  .wb-drawer {
-    top: 12px;
-    right: 12px;
-    bottom: 12px;
-    left: 12px;
-    width: auto;
+.wb-tree-caret.collapsed {
+  transform: rotate(-90deg);
+}
+
+.wb-tree-folder-icon {
+  flex: 0 0 auto;
+  color: #d99a1f;
+}
+
+.wb-tree-folder-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wb-tree-folder-count {
+  flex: 0 0 auto;
+  padding: 0 7px;
+  font-size: 11px;
+  line-height: 18px;
+  color: var(--wb-ink-2);
+  background: #f4f4f5;
+  border-radius: 999px;
+}
+
+.wb-tree-files {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 2px 0 6px 14px;
+  padding-left: 8px;
+  border-left: 1px solid var(--wb-line);
+}
+
+.wb-tree-file {
+  display: flex;
+  gap: 9px;
+  align-items: center;
+  padding: 7px 8px;
+  border-radius: 9px;
+}
+
+.wb-tree-file:hover {
+  background: #fafafa;
+}
+
+.wb-file-badge {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: #fff;
+  background: #6b6b6b;
+  border-radius: 8px;
+}
+
+.wb-file-badge.docx {
+  background: #2f6fed;
+}
+
+.wb-file-badge.xlsx {
+  background: #16713f;
+}
+
+.wb-file-badge.pptx {
+  background: #b24a12;
+}
+
+.wb-file-badge.text {
+  background: #0f766e;
+}
+
+.wb-file-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.wb-file-name {
+  overflow: hidden;
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--wb-ink);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wb-file-meta {
+  margin-top: 2px;
+  overflow: hidden;
+  font-size: 10.5px;
+  color: var(--wb-ink-2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wb-file-dl {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  color: var(--wb-ink-2);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.wb-file-dl:hover {
+  color: var(--wb-ink);
+  background: #fff;
+  border-color: var(--wb-line);
+}
+
+.wb-file-pending {
+  flex: 0 0 auto;
+  font-size: 10.5px;
+  color: var(--wb-ink-2);
+}
+
+@media (max-width: 760px) {
+  .wb-drawer-layer {
+    --wb-drawer-w: min(82vw, 320px);
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .wb-drawer-layer {
-    transition: none;
-  }
-
-  .wb-drawer {
+  .wb-drawer-layer,
+  .wb-tree-caret {
     transition: none;
   }
 }
@@ -3063,11 +3115,117 @@ a {
   min-height: 0;
 }
 
-.wb-conv-scroll {
+/* 消息滚动区与左侧定位导轨的共同定位上下文。 */
+.wb-conv-body {
+  position: relative;
+  display: flex;
   flex: 1;
   min-height: 0;
+}
+
+/* 滚动区收窄到消息栏宽度并居中：滚动条贴着对话内容，
+   宽屏下不再落到窗口最右侧。978 = 904（正文上限）+ 64（左右内边距）+ 10（滚动条槽位）。 */
+.wb-conv-scroll {
+  flex: 1;
+  width: 100%;
+  max-width: 978px;
+  min-height: 0;
+  /* 预留滚动条槽位：消息变多时正文不会横向跳动。 */
   padding: 8px 32px 20px;
+  margin: 0 auto;
   overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+/* 滚动条常驻但低对比度，悬停时加深，既能看出可滚动也不抢正文视线。 */
+.wb-conv-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(15, 23, 42, 0.18) transparent;
+}
+
+.wb-conv-scroll:hover {
+  scrollbar-color: rgba(15, 23, 42, 0.32) transparent;
+}
+
+.wb-conv-scroll::-webkit-scrollbar {
+  width: 10px;
+}
+
+.wb-conv-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.wb-conv-scroll::-webkit-scrollbar-thumb {
+  background: rgba(15, 23, 42, 0.18);
+  background-clip: padding-box;
+  border: 3px solid transparent;
+  border-radius: 999px;
+}
+
+.wb-conv-scroll:hover::-webkit-scrollbar-thumb {
+  background: rgba(15, 23, 42, 0.32);
+  background-clip: padding-box;
+}
+
+/* 左侧问题定位导轨：每条用户提问一个短刻度，点击平滑滚到对应消息。 */
+.wb-msg-nav {
+  position: absolute;
+  top: 50%;
+  /* 跟随消息栏左边线：宽屏下贴在正文左侧，窄屏回落到 8px 留白。 */
+  left: max(8px, calc(50% - 481px));
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  max-height: calc(100% - 48px);
+  padding: 4px 0;
+  overflow-y: auto;
+  scrollbar-width: none;
+  transform: translateY(-50%);
+}
+
+.wb-msg-nav::-webkit-scrollbar {
+  display: none;
+}
+
+.wb-msg-nav-item {
+  position: relative;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 14px;
+  padding: 0;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+.wb-msg-nav-item::before {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 9px;
+  height: 2px;
+  content: '';
+  background: rgba(15, 23, 42, 0.18);
+  border-radius: 999px;
+  transform: translate(-50%, -50%);
+  transition: width 0.15s ease, background 0.15s ease;
+}
+
+.wb-msg-nav-item:hover::before,
+.wb-msg-nav-item:focus-visible::before {
+  width: 13px;
+  background: var(--mint-strong);
+}
+
+.wb-msg-nav-item.is-active::before {
+  width: 13px;
+  height: 3px;
+  background: var(--mint-strong);
+}
+
+.wb-msg-nav-item:focus-visible {
+  outline: none;
 }
 
 .wb-thread {
@@ -3136,6 +3294,386 @@ a {
   color: var(--wb-ink);
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* 助手回复按 Markdown 文档排版：正文留白交给块级间距，不再用 pre-wrap 硬换行。 */
+.wb-assistant-md {
+  white-space: normal;
+}
+
+/* 流式输出：正文末尾跟随一个光标提示“仍在生成”，完整回答到达后气泡随即换成静态版。 */
+.wb-assistant-live .wb-assistant-text::after {
+  content: '';
+  display: inline-block;
+  width: 7px;
+  height: 15px;
+  margin-left: 3px;
+  vertical-align: -2px;
+  background: var(--mint-strong);
+  border-radius: 2px;
+  animation: wb-caret-blink 1s steps(2, start) infinite;
+}
+
+@keyframes wb-caret-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+.wb-md {
+  color: var(--wb-ink);
+  overflow-wrap: anywhere;
+}
+
+.wb-md > :first-child {
+  margin-top: 0;
+}
+
+.wb-md > :last-child {
+  margin-bottom: 0;
+}
+
+.wb-md p {
+  margin: 0 0 12px;
+  line-height: 1.78;
+}
+
+.wb-md h1,
+.wb-md h2,
+.wb-md h3,
+.wb-md h4,
+.wb-md h5,
+.wb-md h6 {
+  margin: 26px 0 10px;
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: -0.01em;
+  color: var(--wb-ink);
+}
+
+.wb-md h1 {
+  margin-top: 30px;
+  font-size: 21px;
+}
+
+/* 二级标题带一道薄荷短轨，作为长文档里唯一的纵向锚点。 */
+.wb-md h2 {
+  position: relative;
+  padding-left: 12px;
+  margin-top: 30px;
+  font-size: 17.5px;
+}
+
+.wb-md h2::before {
+  position: absolute;
+  top: 0.3em;
+  left: 0;
+  width: 3px;
+  height: 1.05em;
+  content: '';
+  background: var(--mint-strong);
+  border-radius: 2px;
+}
+
+.wb-md h3 {
+  margin-top: 22px;
+  font-size: 15.5px;
+}
+
+.wb-md h4 {
+  margin-top: 18px;
+  font-size: 14.5px;
+}
+
+.wb-md h5,
+.wb-md h6 {
+  margin-top: 16px;
+  font-size: 13.5px;
+  color: var(--wb-ink-2);
+}
+
+.wb-md strong {
+  font-weight: 600;
+}
+
+.wb-md em {
+  font-style: italic;
+}
+
+.wb-md del {
+  color: var(--wb-ink-3);
+}
+
+.wb-md a {
+  color: var(--mint-ink);
+  text-decoration: underline;
+  text-decoration-color: rgba(0, 176, 123, 0.35);
+  text-underline-offset: 3px;
+  transition: text-decoration-color 0.15s ease;
+}
+
+.wb-md a:hover {
+  text-decoration-color: var(--mint-strong);
+}
+
+.wb-md ul,
+.wb-md ol {
+  margin: 6px 0 12px;
+  padding-left: 1.45em;
+}
+
+.wb-md li {
+  margin: 4px 0;
+  line-height: 1.75;
+}
+
+.wb-md li::marker {
+  color: var(--mint-strong);
+}
+
+.wb-md li > p {
+  margin: 0 0 6px;
+}
+
+.wb-md li > ul,
+.wb-md li > ol {
+  margin: 4px 0 2px;
+}
+
+.wb-md .contains-task-list {
+  padding-left: 0.25em;
+  list-style: none;
+}
+
+.wb-md .task-list-item {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.wb-md input[type='checkbox'] {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  margin: 5px 0 0;
+  accent-color: var(--mint-strong);
+}
+
+.wb-md blockquote {
+  margin: 14px 0;
+  padding: 10px 16px;
+  color: var(--wb-ink-2);
+  background: var(--surface-2);
+  border-left: 3px solid var(--mint);
+  border-radius: 0 10px 10px 0;
+}
+
+.wb-md blockquote p:last-child {
+  margin-bottom: 0;
+}
+
+.wb-md hr {
+  height: 1px;
+  margin: 22px 0;
+  background: var(--line);
+  border: 0;
+}
+
+.wb-md img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 14px 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+/* 行内代码保持墨色颗粒感，与深色代码块形成层次。 */
+.wb-md :not(pre) > code {
+  padding: 0.1em 0.38em;
+  font-family: var(--mono);
+  font-size: 0.88em;
+  color: #1f2a24;
+  background: #f1f3f0;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+}
+
+.wb-md-code {
+  position: relative;
+  margin: 14px 0;
+  overflow: hidden;
+  background: #13181b;
+  border: 1px solid #212a2e;
+  border-radius: 12px;
+}
+
+.wb-md-code pre {
+  padding: 18px 20px;
+  margin: 0;
+  overflow-x: auto;
+  font-family: var(--mono);
+  font-size: 12.8px;
+  line-height: 1.7;
+  color: #dbe4df;
+  tab-size: 2;
+}
+
+.wb-md-code pre code {
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+}
+
+.wb-md-copy {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  padding: 3px 8px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: #b9c4bf;
+  cursor: pointer;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 7px;
+  opacity: 0;
+  transition:
+    opacity 0.15s ease,
+    color 0.15s ease,
+    background 0.15s ease;
+}
+
+.wb-md-code:hover .wb-md-copy,
+.wb-md-copy:focus-visible {
+  opacity: 1;
+}
+
+.wb-md-copy:hover {
+  color: #eaf2ee;
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.wb-md-copy.failed {
+  color: #ffb4ab;
+}
+
+/* 代码高亮：只保留语法骨架色，避免彩虹噪声。 */
+.wb-md .hljs-comment,
+.wb-md .hljs-quote {
+  color: #8a9791;
+}
+
+.wb-md .hljs-keyword,
+.wb-md .hljs-selector-tag,
+.wb-md .hljs-literal,
+.wb-md .hljs-type {
+  color: #7ed3b2;
+}
+
+.wb-md .hljs-string,
+.wb-md .hljs-attr,
+.wb-md .hljs-template-tag,
+.wb-md .hljs-template-variable {
+  color: #c7e39a;
+}
+
+.wb-md .hljs-number,
+.wb-md .hljs-symbol,
+.wb-md .hljs-bullet {
+  color: #f0b37e;
+}
+
+.wb-md .hljs-title,
+.wb-md .hljs-title.function_,
+.wb-md .hljs-built_in {
+  color: #8fb8ff;
+}
+
+.wb-md .hljs-class .hljs-title,
+.wb-md .hljs-title.class_,
+.wb-md .hljs-section {
+  color: #e6c98c;
+}
+
+.wb-md .hljs-variable,
+.wb-md .hljs-params,
+.wb-md .hljs-property {
+  color: #dbe4df;
+}
+
+.wb-md .hljs-meta {
+  color: #93a09a;
+}
+
+.wb-md .hljs-emphasis {
+  font-style: italic;
+}
+
+.wb-md .hljs-strong {
+  font-weight: 600;
+}
+
+/* 表格：外框承载结构，单元格只留横线，宽表横向滚动且可键盘聚焦。 */
+.wb-md-table {
+  margin: 14px 0;
+  overflow-x: auto;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.wb-md-table table {
+  width: 100%;
+  font-size: 13.5px;
+  line-height: 1.6;
+  border-collapse: collapse;
+}
+
+.wb-md-table th {
+  padding: 9px 14px;
+  font-weight: 600;
+  color: var(--wb-ink-2);
+  text-align: left;
+  white-space: nowrap;
+  background: var(--surface-2);
+}
+
+.wb-md-table td {
+  padding: 9px 14px;
+  vertical-align: top;
+  border-top: 1px solid var(--line);
+}
+
+.wb-md-table tbody tr:hover {
+  background: #f6faf8;
+}
+
+.wb-md .footnotes {
+  padding-top: 10px;
+  margin-top: 20px;
+  font-size: 13px;
+  color: var(--wb-ink-2);
+  border-top: 1px solid var(--line);
+}
+
+@media (hover: none) {
+  .wb-md-copy {
+    opacity: 1;
+  }
+}
+
+@media (max-width: 760px) {
+  .wb-md h2 {
+    font-size: 16.5px;
+  }
+
+  .wb-md-code pre {
+    padding: 14px;
+    font-size: 12px;
+  }
 }
 
 .wb-event {
@@ -3322,11 +3860,67 @@ a {
   margin: 0 auto;
 }
 
-/* 拖拽悬停：只高亮输入区，不拦截内部子元素的 dragover。 */
+/* 任务分类 tab：贴在输入框上方，选中态用薄荷色下划线呼应品牌色。 */
+.wb-mode-tabs {
+  margin: 0 0 8px;
+  padding: 0 4px;
+}
+
+.wb-mode-tabs .ant-tabs-nav {
+  margin: 0;
+}
+
+.wb-mode-tabs .ant-tabs-nav::before {
+  border-bottom: 0;
+}
+
+.wb-mode-tabs .ant-tabs-tab {
+  padding: 2px 0 6px;
+  font-size: 13px;
+  color: var(--wb-ink-2);
+}
+
+.wb-mode-tabs .ant-tabs-tab + .ant-tabs-tab {
+  margin-left: 22px;
+}
+
+.wb-mode-tabs .ant-tabs-tab:not(.ant-tabs-tab-disabled):hover .ant-tabs-tab-btn,
+.wb-mode-tabs .ant-tabs-tab.ant-tabs-tab-active .ant-tabs-tab-btn {
+  color: var(--mint-ink);
+}
+
+.wb-mode-tabs .ant-tabs-tab.ant-tabs-tab-active .ant-tabs-tab-btn {
+  font-weight: 600;
+}
+
+/* 发送中禁用切换：禁用态仍保留选中态的品牌色，避免看起来像未加载。 */
+.wb-mode-tabs .ant-tabs-tab.ant-tabs-tab-disabled {
+  cursor: default;
+}
+
+.wb-mode-tabs .ant-tabs-tab.ant-tabs-tab-disabled .ant-tabs-tab-btn {
+  color: var(--wb-ink-3);
+}
+
+.wb-mode-tabs .ant-tabs-tab.ant-tabs-tab-disabled.ant-tabs-tab-active .ant-tabs-tab-btn {
+  color: var(--mint-ink);
+  opacity: 1;
+}
+
+.wb-mode-tabs .ant-tabs-ink-bar {
+  height: 2px;
+  background: var(--mint-strong);
+  border-radius: 2px;
+}
+
+.wb-mode-tabs .ant-tabs-content-holder {
+  display: none;
+}
+
+/* 拖拽悬停：用薄荷底色提示投放区，不额外描边。 */
 .wb-composer-wrap.dragging .wb-composer {
-  border-color: #1a1a1a;
-  border-style: dashed;
-  background: #fafafa;
+  background: var(--mint-soft);
+  box-shadow: 0 18px 38px -12px rgba(0, 176, 123, 0.22), 0 2px 6px -3px rgba(0, 0, 0, 0.08);
 }
 
 .wb-attachments {
@@ -3487,18 +4081,17 @@ a {
   color: var(--wb-ink-2);
 }
 
+/* 输入区靠柔和投影分层，不画描边；聚焦时只加深投影，避免出现一圈深色线条。 */
 .wb-composer {
   padding: 12px 14px 10px;
   background: #fff;
-  border: 1px solid var(--wb-line-strong);
   border-radius: 24px;
-  box-shadow: 0 16px 32px -8px rgba(0, 0, 0, 0.06), 0 2px 4px -4px rgba(0, 0, 0, 0.1);
-  transition: border-color 0.15s, box-shadow 0.15s;
+  box-shadow: 0 14px 30px -10px rgba(0, 0, 0, 0.09), 0 2px 6px -3px rgba(0, 0, 0, 0.06);
+  transition: box-shadow 0.15s;
 }
 
 .wb-composer:focus-within {
-  border-color: rgba(0, 0, 0, 0.28);
-  box-shadow: 0 16px 32px -8px rgba(0, 0, 0, 0.08), 0 2px 4px -4px rgba(0, 0, 0, 0.12);
+  box-shadow: 0 18px 38px -12px rgba(0, 0, 0, 0.13), 0 2px 6px -3px rgba(0, 0, 0, 0.08);
 }
 
 .wb-composer-model {
@@ -3527,9 +4120,10 @@ a {
   background: var(--surface-2);
 }
 
-.wb-model-lock {
-  font-size: 12px;
-  color: var(--wb-ink-2);
+/* 模型选择在输入框右下角：限宽避免长模型名把停止/发送按钮挤走。 */
+.wb-composer-foot .wb-model-select {
+  max-width: 240px;
+  min-width: 0;
 }
 
 .wb-model-empty {
@@ -3675,6 +4269,56 @@ a {
   color: var(--wb-ink-2); /* 修订：原 ink-3 图标对比度不足 */
 }
 
+/* 办公/开发首页：常见问题分类胶囊 + 推荐问题卡片网格。 */
+.wb-sugg-cats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-start;
+  width: 100%;
+  max-width: 936px;
+  margin: 0 0 10px;
+  padding: 0 4px;
+}
+
+.wb-sugg-cat {
+  padding: 6px 16px;
+  font-size: 13px;
+  color: var(--wb-ink-2);
+  background: #fff;
+  border: 1px solid var(--wb-line);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
+}
+
+.wb-sugg-cat:hover {
+  color: var(--wb-ink);
+  border-color: var(--wb-line-strong);
+}
+
+.wb-sugg-cat[aria-selected='true'] {
+  font-weight: 600;
+  color: #009a68;
+  background: #eefbf5;
+  border-color: #9fe2c8;
+}
+
+.wb-suggestion-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  width: 100%;
+  max-width: 936px;
+  margin-top: 12px;
+}
+
+@media (max-width: 760px) {
+  .wb-suggestion-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 @keyframes wb-rise {
   from {
     opacity: 0;
@@ -3754,6 +4398,11 @@ a {
     min-height: 0;
   }
 
+  /* 窄屏左侧留白不足，收起定位导轨，避免刻度压住消息气泡。 */
+  .wb-msg-nav {
+    display: none;
+  }
+
   .wb-conv-scroll {
     flex: 1;
     min-height: 0;
@@ -3771,4 +4420,35 @@ a {
   .wb-event {
     animation: none;
   }
+
+  .wb-assistant-live .wb-assistant-text::after {
+    animation: none;
+  }
+}
+
+/* 其余滚动区域只保留滚动手感，不显示系统滚动条，避免打断版式。 */
+.wb-session-list,
+.wb-sidebar,
+.wb-nav-menu,
+.wb-drawer-body,
+.wb-hero,
+.wb-confirm-args,
+.wb-md-table,
+.wb-md-code pre,
+.wb-composer textarea {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.wb-session-list::-webkit-scrollbar,
+.wb-sidebar::-webkit-scrollbar,
+.wb-nav-menu::-webkit-scrollbar,
+.wb-drawer-body::-webkit-scrollbar,
+.wb-hero::-webkit-scrollbar,
+.wb-confirm-args::-webkit-scrollbar,
+.wb-md-table::-webkit-scrollbar,
+.wb-md-code pre::-webkit-scrollbar,
+.wb-composer textarea::-webkit-scrollbar {
+  width: 0;
+  height: 0;
 }

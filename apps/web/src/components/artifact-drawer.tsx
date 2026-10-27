@@ -1,9 +1,9 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ArtifactDto } from '@ai-office/shared';
 import { formatBytes } from '../lib/format';
-import { IconDownload, IconX } from './icons';
+import { IconChevron, IconDownload, IconFolder, IconX } from './icons';
 
 interface ArtifactDrawerProps {
   open: boolean;
@@ -12,11 +12,96 @@ interface ArtifactDrawerProps {
   onDownload: (artifact: ArtifactDto) => void;
 }
 
+/** 文档类直接显示类型；文本类（代码/表格/说明）更直观地显示扩展名。 */
+function kindLabel(a: ArtifactDto): string {
+  if (a.kind !== 'text') return a.kind.toUpperCase();
+  const ext = extOf(a.filename);
+  return ext ? ext.slice(0, 5).toUpperCase() : 'TXT';
+}
+
+function extOf(filename: string): string {
+  const dot = filename.lastIndexOf('.');
+  return dot > 0 && dot < filename.length - 1 ? filename.slice(dot + 1).toLowerCase() : '';
+}
+
+const CODE_EXT = new Set([
+  'java',
+  'kt',
+  'ts',
+  'tsx',
+  'js',
+  'jsx',
+  'py',
+  'go',
+  'rs',
+  'c',
+  'h',
+  'cpp',
+  'hpp',
+  'cs',
+  'php',
+  'rb',
+  'sh',
+  'bat',
+  'ps1',
+  'vue',
+  'html',
+  'htm',
+  'css',
+  'scss',
+  'sql',
+]);
+
+const CONFIG_EXT = new Set(['json', 'xml', 'yaml', 'yml', 'toml', 'ini', 'properties', 'gradle']);
+const SHEET_EXT = new Set(['csv', 'tsv']);
+
+interface FolderDef {
+  key: string;
+  label: string;
+}
+
+/** 成果没有目录信息，按产物类型归档成一级文件夹，目录结构稳定且一眼可辨。 */
+const FOLDERS: FolderDef[] = [
+  { key: 'doc', label: '文档' },
+  { key: 'sheet', label: '表格' },
+  { key: 'slides', label: '演示文稿' },
+  { key: 'code', label: '代码' },
+  { key: 'config', label: '配置' },
+];
+
+function folderOf(a: ArtifactDto): string {
+  if (a.kind === 'docx') return 'doc';
+  if (a.kind === 'xlsx') return 'sheet';
+  if (a.kind === 'pptx') return 'slides';
+  const ext = extOf(a.filename);
+  if (CODE_EXT.has(ext)) return 'code';
+  if (CONFIG_EXT.has(ext)) return 'config';
+  if (SHEET_EXT.has(ext)) return 'sheet';
+  return 'doc';
+}
+
+function groupArtifacts(artifacts: ArtifactDto[]): { def: FolderDef; items: ArtifactDto[] }[] {
+  const buckets = new Map<string, ArtifactDto[]>();
+  for (const a of artifacts) {
+    const key = folderOf(a);
+    const list = buckets.get(key);
+    if (list) list.push(a);
+    else buckets.set(key, [a]);
+  }
+  return FOLDERS.filter((f) => buckets.has(f.key)).map((def) => ({
+    def,
+    items: buckets.get(def.key) ?? [],
+  }));
+}
+
+/**
+ * 成果栏是对话区右侧的固定一列：展开时挤压正文而不是浮在上面，
+ * 因此不需要遮罩、焦点陷阱和 body 滚动锁。
+ */
 export function ArtifactDrawer({ open, artifacts, onClose, onDownload }: ArtifactDrawerProps) {
   const closeRef = useRef<HTMLButtonElement>(null);
-  const drawerRef = useRef<HTMLElement>(null);
-  const restoreRef = useRef<HTMLElement | null>(null);
   const onCloseRef = useRef(onClose);
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     onCloseRef.current = onClose;
@@ -24,62 +109,25 @@ export function ArtifactDrawer({ open, artifacts, onClose, onDownload }: Artifac
 
   useEffect(() => {
     if (!open) return;
-    restoreRef.current = document.activeElement as HTMLElement | null;
-    closeRef.current?.focus();
-    const prevOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-
     function onKeyDown(e: KeyboardEvent) {
-      if (e.key === 'Escape') {
-        onCloseRef.current();
-        return;
-      }
-      if (e.key !== 'Tab') return;
-      const root = drawerRef.current;
-      if (!root) return;
-      const focusables = root.querySelectorAll<HTMLElement>(
-        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
-      );
-      const first = focusables[0];
-      const last = focusables[focusables.length - 1];
-      if (!first || !last) {
-        e.preventDefault();
-        return;
-      }
-      if (!root.contains(document.activeElement)) {
-        e.preventDefault();
-        first.focus();
-      } else if (e.shiftKey && document.activeElement === first) {
-        e.preventDefault();
-        last.focus();
-      } else if (!e.shiftKey && document.activeElement === last) {
-        e.preventDefault();
-        first.focus();
-      }
+      if (e.key === 'Escape') onCloseRef.current();
     }
     document.addEventListener('keydown', onKeyDown);
-    return () => {
-      document.removeEventListener('keydown', onKeyDown);
-      document.body.style.overflow = prevOverflow;
-      if (restoreRef.current?.isConnected) restoreRef.current.focus();
-    };
+    return () => document.removeEventListener('keydown', onKeyDown);
   }, [open]);
+
+  const folders = groupArtifacts(artifacts);
 
   return (
     <div className={`wb-drawer-layer${open ? ' open' : ''}`} aria-hidden={!open} inert={!open}>
-      <div className="wb-drawer-backdrop" onClick={onClose} />
-      <aside
-        ref={drawerRef}
-        className="wb-drawer"
-        role="dialog"
-        aria-label="成果"
-        aria-modal={open ? true : undefined}
-      >
+      <aside id="wb-artifacts-panel" className="wb-drawer" aria-label="成果">
         <header className="wb-drawer-head">
           <div>
             <div className="wb-drawer-title">成果</div>
             <div className="wb-drawer-sub">
-              {artifacts.length > 0 ? `${artifacts.length} 个文件` : '任务产出'}
+              {artifacts.length > 0
+                ? `${artifacts.length} 个文件 · ${folders.length} 个文件夹`
+                : '任务产出'}
             </div>
           </div>
           <button
@@ -87,8 +135,8 @@ export function ArtifactDrawer({ open, artifacts, onClose, onDownload }: Artifac
             type="button"
             className="wb-icon-btn"
             onClick={onClose}
-            aria-label="关闭成果面板"
-            title="关闭"
+            aria-label="收起成果栏"
+            title="收起"
           >
             <IconX size={16} />
           </button>
@@ -98,27 +146,61 @@ export function ArtifactDrawer({ open, artifacts, onClose, onDownload }: Artifac
           {artifacts.length === 0 ? (
             <div className="wb-drawer-empty">任务产出的文档会出现在这里</div>
           ) : (
-            <div className="wb-artifact-list">
-              {artifacts.map((a, i) => (
-                <div key={a.id || `pending-${i}`} className="wb-artifact-card">
-                  <div className={`wb-artifact-icon ${a.kind}`}>{a.kind.toUpperCase()}</div>
-                  <div className="wb-artifact-main">
-                    <div className="wb-artifact-name">{a.filename}</div>
-                    <div className="wb-artifact-meta">
-                      {formatBytes(a.size)} · v{a.version || 0} ·{' '}
-                      {new Date(a.createdAt).toLocaleString('zh-CN')}
-                    </div>
-                    {a.id ? (
-                      <button type="button" className="wb-download" onClick={() => onDownload(a)}>
-                        <IconDownload size={13} />
-                        下载
-                      </button>
-                    ) : (
-                      <span className="wb-artifact-meta">落库中…</span>
+            <div className="wb-tree">
+              {folders.map(({ def, items }) => {
+                const isCollapsed = !!collapsed[def.key];
+                return (
+                  <section key={def.key} className="wb-tree-folder">
+                    <button
+                      type="button"
+                      className="wb-tree-folder-head"
+                      aria-expanded={!isCollapsed}
+                      onClick={() =>
+                        setCollapsed((prev) => ({ ...prev, [def.key]: !prev[def.key] }))
+                      }
+                    >
+                      <IconChevron
+                        size={14}
+                        className={`wb-tree-caret${isCollapsed ? ' collapsed' : ''}`}
+                      />
+                      <IconFolder size={15} className="wb-tree-folder-icon" />
+                      <span className="wb-tree-folder-name">{def.label}</span>
+                      <span className="wb-tree-folder-count">{items.length}</span>
+                    </button>
+                    {!isCollapsed && (
+                      <div className="wb-tree-files">
+                        {items.map((a, i) => (
+                          <div key={a.id || `pending-${def.key}-${i}`} className="wb-tree-file">
+                            <div className={`wb-file-badge ${a.kind}`}>{kindLabel(a)}</div>
+                            <div className="wb-file-body">
+                              <div className="wb-file-name" title={a.filename}>
+                                {a.filename}
+                              </div>
+                              <div className="wb-file-meta">
+                                {formatBytes(a.size)} · v{a.version || 0} ·{' '}
+                                {new Date(a.createdAt).toLocaleString('zh-CN')}
+                              </div>
+                            </div>
+                            {a.id ? (
+                              <button
+                                type="button"
+                                className="wb-file-dl"
+                                onClick={() => onDownload(a)}
+                                aria-label={`下载 ${a.filename}`}
+                                title="下载"
+                              >
+                                <IconDownload size={14} />
+                              </button>
+                            ) : (
+                              <span className="wb-file-pending">落库中</span>
+                            )}
+                          </div>
+                        ))}
+                      </div>
                     )}
-                  </div>
-                </div>
-              ))}
+                  </section>
+                );
+              })}
             </div>
           )}
         </div>
