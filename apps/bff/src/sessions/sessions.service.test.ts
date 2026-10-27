@@ -94,6 +94,8 @@ function makeService(
   assistants: AssistantFixture[] = [ASSISTANT],
   rows = all,
   busyTasks: { sessionId: string; status: string }[] = [],
+  runs: { id: string; status: string; startedAt: Date | null; sessionId: string }[] = [],
+  failActiveRuns = false,
 ) {
   // 每份用例独立可变数据：改名/置顶/删除会写回，不能污染共享的 all。
   const data = rows.map((s) => ({ ...s }));
@@ -214,6 +216,22 @@ function makeService(
         busyTasks.find(
           (t) => t.sessionId === where.sessionId && where.status.in.includes(t.status),
         ) ?? null,
+    },
+    run: {
+      findMany: async ({
+        where,
+      }: {
+        where: { task: { sessionId: { in: string[] } }; status: { in: string[] } };
+      }) => {
+        if (failActiveRuns) throw new Error('db down');
+        return runs
+          .filter(
+            (r) =>
+              where.task.sessionId.in.includes(r.sessionId) &&
+              where.status.in.includes(r.status),
+          )
+          .map((r) => ({ id: r.id, status: r.status, task: { sessionId: r.sessionId } }));
+      },
     },
   } as unknown as PrismaService;
   const catalog = {
@@ -468,5 +486,46 @@ describe('SessionsService 软删除', () => {
     const { svc } = makeService();
     await expect(svc.remove('s1', 't2', 'u2')).rejects.toBeInstanceOf(NotFoundException);
     await expect(svc.remove('s2', 't1', 'u1')).rejects.toBeInstanceOf(NotFoundException);
+  });
+});
+
+describe('SessionsService 运行标记', () => {
+  const RUNS = [
+    { id: 'r-queued', status: 'queued', startedAt: null, sessionId: 's1' },
+    { id: 'r-running', status: 'running', startedAt: new Date('2026-01-03T00:00:00Z'), sessionId: 's1' },
+    { id: 'r-other', status: 'queued', startedAt: null, sessionId: 's3' },
+    { id: 'r-done', status: 'done', startedAt: new Date('2026-01-03T00:00:01Z'), sessionId: 's3' },
+  ];
+
+  it('list 按会话回填活跃运行，同一会话运行中优先', async () => {
+    const { svc } = makeService(['m1'], 'm1', [ASSISTANT], all, [], RUNS);
+    const page = await svc.list('t1', 'u1');
+    expect(page.items.map((s) => [s.id, s.activeRun])).toEqual([
+      ['s1', { id: 'r-running', status: 'running' }],
+      ['s3', { id: 'r-other', status: 'queued' }],
+    ]);
+  });
+
+  it('没有活跃运行时 activeRun 为 null', async () => {
+    const page = await makeService().svc.list('t1', 'u1');
+    expect(page.items.map((s) => s.activeRun)).toEqual([null, null]);
+  });
+
+  it('查询失败时降级为 null，列表与详情仍可用', async () => {
+    const { svc } = makeService(['m1'], 'm1', [ASSISTANT], all, [], [], true);
+    const page = await svc.list('t1', 'u1');
+    expect(page.items.map((s) => s.id)).toEqual(['s1', 's3']);
+    expect(page.items.map((s) => s.activeRun)).toEqual([null, null]);
+    expect((await svc.detail('s1', 't1', 'u1')).activeRun).toBeNull();
+  });
+
+  it('detail 回填活跃运行', async () => {
+    const { svc } = makeService(['m1'], 'm1', [ASSISTANT], all, [], [
+      { id: 'r5', status: 'running', startedAt: new Date(), sessionId: 's1' },
+    ]);
+    expect((await svc.detail('s1', 't1', 'u1')).activeRun).toEqual({
+      id: 'r5',
+      status: 'running',
+    });
   });
 });

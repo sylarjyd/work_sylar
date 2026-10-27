@@ -12,6 +12,7 @@ const SESSIONS: SessionSummary[] = [
     assistantName: null,
     mode: 'chat',
     pinned: false,
+    activeRun: null,
   },
   {
     id: '2',
@@ -22,6 +23,7 @@ const SESSIONS: SessionSummary[] = [
     assistantName: null,
     mode: 'chat',
     pinned: false,
+    activeRun: null,
   },
   {
     id: '3',
@@ -32,6 +34,7 @@ const SESSIONS: SessionSummary[] = [
     assistantName: null,
     mode: 'chat',
     pinned: false,
+    activeRun: null,
   },
 ];
 

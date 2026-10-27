@@ -234,6 +234,12 @@ export interface UpdateSessionRequest {
   pinned?: boolean;
 }
 
+/** 会话当前正在排队或执行的运行；侧栏据此显示运行标记。 */
+export interface ActiveRunSummary {
+  id: string;
+  status: 'queued' | 'running';
+}
+
 export interface SessionSummary {
   id: string;
   title: string;
@@ -247,6 +253,8 @@ export interface SessionSummary {
   mode: SessionMode;
   /** 用户置顶；列表按置顶优先排序。 */
   pinned: boolean;
+  /** 会话当前正在排队或执行的运行；无则为 null。 */
+  activeRun: ActiveRunSummary | null;
 }
 
 /** 历史会话列表默认每页条数；侧栏首屏与下滑翻页共用同一口径。 */

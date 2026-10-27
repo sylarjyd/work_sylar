@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import {
@@ -10,6 +11,7 @@ import {
   isSessionMode,
   normalizeSkills,
   SESSION_PAGE_SIZE,
+  type ActiveRunSummary,
   type AssistantPermissionMode,
   type AssistantSkillKey,
   type AttachmentRef,
@@ -57,6 +59,8 @@ interface AssistantRow {
 
 @Injectable()
 export class SessionsService {
+  private readonly logger = new Logger(SessionsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly catalog: ModelCatalogService,
@@ -78,7 +82,9 @@ export class SessionsService {
       ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
       include: { assistant: { select: { name: true } } },
     });
-    const items = rows.slice(0, limit).map(toSummary);
+    const page = rows.slice(0, limit);
+    const active = await this.activeRuns(page.map((s) => s.id));
+    const items = page.map((s) => toSummary(s, active.get(s.id) ?? null));
     return {
       items,
       nextCursor: rows.length > limit ? items[items.length - 1].id : null,
@@ -92,7 +98,8 @@ export class SessionsService {
       include: { assistant: { select: { name: true } } },
     });
     if (!s) throw new NotFoundException('session_not_found');
-    return toSummary(s);
+    const active = await this.activeRuns([s.id]);
+    return toSummary(s, active.get(s.id) ?? null);
   }
 
   /**
@@ -260,6 +267,36 @@ export class SessionsService {
       attachments: m.attachments.map(toAttachmentRef),
     }));
   }
+
+  /**
+   * 批量查询会话当前活跃运行。失败降级为无标记：侧栏提示缺失不应让列表整体失败。
+   * 同一会话理论上只会有一条（前端串行发送）；异常多条时运行中优先，其次排队中。
+   */
+  private async activeRuns(sessionIds: string[]): Promise<Map<string, ActiveRunSummary>> {
+    const out = new Map<string, ActiveRunSummary>();
+    if (sessionIds.length === 0) return out;
+    try {
+      const rows = await this.prisma.run.findMany({
+        where: {
+          task: { sessionId: { in: sessionIds } },
+          status: { in: ['queued', 'running'] },
+        },
+        select: { id: true, status: true, task: { select: { sessionId: true } } },
+      });
+      for (const r of rows) {
+        if (r.status !== 'queued' && r.status !== 'running') continue;
+        const sid = r.task.sessionId;
+        const seen = out.get(sid);
+        if (seen && (seen.status === 'running' || r.status === 'queued')) continue;
+        out.set(sid, { id: r.id, status: r.status });
+      }
+    } catch (err) {
+      this.logger.warn(
+        `activeRun query failed (sessions=${sessionIds.length}): ${(err as Error).message}`,
+      );
+    }
+    return out;
+  }
 }
 
 function toAttachmentRef(row: {
@@ -291,16 +328,19 @@ function toAssistantRef(row: AssistantRow): SessionAssistantRef {
   };
 }
 
-function toSummary(s: {
-  id: string;
-  title: string;
-  createdAt: Date;
-  model: string | null;
-  mode: string;
-  assistantId?: string | null;
-  assistant?: { name: string } | null;
-  pinned?: boolean;
-}): SessionSummary {
+function toSummary(
+  s: {
+    id: string;
+    title: string;
+    createdAt: Date;
+    model: string | null;
+    mode: string;
+    assistantId?: string | null;
+    assistant?: { name: string } | null;
+    pinned?: boolean;
+  },
+  activeRun: ActiveRunSummary | null = null,
+): SessionSummary {
   return {
     id: s.id,
     title: s.title,
@@ -310,6 +350,7 @@ function toSummary(s: {
     assistantName: s.assistant?.name ?? null,
     mode: isSessionMode(s.mode) ? s.mode : 'chat',
     pinned: s.pinned === true,
+    activeRun,
   };
 }
 

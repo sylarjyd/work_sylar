@@ -128,6 +128,10 @@ const fakePrisma = {
         (t) => t.sessionId === where.sessionId && where.status.in.includes(t.status),
       ) ?? null,
   },
+  run: {
+    // 本文件只验证路由与鉴权，运行标记一律为空；缺这个委托会让 activeRun 查询抛错刷 warn。
+    findMany: async () => [],
+  },
   message: {
     findMany: async ({ where }: { where: { sessionId: string } }) =>
       messages
