@@ -26,12 +26,15 @@ importers:
       '@ai-office/web-core':
         specifier: workspace:*
         version: link:../../packages/web-core
+      '@ant-design/cssinjs':
+        specifier: ^1.24.0
+        version: 1.24.0(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       '@ant-design/icons':
         specifier: ^5.6.1
         version: 5.6.1(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       '@ant-design/nextjs-registry':
         specifier: ^1.3.0
-        version: 1.3.0(@ant-design/cssinjs@2.1.2(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(antd@5.29.3(luxon@3.7.2)(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(next@15.5.28(@opentelemetry/api@1.9.1)(@types/node@22.20.5)(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
+        version: 1.3.0(@ant-design/cssinjs@1.24.0(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(antd@5.29.3(luxon@3.7.2)(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(next@15.5.28(@opentelemetry/api@1.9.1)(@types/node@22.20.5)(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       '@ant-design/v5-patch-for-react-19':
         specifier: ^1.0.3
         version: 1.0.3(antd@5.29.3(luxon@3.7.2)(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
@@ -215,12 +218,15 @@ importers:
       '@ai-office/web-core':
         specifier: workspace:*
         version: link:../../packages/web-core
+      '@ant-design/cssinjs':
+        specifier: ^1.24.0
+        version: 1.24.0(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       '@ant-design/icons':
         specifier: ^5.6.1
         version: 5.6.1(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       '@ant-design/nextjs-registry':
         specifier: ^1.3.0
-        version: 1.3.0(@ant-design/cssinjs@2.1.2(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(antd@5.29.3(luxon@3.7.2)(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(next@15.5.28(@opentelemetry/api@1.9.1)(@types/node@22.20.5)(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
+        version: 1.3.0(@ant-design/cssinjs@1.24.0(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(antd@5.29.3(luxon@3.7.2)(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(next@15.5.28(@opentelemetry/api@1.9.1)(@types/node@22.20.5)(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       '@ant-design/v5-patch-for-react-19':
         specifier: ^1.0.3
         version: 1.0.3(antd@5.29.3(luxon@3.7.2)(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
@@ -385,12 +391,6 @@ packages:
 
   '@ant-design/cssinjs@1.24.0':
     resolution: {integrity: sha512-K4cYrJBsgvL+IoozUXYjbT6LHHNt+19a9zkvpBPxLjFHas1UpPM2A5MlhROb0BT8N8WoavM5VsP9MeSeNK/3mg==}
-    peerDependencies:
-      react: '>=16.0.0'
-      react-dom: '>=16.0.0'
-
-  '@ant-design/cssinjs@2.1.2':
-    resolution: {integrity: sha512-2Hy8BnCEH31xPeSLbhhB2ctCPXE2ZnASdi+KbSeS79BNbUhL9hAEe20SkUk+BR8aKTmqb6+FKFruk7w8z0VoRQ==}
     peerDependencies:
       react: '>=16.0.0'
       react-dom: '>=16.0.0'
@@ -1657,12 +1657,6 @@ packages:
       react: '>=16.9.0'
       react-dom: '>=16.9.0'
 
-  '@rc-component/util@1.14.0':
-    resolution: {integrity: sha512-qFpkGBCiyN3NNAU+FOnZdcdz7A/rXCg3JdQk+bujUKAExZgRqzf2yy1f4YN63Lwctic5FcK9rgjQ6aWbykqwEw==}
-    peerDependencies:
-      react: '>=18.0.0'
-      react-dom: '>=18.0.0'
-
   '@rollup/pluginutils@5.4.0':
     resolution: {integrity: sha512-MfPp06CjRLfXQ3wY0R8vJDYBy/MvVcc9OulEfR0B8Iv9ko+GCNaRZ+EpJYFl27LhKsZK0o420sYCRHCjfCgeUg==}
     engines: {node: '>=14.0.0'}
@@ -2469,10 +2463,6 @@ packages:
     resolution: {integrity: sha512-JQHZ2QMW6l3aH/j6xCqQThY/9OH4D/9ls34cgkUBiEeocRTU04tHfKPBsUK1PqZCUQM7GiA0IIXJSuXHI64Kbg==}
     engines: {node: '>=0.8'}
 
-  clsx@2.1.1:
-    resolution: {integrity: sha512-eYm0QWBtUrBWZWG0d386OGAw16Z995PiOVo2B7bjWSbHedGl5e0ZWaq65kOGgUSNesEIDkB9ISbTg/JK9dhCZA==}
-    engines: {node: '>=6'}
-
   cluster-key-slot@1.1.1:
     resolution: {integrity: sha512-rwHwUfXL40Chm1r08yrhU3qpUvdVlgkKNeyeGPOxnW8/SyVDvgRaed/Uz54AqWNaTCAThlj6QAs3TZcKI0xDEw==}
     engines: {node: '>=0.10.0'}
@@ -3254,9 +3244,6 @@ packages:
   is-map@2.0.3:
     resolution: {integrity: sha512-1Qed0/Hr2m+YqxnM09CjA2d/i6YZNfF6R2oRAOj36eUdS6qIV/huPJNSEpKbupewFs+ZsJlxsjjPbc0/afW6Lw==}
     engines: {node: '>= 0.4'}
-
-  is-mobile@5.0.0:
-    resolution: {integrity: sha512-Tz/yndySvLAEXh+Uk8liFCxOwVH6YutuR74utvOcu7I9Di+DwM0mtdPVZNaVvvBUM2OXxne/NhOs1zAO7riusQ==}
 
   is-negative-zero@2.0.3:
     resolution: {integrity: sha512-5KoIu2Ngpyek75jXodFvnafB6DJgr3u8uuK0LEZJjrU19DrMD3EVERaR8sjz8CCGgpZvxPl9SuE1GMVPFHx1mw==}
@@ -4336,9 +4323,6 @@ packages:
   react-is@18.3.1:
     resolution: {integrity: sha512-/LLMVyas0ljjAtoYiPqYiL8VWXzUUdThrmU5+n20DZv+a+ClRoevUzw5JxU+Ieh5/c87ytoTBV9G1FiKfNJdmg==}
 
-  react-is@19.3.1:
-    resolution: {integrity: sha512-RRieF6IyxQBkcK6pP8xOHprLTPW6QjRkbGdImtqNme+/hYVwCZkLQLdlZGOhUqXwkS9IEynaGvPJtv6XB/cz0Q==}
-
   react-markdown@10.1.0:
     resolution: {integrity: sha512-qKxVopLT/TyA6BX3Ue5NwabOsAzm0Q7kAPwq6L+wWDwisYs7R8vZ0nRXqq6rkueboxpkjvLGU9fWifiX/ZZFxQ==}
     peerDependencies:
@@ -5336,18 +5320,6 @@ snapshots:
       react-dom: 19.3.1(react@19.3.1)
       stylis: 4.4.0
 
-  '@ant-design/cssinjs@2.1.2(react-dom@19.3.1(react@19.3.1))(react@19.3.1)':
-    dependencies:
-      '@babel/runtime': 7.29.10
-      '@emotion/hash': 0.8.0
-      '@emotion/unitless': 0.7.5
-      '@rc-component/util': 1.14.0(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
-      clsx: 2.1.1
-      csstype: 3.2.3
-      react: 19.3.1
-      react-dom: 19.3.1(react@19.3.1)
-      stylis: 4.4.0
-
   '@ant-design/fast-color@2.0.6':
     dependencies:
       '@babel/runtime': 7.29.10
@@ -5364,9 +5336,9 @@ snapshots:
       react: 19.3.1
       react-dom: 19.3.1(react@19.3.1)
 
-  '@ant-design/nextjs-registry@1.3.0(@ant-design/cssinjs@2.1.2(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(antd@5.29.3(luxon@3.7.2)(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(next@15.5.28(@opentelemetry/api@1.9.1)(@types/node@22.20.5)(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)':
+  '@ant-design/nextjs-registry@1.3.0(@ant-design/cssinjs@1.24.0(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(antd@5.29.3(luxon@3.7.2)(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(next@15.5.28(@opentelemetry/api@1.9.1)(@types/node@22.20.5)(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)':
     dependencies:
-      '@ant-design/cssinjs': 2.1.2(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
+      '@ant-design/cssinjs': 1.24.0(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       antd: 5.29.3(luxon@3.7.2)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       next: 15.5.28(@opentelemetry/api@1.9.1)(@types/node@22.20.5)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       react: 19.3.1
@@ -6429,13 +6401,6 @@ snapshots:
       react: 19.3.1
       react-dom: 19.3.1(react@19.3.1)
 
-  '@rc-component/util@1.14.0(react-dom@19.3.1(react@19.3.1))(react@19.3.1)':
-    dependencies:
-      is-mobile: 5.0.0
-      react: 19.3.1
-      react-dom: 19.3.1(react@19.3.1)
-      react-is: 19.3.1
-
   '@rollup/pluginutils@5.4.0(rollup@4.64.7)':
     dependencies:
       '@types/estree': 1.0.9
@@ -7264,8 +7229,6 @@ snapshots:
   client-only@0.0.1: {}
 
   clone@1.0.4: {}
-
-  clsx@2.1.1: {}
 
   cluster-key-slot@1.1.1: {}
 
@@ -8288,8 +8251,6 @@ snapshots:
   is-interactive@1.0.0: {}
 
   is-map@2.0.3: {}
-
-  is-mobile@5.0.0: {}
 
   is-negative-zero@2.0.3: {}
 
@@ -9671,8 +9632,6 @@ snapshots:
       scheduler: 0.28.0
 
   react-is@18.3.1: {}
-
-  react-is@19.3.1: {}
 
   react-markdown@10.1.0(@types/react@19.3.0)(react@19.3.1):
     dependencies:
