@@ -248,6 +248,40 @@ describe('SettingsService', () => {
     );
   });
 
+  it('记忆配置默认全部开启：24000 字符预算、召回 5 条', async () => {
+    const { svc } = makeService();
+    await expect(svc.getMemoryConfig()).resolves.toEqual({
+      enabled: true,
+      historyMaxChars: 24000,
+      longTermTopK: 5,
+    });
+  });
+
+  it('记忆配置读取 DB 覆盖值', async () => {
+    const { svc } = makeService();
+    await svc.update('memoryEnabled', false, actor);
+    await svc.update('memoryHistoryMaxChars', 8000, actor);
+    await svc.update('memoryLongTermTopK', 0, actor);
+    await expect(svc.getMemoryConfig()).resolves.toEqual({
+      enabled: false,
+      historyMaxChars: 8000,
+      longTermTopK: 0,
+    });
+  });
+
+  it('记忆参数越界抛 invalid_value', async () => {
+    const { svc } = makeService();
+    await expect(svc.update('memoryHistoryMaxChars', 1999, actor)).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+    await expect(svc.update('memoryLongTermTopK', 11, actor)).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+    await expect(svc.update('memoryEnabled', 'true', actor)).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+  });
+
   it('getAlertSettings 返回生效配置', async () => {
     const { svc } = makeService();
     await svc.update('alertsEnabled', false, actor);

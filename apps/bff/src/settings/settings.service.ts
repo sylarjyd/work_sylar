@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import type {
   AdminSettingDto,
   AdminSettingValue,
@@ -72,6 +72,9 @@ export const SETTING_SPECS = {
   queueMaxPerTenant: { type: 'number', min: 1, max: 200, fallback: 50, env: 'RUN_QUEUE_MAX_PER_TENANT' },
   qaCacheEnabled: { type: 'boolean', fallback: true },
   qaCacheTtlSeconds: { type: 'number', min: 10, max: 86400, fallback: 300 },
+  memoryEnabled: { type: 'boolean', fallback: true },
+  memoryHistoryMaxChars: { type: 'number', min: 2000, max: 200000, fallback: 24000 },
+  memoryLongTermTopK: { type: 'number', min: 0, max: 10, fallback: 5 },
   alertsEnabled: { type: 'boolean', fallback: true, env: 'ALERTS_ENABLED' },
   alertWebhookUrl: {
     type: 'string',
@@ -110,6 +113,8 @@ function maskSecret(value: string): string {
 /** 管理端参数配置：DB 覆盖 → env → 默认值的优先级解析，写操作与审计同事务。 */
 @Injectable()
 export class SettingsService {
+  private readonly logger = new Logger(SettingsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
@@ -162,6 +167,45 @@ export class SettingsService {
       this.resolve('qaCacheTtlSeconds'),
     ]);
     return { enabled: enabled.value as boolean, ttlSeconds: ttlSeconds.value as number };
+  }
+
+  /**
+   * 记忆配置：开关、单轮历史字符预算与长期召回条数。
+   * 与问答缓存不同，记忆读取失败不能让运行整体失败，因此逐项失败回落默认值。
+   */
+  async getMemoryConfig(): Promise<{
+    enabled: boolean;
+    historyMaxChars: number;
+    longTermTopK: number;
+  }> {
+    const [enabled, historyMaxChars, longTermTopK] = await Promise.all([
+      this.resolve('memoryEnabled').catch((err: Error) => {
+        this.logger.warn(`读取 memoryEnabled 失败，回落默认值: ${err.message}`);
+        return undefined;
+      }),
+      this.resolve('memoryHistoryMaxChars').catch((err: Error) => {
+        this.logger.warn(`读取 memoryHistoryMaxChars 失败，回落默认值: ${err.message}`);
+        return undefined;
+      }),
+      this.resolve('memoryLongTermTopK').catch((err: Error) => {
+        this.logger.warn(`读取 memoryLongTermTopK 失败，回落默认值: ${err.message}`);
+        return undefined;
+      }),
+    ]);
+    return {
+      enabled:
+        enabled === undefined
+          ? SETTING_SPECS.memoryEnabled.fallback
+          : (enabled.value as boolean),
+      historyMaxChars:
+        historyMaxChars === undefined
+          ? SETTING_SPECS.memoryHistoryMaxChars.fallback
+          : (historyMaxChars.value as number),
+      longTermTopK:
+        longTermTopK === undefined
+          ? SETTING_SPECS.memoryLongTermTopK.fallback
+          : (longTermTopK.value as number),
+    };
   }
 
   /** 告警任务读取生效配置；secret 仅在此处解密后的进程内使用，不进入日志。 */
