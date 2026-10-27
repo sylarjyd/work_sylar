@@ -1789,6 +1789,37 @@ describe('RunExecutor', () => {
     );
     expect(deps.tasks.finish).toHaveBeenCalledWith('r1', 't1', 'done', 'hi', 's1');
   });
+
+  it('重试复用同一份记忆上下文，只准备一次', async () => {
+    const { executor, deps } = makeExecutor({ maxAttempts: 2 });
+    deps.memory.prepareContext.mockResolvedValueOnce({
+      messages: [{ role: 'user', content: '窗口问题', attachments: [] }],
+      sections: ['## 用户长期记忆\n- 偏好简洁'],
+    });
+    const reset = Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' });
+    deps.fetch
+      .mockRejectedValueOnce(reset)
+      .mockResolvedValueOnce(sseResponse([{ event: 'done', data: { runId: 'r1' } }]));
+
+    await executor.execute(job());
+
+    expect(deps.fetch).toHaveBeenCalledTimes(2);
+    // 记忆准备发生在重试循环之外：重试不得重复调用模型/embedding。
+    expect(deps.memory.prepareContext).toHaveBeenCalledTimes(1);
+    const first = JSON.parse(String((deps.fetch.mock.calls[0]![1] as RequestInit).body)) as {
+      messages: unknown;
+      systemPrompt: string;
+    };
+    const second = JSON.parse(String((deps.fetch.mock.calls[1]![1] as RequestInit).body)) as {
+      messages: unknown;
+      systemPrompt: string;
+    };
+    expect(first.messages).toEqual([{ role: 'user', content: '窗口问题', attachments: [] }]);
+    expect(second.messages).toEqual(first.messages);
+    expect(second.systemPrompt).toBe(first.systemPrompt);
+    expect(second.systemPrompt).toContain('## 用户长期记忆');
+    expect(deps.tasks.finish).toHaveBeenCalledWith('r1', 't1', 'done', '', 's1');
+  });
 });
 
 describe('parseCheckpoint', () => {
