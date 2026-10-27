@@ -107,6 +107,30 @@ describe('MemoryService.prepareContext', () => {
     expect(deps.shortTerm.unlock).toHaveBeenCalledWith('s1', 'r1');
   });
 
+  it('已有压缩起点时只压缩新增区间并以新切点写回', async () => {
+    const deps = makeDeps({ enabled: true, historyMaxChars: 250, longTermTopK: 5 });
+    deps.shortTerm.load.mockResolvedValue({ summary: '旧摘要', upToCount: 4, updatedAt: 1 });
+    deps.llm.summarize.mockResolvedValue('新摘要');
+    const messages = Array.from({ length: 12 }, () => msg('x'.repeat(100)));
+    const { svc } = makeService(deps);
+
+    const result = await svc.prepareContext({
+      job: job(),
+      snapshot: snapshot(messages),
+      modelRoutes: routes,
+    });
+
+    // 增量压缩：起点是上次覆盖的 4，而不是 0。
+    expect(deps.llm.summarize).toHaveBeenCalledWith(routes[0], messages.slice(4, 8), '旧摘要');
+    expect(deps.shortTerm.save).toHaveBeenCalledWith('s1', {
+      summary: '新摘要',
+      upToCount: 8,
+      updatedAt: expect.any(Number),
+    });
+    expect(result.sections[0]).toContain('新摘要');
+    expect(result.messages).toEqual(messages.slice(8));
+  });
+
   it('摘要模型失败时使用确定性摘要', async () => {
     const deps = makeDeps({ enabled: true, historyMaxChars: 250, longTermTopK: 5 });
     deps.llm.summarize.mockResolvedValue(null);
@@ -172,7 +196,7 @@ describe('MemoryService.prepareContext', () => {
     });
 
     expect(result.sections[0]).toContain('本次摘要');
-    expect(deps.shortTerm.unlock).toHaveBeenCalled();
+    expect(deps.shortTerm.unlock).toHaveBeenCalledWith('s1', 'r1');
   });
 });
 
