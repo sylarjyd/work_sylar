@@ -209,6 +209,20 @@ describe('问答缓存接口', () => {
     expect(auditRows[0].summary).toEqual({ userId: 'u1', sessionId: 's1' });
   });
 
+  it('删除已过期或不存在的 hash 仍返回 204 并写审计', async () => {
+    qaCache.get.mockResolvedValueOnce(null);
+
+    const res = await app.inject({
+      method: 'DELETE',
+      url: `/api/admin/qa-cache/${HASH}`,
+      headers: auth('admin'),
+    });
+
+    expect(res.statusCode).toBe(204);
+    expect(qaCache.remove).toHaveBeenCalledWith(HASH);
+    expect(auditRows[0].summary).toEqual({ userId: null, sessionId: null });
+  });
+
   it('非法 hash 返回 400 invalid_hash，且不触碰缓存', async () => {
     const res = await app.inject({
       method: 'DELETE',

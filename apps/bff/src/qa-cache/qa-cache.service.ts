@@ -128,7 +128,7 @@ export class QaCacheService {
     const entry = parseEntry(raw);
     if (!entry || entry.userId !== params.userId || entry.sessionId !== params.sessionId) {
       this.logger.warn(`问答缓存条目无效，已删除: ${hash}`);
-      await this.drop(hash);
+      await this.drop([hash]);
       return null;
     }
     return entry;
@@ -207,31 +207,42 @@ export class QaCacheService {
 
     const raws = await withCacheTimeout(redis.mget(...hashes.map((hash) => entryKey(hash))));
     const items: QaCacheStoredEntry[] = [];
-    const stale: string[] = [];
+    const missing: string[] = [];
+    const corrupt: string[] = [];
     hashes.forEach((hash, index) => {
       const raw = raws[index];
-      const entry = raw === null || raw === undefined ? null : parseEntry(raw);
+      if (raw === null || raw === undefined) {
+        missing.push(hash);
+        return;
+      }
+      const entry = parseEntry(raw);
       if (!entry) {
-        stale.push(hash);
+        corrupt.push(hash);
         return;
       }
       items.push({ hash, ...entry });
     });
-    if (stale.length > 0) {
-      this.logger.warn(`清理问答缓存残留索引 ${stale.length} 条`);
-      await this.drop(stale);
+    if (missing.length > 0) {
+      this.logger.warn(`清理问答缓存残留索引 ${missing.length} 条`);
+      // 条目已被 TTL 删除，只清索引：并发续期可能刚写回同一 hash 的新条目，DEL 会误删它。
+      await this.drop(missing, { entries: false });
+    }
+    if (corrupt.length > 0) {
+      this.logger.warn(`清理问答缓存损坏条目 ${corrupt.length} 条`);
+      await this.drop(corrupt);
     }
     return { items, total };
   }
 
-  private async drop(hashes: string | string[]): Promise<void> {
+  private async drop(hashes: string[], opts: { entries?: boolean } = {}): Promise<void> {
     const redis = this.redis;
-    if (!redis) return;
-    const list = Array.isArray(hashes) ? hashes : [hashes];
+    if (!redis || hashes.length === 0) return;
     try {
       const pipeline = redis.multi();
-      for (const hash of list) pipeline.del(entryKey(hash));
-      pipeline.zrem(QA_CACHE_INDEX_KEY, ...list);
+      if (opts.entries !== false) {
+        for (const hash of hashes) pipeline.del(entryKey(hash));
+      }
+      pipeline.zrem(QA_CACHE_INDEX_KEY, ...hashes);
       await execMulti(pipeline);
     } catch (err) {
       this.logger.warn(`清理问答缓存失败: ${(err as Error).message}`);

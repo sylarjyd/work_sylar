@@ -46,6 +46,7 @@ export default function AdminQaCachePage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [listFailed, setListFailed] = useState(false);
 
   const [enabled, setEnabled] = useState(true);
   const [ttlSeconds, setTtlSeconds] = useState<number | null>(DEFAULT_TTL);
@@ -85,10 +86,14 @@ export default function AdminQaCachePage() {
       if (id !== loadSeq.current) return true;
       setItems(data.items);
       setTotal(data.total);
+      setListFailed(false);
       return true;
     } catch (err) {
       if (id !== loadSeq.current) return true;
-      return !handleErr(err);
+      // handleErr 返回 true 表示已跳转登录：此时不再提示可重试的失败
+      const redirected = handleErr(err);
+      setListFailed(!redirected);
+      return false;
     } finally {
       if (id === loadSeq.current) setLoading(false);
     }
@@ -284,7 +289,20 @@ export default function AdminQaCachePage() {
         </Typography.Text>
       </div>
 
-      {error ? <Alert type="error" showIcon message={error} /> : null}
+      {error ? (
+        <Alert
+          type="error"
+          showIcon
+          message={error}
+          action={
+            listFailed ? (
+              <Button size="small" onClick={() => void loadRef.current()}>
+                重新加载
+              </Button>
+            ) : undefined
+          }
+        />
+      ) : null}
       {notice ? <Alert type="info" showIcon message={notice} /> : null}
 
       <Card title="缓存设置" loading={settingsLoading}>

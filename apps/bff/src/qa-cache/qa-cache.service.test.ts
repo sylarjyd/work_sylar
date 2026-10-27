@@ -24,6 +24,7 @@ function makeFakeRedis() {
   const ttls = new Map<string, number>();
   const zsets = new Map<string, Map<string, number>>();
   const expireCalls: Array<{ key: string; ttl: number }> = [];
+  const multiDelKeys: string[] = [];
   const alive = (key: string): boolean => {
     const expiresAt = ttls.get(key);
     return expiresAt === undefined || expiresAt > Date.now();
@@ -53,6 +54,7 @@ function makeFakeRedis() {
         return builder;
       },
       del(key) {
+        multiDelKeys.push(key);
         queued.push(() => {
           strings.delete(key);
           ttls.delete(key);
@@ -116,7 +118,7 @@ function makeFakeRedis() {
     },
   };
 
-  return { redis: redis as unknown as Redis, strings, ttls, zindex, expireCalls };
+  return { redis: redis as unknown as Redis, strings, ttls, zindex, expireCalls, multiDelKeys };
 }
 
 type FakeRedis = ReturnType<typeof makeFakeRedis>;
@@ -279,6 +281,22 @@ describe('QaCacheService', () => {
 
     expect(result.items).toEqual([]);
     expect(fake.zindex().has(stale)).toBe(false);
+    // 只清索引：条目可能已被并发续期重新写回，DEL 会误删新条目
+    expect(fake.multiDelKeys).toEqual([]);
+  });
+
+  it('列表遇到损坏条目时删除条目与索引', async () => {
+    const { svc, fake } = makeService();
+    const hash = qaCacheHash('u1', 's1', '坏数据');
+    fake.strings.set(`qa:cache:entry:${hash}`, 'not-json');
+    fake.zindex().set(hash, Date.now() + 60_000);
+
+    const result = await svc.list({ offset: 0, limit: 10 });
+
+    expect(result.items).toEqual([]);
+    expect(fake.strings.has(`qa:cache:entry:${hash}`)).toBe(false);
+    expect(fake.zindex().has(hash)).toBe(false);
+    expect(fake.multiDelKeys).toEqual([`qa:cache:entry:${hash}`]);
   });
 
   it('损坏 JSON 视为未命中并删除条目与索引', async () => {
@@ -340,6 +358,28 @@ describe('QaCacheService', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('写入与删除时 MULTI 单命令错误会抛出，不会静默成功', async () => {
+    const { svc, fake } = makeService();
+    interface FailingMulti {
+      set(): FailingMulti;
+      zadd(): FailingMulti;
+      del(): FailingMulti;
+      zrem(): FailingMulti;
+      exec(): Promise<unknown[]>;
+    }
+    const failing: FailingMulti = {
+      set: () => failing,
+      zadd: () => failing,
+      del: () => failing,
+      zrem: () => failing,
+      exec: async () => [[new Error('boom'), null]],
+    };
+    fake.redis.multi = (() => failing) as unknown as typeof fake.redis.multi;
+
+    await expect(svc.remember({ ...baseParams, answer: '答案' })).rejects.toThrow('boom');
+    await expect(svc.remove('a'.repeat(64))).rejects.toThrow('boom');
   });
 
   it('清理残留索引失败时列表仍返回有效条目', async () => {
