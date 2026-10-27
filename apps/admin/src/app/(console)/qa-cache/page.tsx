@@ -32,7 +32,8 @@ const MIN_TTL = 10;
 const MAX_TTL = 86400;
 
 function formatTime(value: string): string {
-  return new Date(value).toLocaleString('zh-CN', { hour12: false });
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? '-' : date.toLocaleString('zh-CN', { hour12: false });
 }
 
 export default function AdminQaCachePage() {
@@ -50,6 +51,9 @@ export default function AdminQaCachePage() {
   const [ttlSeconds, setTtlSeconds] = useState<number | null>(DEFAULT_TTL);
   const [settingsLoading, setSettingsLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [settingsFailed, setSettingsFailed] = useState(false);
+  const [settingsFromDb, setSettingsFromDb] = useState(false);
 
   const inFlight = useRef(false);
 
@@ -100,7 +104,7 @@ export default function AdminQaCachePage() {
     void load();
   }, [load]);
 
-  const loadSettings = useCallback(async () => {
+  const loadSettings = useCallback(async (): Promise<boolean> => {
     setSettingsLoading(true);
     try {
       const rows = await listAdminSettings();
@@ -108,8 +112,13 @@ export default function AdminQaCachePage() {
       const ttlRow = rows.find((row) => row.key === 'qaCacheTtlSeconds');
       if (enabledRow?.type === 'boolean') setEnabled(enabledRow.value);
       if (ttlRow?.type === 'number') setTtlSeconds(ttlRow.value);
+      setSettingsFromDb(enabledRow?.source === 'db' || ttlRow?.source === 'db');
+      setSettingsFailed(false);
+      return true;
     } catch (err) {
+      setSettingsFailed(true);
       handleErr(err);
+      return false;
     } finally {
       setSettingsLoading(false);
     }
@@ -123,9 +132,13 @@ export default function AdminQaCachePage() {
     // 写操作已成功，先给出明确提示，避免刷新失败被误判为操作失败而重复提交
     setNotice('操作已成功，正在刷新数据…');
     const ok = await loadRef.current();
-    setNotice(
-      ok ? '操作已成功。' : '操作已成功，但数据刷新失败，请勿重复提交；稍后可刷新页面确认。',
-    );
+    if (ok) {
+      setNotice('操作已成功。');
+      return;
+    }
+    // load 已写入具体错误；写入本身是成功的，避免同一失败显示两条告警。
+    setError('');
+    setNotice('操作已成功，但数据刷新失败，请勿重复提交；稍后可刷新页面确认。');
   }
 
   async function saveSettings() {
@@ -147,8 +160,12 @@ export default function AdminQaCachePage() {
     try {
       await updateAdminSetting('qaCacheEnabled', enabled);
       await updateAdminSetting('qaCacheTtlSeconds', ttlSeconds);
-      await refreshAfterWrite();
+      await loadSettings();
+      setSettingsFromDb(true);
+      setNotice('操作已成功。');
     } catch (err) {
+      // 两个 key 分两次写入：后一个失败时前一个可能已生效，先回读服务端实际值再提示错误。
+      await loadSettings();
       handleErr(err);
     } finally {
       inFlight.current = false;
@@ -176,9 +193,11 @@ export default function AdminQaCachePage() {
     try {
       await resetAdminSetting('qaCacheEnabled');
       await resetAdminSetting('qaCacheTtlSeconds');
-      await loadSettings();
-      await refreshAfterWrite();
+      const ok = await loadSettings();
+      setNotice(ok ? '操作已成功。' : '操作已成功，但设置刷新失败，请刷新页面确认。');
     } catch (err) {
+      // 两个 key 分两次写入：后一个失败时前一个可能已生效，先回读服务端实际值再提示错误。
+      await loadSettings();
       handleErr(err);
     } finally {
       inFlight.current = false;
@@ -201,15 +220,23 @@ export default function AdminQaCachePage() {
   async function runRemove(item: AdminQaCacheItemDto) {
     if (inFlight.current) return;
     inFlight.current = true;
+    setBusy(true);
     setError('');
     setNotice('');
     try {
       await deleteAdminQaCache(item.hash);
+      // 删除后当前页可能变空：回退一页，避免停在无数据页。
+      if (items.length === 1 && page > 1) {
+        setNotice('操作已成功。');
+        setPage(page - 1);
+        return;
+      }
       await refreshAfterWrite();
     } catch (err) {
       handleErr(err);
     } finally {
       inFlight.current = false;
+      setBusy(false);
     }
   }
 
@@ -229,7 +256,7 @@ export default function AdminQaCachePage() {
       key: 'actions',
       width: 100,
       render: (_: unknown, item) => (
-        <Button size="small" danger onClick={() => remove(item)}>
+        <Button size="small" danger disabled={busy || saving} onClick={() => remove(item)}>
           删除
         </Button>
       ),
@@ -254,7 +281,12 @@ export default function AdminQaCachePage() {
         <Space wrap size={16} align="center">
           <Space size={8}>
             <Typography.Text>启用问答缓存</Typography.Text>
-            <Switch checked={enabled} disabled={saving} onChange={setEnabled} />
+            <Switch
+              checked={enabled}
+              disabled={saving || settingsFailed}
+              aria-label="启用问答缓存"
+              onChange={setEnabled}
+            />
           </Space>
           <Space size={8}>
             <Typography.Text>有效期（秒）</Typography.Text>
@@ -263,16 +295,22 @@ export default function AdminQaCachePage() {
               max={MAX_TTL}
               precision={0}
               value={ttlSeconds}
-              disabled={saving}
+              disabled={saving || settingsFailed}
+              aria-label="缓存有效期（秒）"
               onChange={setTtlSeconds}
               style={{ width: 140 }}
             />
           </Space>
           <Space size={8}>
-            <Button type="primary" loading={saving} onClick={() => void saveSettings()}>
+            <Button
+              type="primary"
+              loading={saving}
+              disabled={saving || settingsFailed}
+              onClick={() => void saveSettings()}
+            >
               保存
             </Button>
-            <Button disabled={saving} onClick={resetSettings}>
+            <Button disabled={saving || settingsFailed || !settingsFromDb} onClick={resetSettings}>
               恢复默认
             </Button>
           </Space>
