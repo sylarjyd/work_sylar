@@ -70,6 +70,8 @@ export const SETTING_SPECS = {
     env: 'RUN_QUEUE_PER_TENANT',
   },
   queueMaxPerTenant: { type: 'number', min: 1, max: 200, fallback: 50, env: 'RUN_QUEUE_MAX_PER_TENANT' },
+  qaCacheEnabled: { type: 'boolean', fallback: true },
+  qaCacheTtlSeconds: { type: 'number', min: 10, max: 86400, fallback: 300 },
   alertsEnabled: { type: 'boolean', fallback: true, env: 'ALERTS_ENABLED' },
   alertWebhookUrl: {
     type: 'string',
@@ -151,6 +153,15 @@ export class SettingsService {
       this.resolveNumber('queueMaxPerTenant'),
     ]);
     return { maxAttempts, perTenantConcurrency, maxPerTenant };
+  }
+
+  /** 会话内问答缓存：开关与滑动过期时长（秒）。 */
+  async getQaCacheConfig(): Promise<{ enabled: boolean; ttlSeconds: number }> {
+    const [enabled, ttlSeconds] = await Promise.all([
+      this.resolve('qaCacheEnabled'),
+      this.resolve('qaCacheTtlSeconds'),
+    ]);
+    return { enabled: enabled.value as boolean, ttlSeconds: ttlSeconds.value as number };
   }
 
   /** 告警任务读取生效配置；secret 仅在此处解密后的进程内使用，不进入日志。 */

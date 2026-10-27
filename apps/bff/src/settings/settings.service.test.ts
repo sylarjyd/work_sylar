@@ -148,6 +148,29 @@ describe('SettingsService', () => {
     });
   });
 
+  it('getQaCacheConfig 默认开启且有效期为 300 秒', async () => {
+    const { svc } = makeService();
+    await expect(svc.getQaCacheConfig()).resolves.toEqual({
+      enabled: true,
+      ttlSeconds: 300,
+    });
+  });
+
+  it('问答缓存有效期只接受 10–86400 的整数', async () => {
+    const { svc } = makeService();
+    await expect(svc.update('qaCacheTtlSeconds', 9, actor)).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+    await expect(svc.update('qaCacheTtlSeconds', 86401, actor)).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+    await expect(svc.update('qaCacheTtlSeconds', 600, actor)).resolves.toMatchObject({
+      value: 600,
+    });
+    await svc.update('qaCacheEnabled', false, actor);
+    await expect(svc.getQaCacheConfig()).resolves.toEqual({ enabled: false, ttlSeconds: 600 });
+  });
+
   it('按类型解析布尔、字符串与 secret，且不泄露明文', async () => {
     const { svc } = makeService();
     process.env.ALERTS_ENABLED = 'false';
