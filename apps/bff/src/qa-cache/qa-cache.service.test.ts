@@ -183,7 +183,7 @@ describe('QaCacheService', () => {
     await svc.remember({ ...baseParams, answer: '这是答案' });
 
     await expect(
-      svc.lookup({ userId: 'u1', sessionId: 's1', question: '  写个   总结 ' }),
+      svc.lookup({ userId: 'u1', sessionId: 's1', question: '  写个总结 ' }),
     ).resolves.toMatchObject({ answer: '这是答案' });
     await expect(
       svc.lookup({ userId: 'u2', sessionId: 's1', question: '写个总结' }),

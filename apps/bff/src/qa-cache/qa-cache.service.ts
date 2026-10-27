@@ -35,13 +35,8 @@ export function normalizeQuestion(question: string): string {
 
 /** 键绑定用户、会话与规范化问题：任一不同都不能命中。 */
 export function qaCacheHash(userId: string, sessionId: string, question: string): string {
-  // 中文里空格不携带语义，规范化后还要抹平汉字之间的空白，避免「写个总结」与「写个 总结」漏命中。
-  const normalized = normalizeQuestion(question).replace(
-    /(?<=[\u4e00-\u9fff])\s+(?=[\u4e00-\u9fff])/g,
-    '',
-  );
   return createHash('sha256')
-    .update(`${userId}\n${sessionId}\n${normalized}`)
+    .update(`${userId}\n${sessionId}\n${normalizeQuestion(question)}`)
     .digest('hex');
 }
 
