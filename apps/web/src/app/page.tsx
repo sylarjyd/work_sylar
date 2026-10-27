@@ -29,6 +29,7 @@ import { Markdown } from '../components/markdown';
 import {
   IconArrowUpRight,
   IconCheck,
+  IconChevron,
   IconCopy,
   IconFile,
   IconPlus,
@@ -272,8 +273,12 @@ function EventRow({
   onOpenArtifacts: () => void;
 }) {
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
+  const [expanded, setExpanded] = useState(false);
   const copyTimer = useRef<number | undefined>(undefined);
   const text = renderStep(ev);
+  // 工具参数默认折叠：调用内容往往又长又散，平铺会淹没对话主线。
+  const toolArgs = ev.type === 'tool_call' ? ev.payload.args : undefined;
+  const hasToolArgs = toolArgs != null && JSON.stringify(toolArgs) !== '{}';
 
   useEffect(() => () => window.clearTimeout(copyTimer.current), []);
 
@@ -336,7 +341,24 @@ function EventRow({
       <div className={`wb-event-icon ${iconCls}`}>{icon}</div>
       <div className="wb-event-body">
         <div className="wb-event-meta">{meta}</div>
-        <div className="wb-event-text">{text}</div>
+        {ev.type === 'tool_call' && hasToolArgs ? (
+          <>
+            <button
+              type="button"
+              className="wb-event-toggle"
+              aria-expanded={expanded}
+              onClick={() => setExpanded((v) => !v)}
+            >
+              <span className="wb-event-summary">调用工具 {String(ev.payload.tool ?? '')}</span>
+              <IconChevron size={14} className="wb-event-caret" />
+            </button>
+            {expanded && (
+              <pre className="wb-event-detail">{JSON.stringify(toolArgs, null, 2)}</pre>
+            )}
+          </>
+        ) : (
+          <div className="wb-event-text">{text}</div>
+        )}
         {ev.type === 'artifact' && (
           <button type="button" className="wb-event-action" onClick={onOpenArtifacts}>
             查看成果

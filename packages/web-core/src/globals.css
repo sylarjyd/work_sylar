@@ -3734,6 +3734,59 @@ a {
   word-break: break-word;
 }
 
+.wb-event-toggle {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  max-width: 100%;
+  padding: 0;
+  font-size: 14.5px;
+  line-height: 1.7;
+  color: var(--wb-ink);
+  text-align: left;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+.wb-event-summary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wb-event-caret {
+  flex: 0 0 auto;
+  color: var(--wb-ink-3);
+  transition: transform 0.15s;
+}
+
+.wb-event-toggle[aria-expanded='true'] .wb-event-caret {
+  transform: rotate(180deg);
+}
+
+.wb-event-toggle:hover .wb-event-summary {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.wb-event-detail {
+  max-height: 280px;
+  padding: 8px 10px;
+  margin: 6px 0 0;
+  overflow: auto;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--wb-ink);
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--wb-hover);
+  border: 1px solid var(--wb-line);
+  border-radius: 8px;
+}
+
 .wb-event-action {
   display: inline-flex;
   gap: 4px;
