@@ -141,6 +141,12 @@ export default function AdminQaCachePage() {
     setNotice('操作已成功，但数据刷新失败，请勿重复提交；稍后可刷新页面确认。');
   }
 
+  async function retryLoadSettings() {
+    const ok = await loadSettings();
+    // 重试成功才清掉上次加载失败的红条，避免恢复后仍显示旧错误。
+    if (ok) setError('');
+  }
+
   async function saveSettings() {
     if (inFlight.current) return;
     if (
@@ -321,7 +327,7 @@ export default function AdminQaCachePage() {
               恢复默认
             </Button>
             {settingsFailed ? (
-              <Button disabled={saving} onClick={() => void loadSettings()}>
+              <Button disabled={saving} onClick={() => void retryLoadSettings()}>
                 重新加载设置
               </Button>
             ) : null}
