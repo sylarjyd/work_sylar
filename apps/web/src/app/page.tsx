@@ -845,8 +845,9 @@ export default function Home() {
     setError('');
     setDecisions({});
     // 新一轮开始：清掉上一轮的运行态与游标，避免停止/重连误挂到旧运行。
+    // 新建的 run 在库里就是 queued，先按排队展示，等状态帧或首个步骤再切执行中。
     setRunId('');
-    setRunStatus(null);
+    setRunStatus('queued');
     setQueuePosition(null);
     setStopping(false);
     lastSeqRef.current = -1;

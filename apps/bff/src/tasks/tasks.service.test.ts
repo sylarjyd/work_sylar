@@ -726,7 +726,8 @@ describe('TasksService', () => {
     ctx.db.runs.push({ id: 'r1', status: 'queued' });
     ctx.db.tasks.push({ id: 'task1', status: 'queued' });
 
-    await svc.markRunning('r1', 'task1');
+    // 首次推进返回 true，执行器据此只通知一次「开始执行」。
+    await expect(svc.markRunning('r1', 'task1')).resolves.toBe(true);
     expect(ctx.db.runs[0]).toMatchObject({ status: 'running' });
     expect(ctx.db.runs[0].startedAt).toBeInstanceOf(Date);
     expect(ctx.db.tasks[0]).toMatchObject({ status: 'running' });
@@ -734,7 +735,7 @@ describe('TasksService', () => {
 
     // 第二次调用两行都已是 running：条件更新 0 行属于正常，且不改写首次开始时间。
     const startedAt = ctx.db.runs[0].startedAt;
-    await expect(svc.markRunning('r1', 'task1')).resolves.toBeUndefined();
+    await expect(svc.markRunning('r1', 'task1')).resolves.toBe(false);
     expect(ctx.db.runs[0].startedAt).toBe(startedAt);
   });
 

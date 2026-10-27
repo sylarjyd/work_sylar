@@ -436,11 +436,15 @@ export class RunExecutor {
     try {
       for (let used = 0; used < maxAttempts; used++) {
         // 状态推进失败（DB 抖动/已被并发改写）不能拖垮运行：继续执行，由终态收尾兜底。
+        let started = false;
         try {
-          await this.tasks.markRunning(runId, taskId);
+          started = await this.tasks.markRunning(runId, taskId);
         } catch (err) {
           this.logger.warn(`run ${runId} 标记 running 失败，继续执行: ${(err as Error).message}`);
         }
+        // 排队 → 执行的瞬间就通知已订阅的客户端；否则「排队中…」会一直挂到
+        // 首个模型增量到达，模型思考越久越像是没在跑。重试时不会重复通知。
+        if (started) await this.publish(runId, { event: 'status', data: { runId, status: 'running' } });
 
         // 取消检查必须放在 markRunning 之后：排队取消可能在预检与状态推进之间落地，
         // 提前检查会漏掉这次取消，让执行器白跑一轮并在 finish 覆盖用户要求的终态。

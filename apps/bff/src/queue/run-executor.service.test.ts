@@ -345,6 +345,40 @@ describe('RunExecutor', () => {
     });
   });
 
+  it('markRunning 推进成功时先下发 running 状态，排队文案不必等首个增量', async () => {
+    const { executor, deps } = makeExecutor();
+    deps.tasks.markRunning.mockResolvedValue(true);
+    deps.fetch.mockResolvedValue(
+      sseResponse([
+        { event: 'step', data: stepEvent(0, 'think', { text: 'hi' }) },
+        { event: 'done', data: { runId: 'r1' } },
+      ]),
+    );
+
+    await executor.execute(job());
+
+    expect(deps.events.publish).toHaveBeenNthCalledWith(1, 'r1', {
+      event: 'status',
+      data: { runId: 'r1', status: 'running' },
+    });
+    expect(publishedEvents(deps)).toEqual(['status', 'step', 'done']);
+  });
+
+  it('重试时 markRunning 未推进状态则不重复下发 running', async () => {
+    const { executor, deps } = makeExecutor();
+    deps.tasks.markRunning.mockResolvedValue(false);
+    deps.fetch.mockResolvedValue(
+      sseResponse([
+        { event: 'step', data: stepEvent(0, 'think', { text: 'hi' }) },
+        { event: 'done', data: { runId: 'r1' } },
+      ]),
+    );
+
+    await executor.execute(job());
+
+    expect(publishedEvents(deps)).toEqual(['step', 'done']);
+  });
+
   it('上游 5xx 时取消响应体、释放预占并标记 failed', async () => {
     const { executor, deps } = makeExecutor();
     const upstream = new Response('boom', { status: 502 });

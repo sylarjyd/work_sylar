@@ -266,10 +266,11 @@ export class TasksService {
    * 开跑前把 run/task 从 queued 推进到 running（同一事务，避免两行状态撕裂）。
    * 重试与崩溃重投时两行可能已是 running，条件更新 0 行属于正常，不能视为故障；
    * startedAt 只在首次成功推进时写入，保留真实开始时间。
+   * 返回本次是否真正从 queued 推进：调用方据此只在开始时通知一次「执行中」。
    */
-  async markRunning(runId: string, taskId: string): Promise<void> {
+  async markRunning(runId: string, taskId: string): Promise<boolean> {
     const startedAt = new Date();
-    await this.prisma.$transaction([
+    const [runResult] = await this.prisma.$transaction([
       this.prisma.run.updateMany({
         where: { id: runId, status: 'queued' },
         data: { status: 'running', startedAt },
@@ -279,6 +280,7 @@ export class TasksService {
         data: { status: 'running', startedAt },
       }),
     ]);
+    return runResult.count > 0;
   }
 
   /** 流式挂接需要的运行元信息；不存在时 404。 */
