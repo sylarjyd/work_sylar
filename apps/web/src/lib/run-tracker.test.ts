@@ -105,4 +105,91 @@ describe('RunTracker', () => {
     tracker.undecide('s1', 'c1');
     expect(tracker.snapshot('s1')?.decisions).toEqual({});
   });
+
+  it('status 帧携带的 runId 会写入条目，排队期即可停止', () => {
+    const { tracker } = make();
+    tracker.begin('s1', 'q');
+    tracker.applyStatus('s1', 'queued', 2, 'r9');
+    expect(tracker.snapshot('s1')).toMatchObject({
+      runId: 'r9',
+      status: 'queued',
+      queuePosition: 2,
+    });
+  });
+
+  it('终态之后步骤与状态不再写入', () => {
+    const { tracker } = make();
+    tracker.begin('s1', 'q');
+    tracker.applyDone('s1', 'failed');
+    tracker.applyStep('s1', ev(0, 'think', { text: 'x' }));
+    tracker.applyStatus('s1', 'running', null);
+    expect(tracker.snapshot('s1')).toMatchObject({
+      events: [],
+      status: 'queued',
+      terminal: true,
+      finalStatus: 'failed',
+    });
+  });
+
+  it('applyError 收尾为失败并清空增量正文', () => {
+    const { tracker } = make();
+    tracker.begin('s1', 'q');
+    tracker.applyStep('s1', ev(0, 'assistant_delta', { text: '半句' }));
+    tracker.applyError('s1');
+    expect(tracker.snapshot('s1')).toMatchObject({
+      terminal: true,
+      finalStatus: 'failed',
+      liveText: '',
+    });
+  });
+
+  it('snapshot 返回副本，外部修改不影响内部条目', () => {
+    const { tracker } = make();
+    tracker.begin('s1', 'q');
+    tracker.applyStep('s1', ev(0, 'think', { text: 'x' }));
+    tracker.decide('s1', 'c1', true);
+    const snap = tracker.snapshot('s1')!;
+    snap.events.push(ev(1, 'think', { text: 'y' }));
+    snap.decisions.c2 = false;
+    snap.attachments.push({ id: 'a1', kind: 'text', filename: 'f.txt', mime: 'text/plain', size: 1 });
+    expect(tracker.snapshot('s1')?.events).toHaveLength(1);
+    expect(tracker.snapshot('s1')?.decisions).toEqual({ c1: true });
+    expect(tracker.snapshot('s1')?.attachments).toHaveLength(0);
+  });
+
+  it('attach 同 runId 但条目已终态时重建，允许回放复活', () => {
+    const { tracker } = make();
+    tracker.begin('s1', 'q', [], 'r1');
+    tracker.applyDone('s1', 'failed');
+    const st = tracker.attach('s1', 'r1', -1);
+    expect(tracker.snapshot('s1')).toMatchObject({
+      runId: 'r1',
+      events: [],
+      terminal: false,
+      status: 'running',
+    });
+    expect(st.lastSeq).toBe(-1);
+  });
+
+  it('attach 的 afterSeq 写入重连游标', () => {
+    const { tracker } = make();
+    tracker.attach('s1', 'r1', 7);
+    expect(tracker.snapshot('s1')).toMatchObject({ lastSeq: 7, runId: 'r1' });
+  });
+
+  it('attach 复用条目时不触发重渲染通知', () => {
+    const { tracker, notify } = make();
+    tracker.begin('s1', 'q', [], 'r1');
+    notify.mockClear();
+    tracker.attach('s1', 'r1', -1);
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it('settle 不覆盖已记录的终态原因', () => {
+    const { tracker } = make();
+    tracker.begin('s1', 'q');
+    tracker.applyStatus('s1', 'canceled', null);
+    tracker.settle('s1', 'failed');
+    expect(tracker.snapshot('s1')).toMatchObject({ terminal: true, finalStatus: 'canceled' });
+  });
 });

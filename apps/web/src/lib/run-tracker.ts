@@ -73,7 +73,7 @@ export class RunTracker {
         terminal: false,
         finalStatus: null,
         goal,
-        attachments,
+        attachments: attachments.slice(),
       },
     });
     this.notify();
@@ -86,7 +86,9 @@ export class RunTracker {
    */
   attach(sessionId: string, runId: string, afterSeq = -1): RunStreamState {
     const existing = this.runs.get(sessionId);
-    if (existing && existing.stream.runId === runId) return existing.stream;
+    if (existing && existing.stream.runId === runId && !existing.entry.terminal) {
+      return existing.stream;
+    }
     const stream = createRunStreamState();
     stream.runId = runId;
     stream.lastSeq = afterSeq;
@@ -131,12 +133,19 @@ export class RunTracker {
     this.notify();
   }
 
-  applyStatus(sessionId: string, status: RunStatus, position: number | null): void {
+  applyStatus(
+    sessionId: string,
+    status: RunStatus,
+    position: number | null,
+    runId = '',
+  ): void {
     const run = this.runs.get(sessionId);
     if (!run || run.entry.terminal) return;
     const { entry } = run;
+    // status 帧同样携带 runId：排队期间也要能停止、能在侧栏显示标记。
+    if (runId) entry.runId = runId;
     if (status === 'queued') {
-      entry.status = 'queued';
+      if (entry.status !== 'stopping') entry.status = 'queued';
       entry.queuePosition = position;
     } else if (status === 'running') {
       // 取消请求已发出时保持 stopping，等终态帧收尾。
@@ -185,7 +194,7 @@ export class RunTracker {
     const run = this.runs.get(sessionId);
     if (!run || run.entry.terminal) return;
     run.entry.terminal = true;
-    run.entry.finalStatus = status;
+    run.entry.finalStatus ??= status;
     run.entry.liveText = '';
     this.notify();
   }
@@ -213,7 +222,7 @@ export class RunTracker {
 
   undecide(sessionId: string, confirmId: string): void {
     const run = this.runs.get(sessionId);
-    if (!run || !(confirmId in run.entry.decisions)) return;
+    if (!run || !Object.prototype.hasOwnProperty.call(run.entry.decisions, confirmId)) return;
     const next = { ...run.entry.decisions };
     delete next[confirmId];
     run.entry.decisions = next;
