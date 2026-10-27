@@ -54,6 +54,7 @@ function buildTranscript(older: PreparedMessage[]): string {
 /** 去掉模型可能带回的代码围栏与包裹引号，并压到 2000 字。 */
 export function sanitizeSummary(raw: string): string {
   const text = raw
+    .trim()
     .replace(/^```[a-zA-Z]*\s*/, '')
     .replace(/```\s*$/, '')
     .replace(/^["'“”「」]+|["'“”「」]+$/g, '')

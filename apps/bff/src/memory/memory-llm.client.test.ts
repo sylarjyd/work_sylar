@@ -98,5 +98,7 @@ describe('parseFacts / sanitizeSummary', () => {
 
   it('摘要去掉包裹的引号', () => {
     expect(sanitizeSummary('“摘要内容”')).toBe('摘要内容');
+    expect(sanitizeSummary('“摘要内容”\n')).toBe('摘要内容');
+    expect(sanitizeSummary('```\n摘要内容\n```')).toBe('摘要内容');
   });
 });
