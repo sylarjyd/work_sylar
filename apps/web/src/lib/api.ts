@@ -261,6 +261,50 @@ export async function shareSkill(id: string): Promise<SkillDto> {
   return (await res.json()) as SkillDto;
 }
 
+/** 上传 Agent Skills 技能包（zip）：不能走 authFetch，它会强制 JSON content-type。 */
+export async function uploadSkillPackage(file: File): Promise<SkillDto> {
+  const token = getToken();
+  const form = new FormData();
+  form.append('file', file);
+  const res = await fetch(`${BFF_URL}/api/skills/upload`, {
+    method: 'POST',
+    headers: {
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
+      traceparent: newTraceparent(),
+      'x-request-id': newRequestId(),
+    },
+    body: form,
+  });
+  if (!res.ok) {
+    let code = '';
+    try {
+      const body = (await res.json()) as { error?: unknown };
+      if (typeof body.error === 'string') code = body.error;
+    } catch {
+      // 错误体不一定是 JSON。
+    }
+    throw new Error(code || `skill_upload_failed_${res.status}`);
+  }
+  return (await res.json()) as SkillDto;
+}
+
+/** 下载技能包内单个文件（模板/脚本等）。 */
+export async function downloadSkillFile(id: string, path: string, filename: string): Promise<void> {
+  const res = await authFetch(
+    `/api/skills/${encodeURIComponent(id)}/file?path=${encodeURIComponent(path)}`,
+  );
+  if (!res.ok) throw new Error(`skill_file_failed_${res.status}`);
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
 /** 取消运行：排队中的直接撤销，执行中的交由控制总线通知；终态 run 幂等返回当前状态。 */
 export async function cancelRun(runId: string): Promise<{ status: string }> {
   // authFetch 固定带 JSON content-type，空体 POST 会被 Fastify 以 400 拒绝，必须补空对象。

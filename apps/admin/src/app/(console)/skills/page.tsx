@@ -8,6 +8,7 @@ import {
   Button,
   Card,
   Input,
+  List,
   Modal,
   Segmented,
   Space,
@@ -15,16 +16,19 @@ import {
   Tag,
   Typography,
 } from 'antd';
+import { UploadOutlined } from '@ant-design/icons';
 import type { TableColumnsType } from 'antd';
 import type { SkillDto, SkillInput } from '@ai-office/shared';
 import {
   adminErrorText,
   createAdminSkill,
   deleteAdminSkill,
+  downloadAdminSkillFile,
   isForbidden,
   listAdminSkills,
   setAdminSkillEnabled,
   updateAdminSkill,
+  uploadAdminSkillPackage,
 } from '../../../lib/admin-api';
 import { clearToken, isUnauthorized } from '@ai-office/web-core';
 
@@ -48,11 +52,14 @@ export default function AdminSkillsPage() {
   const [scope, setScope] = useState<'all' | 'public' | 'personal'>('all');
   const [q, setQ] = useState('');
   const [form, setForm] = useState<SkillForm | null>(null);
+  const [filesFor, setFilesFor] = useState<SkillDto | null>(null);
+  const [uploading, setUploading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const loadSeq = useRef(0);
   const inFlight = useRef(false);
+  const uploadRef = useRef<HTMLInputElement>(null);
 
   const handleErr = useCallback(
     (err: unknown): boolean => {
@@ -173,6 +180,36 @@ export default function AdminSkillsPage() {
     });
   }
 
+  async function uploadPackage(file: File) {
+    if (uploading) return;
+    if (!/\.zip$/i.test(file.name)) {
+      void message.error('技能包必须是 .zip');
+      return;
+    }
+    setUploading(true);
+    setError('');
+    try {
+      await uploadAdminSkillPackage(file);
+      await loadRef.current();
+      void message.success('技能包已上传');
+    } catch (err) {
+      const code = err instanceof Error ? err.message : '';
+      const map: Record<string, string> = {
+        skill_md_missing: 'zip 里没有 SKILL.md',
+        frontmatter_missing: 'SKILL.md 缺少 --- frontmatter ---',
+        invalid_name: 'frontmatter.name 必须是英文小写、数字和连字符',
+        description_required: 'frontmatter 必须包含 description',
+        package_too_large: '技能包不能超过 10MB',
+        invalid_zip: '不是合法的 zip 文件',
+      };
+      if (map[code]) setError(map[code]);
+      else handleErr(err);
+    } finally {
+      setUploading(false);
+      if (uploadRef.current) uploadRef.current.value = '';
+    }
+  }
+
   const columns: TableColumnsType<SkillDto> = [
     {
       title: '技能',
@@ -223,6 +260,19 @@ export default function AdminSkillsPage() {
       render: (_: unknown, item) => (
         <Typography.Text type="secondary">{item.content.slice(0, 80)}</Typography.Text>
       ),
+    },
+    {
+      title: '文件',
+      key: 'files',
+      width: 110,
+      render: (_: unknown, item) =>
+        item.files.length > 0 ? (
+          <Button size="small" onClick={() => setFilesFor(item)}>
+            {item.files.length} 个
+          </Button>
+        ) : (
+          <Typography.Text type="secondary">-</Typography.Text>
+        ),
     },
     {
       title: '状态',
@@ -316,6 +366,24 @@ export default function AdminSkillsPage() {
             >
               新建公共技能
             </Button>
+            <Button
+              icon={<UploadOutlined />}
+              loading={uploading}
+              disabled={busy}
+              onClick={() => uploadRef.current?.click()}
+            >
+              上传技能包
+            </Button>
+            <input
+              ref={uploadRef}
+              type="file"
+              accept=".zip,application/zip"
+              hidden
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file) void uploadPackage(file);
+              }}
+            />
           </Space>
         }
       >
@@ -367,7 +435,7 @@ export default function AdminSkillsPage() {
               <Typography.Text type="secondary">一句话简介</Typography.Text>
               <Input
                 style={{ marginTop: 4 }}
-                maxLength={200}
+                maxLength={1024}
                 value={form.description ?? ''}
                 disabled={busy}
                 placeholder="技能市场列表里展示"
@@ -376,12 +444,12 @@ export default function AdminSkillsPage() {
             </div>
             <div>
               <Typography.Text type="secondary">
-                技能内容（会拼进系统提示词，写清适用场景、步骤与注意事项）
+                技能正文（SKILL.md frontmatter 之后的内容，会拼进系统提示词）
               </Typography.Text>
               <Input.TextArea
                 style={{ marginTop: 4 }}
                 rows={10}
-                maxLength={4000}
+                maxLength={20000}
                 showCount
                 value={form.content}
                 disabled={busy}
@@ -391,6 +459,41 @@ export default function AdminSkillsPage() {
             </div>
           </Space>
         ) : null}
+      </Modal>
+
+      <Modal
+        title={`技能包文件 · ${filesFor?.name ?? ''}`}
+        open={filesFor !== null}
+        footer={null}
+        width={600}
+        onCancel={() => setFilesFor(null)}
+      >
+        <List
+          size="small"
+          dataSource={filesFor?.files ?? []}
+          locale={{ emptyText: '该技能没有附带文件' }}
+          renderItem={(file) => (
+            <List.Item
+              actions={[
+                <Button
+                  key="download"
+                  size="small"
+                  onClick={() =>
+                    void downloadAdminSkillFile(
+                      filesFor!.id,
+                      file.path,
+                      file.path.split('/').pop() ?? 'file',
+                    ).catch((err) => handleErr(err))
+                  }
+                >
+                  下载
+                </Button>,
+              ]}
+            >
+              <Typography.Text code>{file.path}</Typography.Text>
+            </List.Item>
+          )}
+        />
       </Modal>
     </Space>
   );

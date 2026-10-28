@@ -10,6 +10,7 @@ import {
   Col,
   Empty,
   Input,
+  List,
   Modal,
   Row,
   Segmented,
@@ -17,19 +18,22 @@ import {
   Tag,
   Typography,
 } from 'antd';
-import { BulbOutlined, PlusOutlined } from '@ant-design/icons';
+import { BulbOutlined, PlusOutlined, UploadOutlined } from '@ant-design/icons';
 import type { SkillDto, SkillInput } from '@ai-office/shared';
 import { AppShell } from '../../components/app-shell';
 import {
   createSkill,
   deleteSkill,
+  downloadSkillFile,
   getToken,
   isUnauthorized,
   listSkills,
   shareSkill,
   updateSkill,
+  uploadSkillPackage,
 } from '../../lib/api';
 import { errorText } from '@ai-office/web-core';
+import { formatBytes } from '../../lib/format';
 
 const EMPTY_FORM: SkillInput = { name: '', description: '', content: '' };
 
@@ -50,11 +54,14 @@ export default function SkillsPage() {
   const [items, setItems] = useState<SkillDto[]>([]);
   const [filter, setFilter] = useState<Filter>('all');
   const [form, setForm] = useState<SkillForm | null>(null);
+  const [filesFor, setFilesFor] = useState<SkillDto | null>(null);
+  const [uploading, setUploading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const loadSeq = useRef(0);
   const inFlight = useRef(false);
+  const uploadRef = useRef<HTMLInputElement>(null);
 
   const handleErr = useCallback(
     (err: unknown): void => {
@@ -95,6 +102,40 @@ export default function SkillsPage() {
     }
     void load();
   }, [load, router]);
+
+  async function upload(file: File) {
+    if (uploading) return;
+    if (!/\.zip$/i.test(file.name)) {
+      void message.error('技能包必须是 .zip');
+      return;
+    }
+    setUploading(true);
+    setError('');
+    try {
+      await uploadSkillPackage(file);
+      await loadRef.current();
+      void message.success('技能包已上传');
+    } catch (err) {
+      // 解析类错误码直接翻译，避免用户只看到 skill_upload_failed_400。
+      const code = err instanceof Error ? err.message : '';
+      const map: Record<string, string> = {
+        skill_md_missing: 'zip 里没有 SKILL.md',
+        frontmatter_missing: 'SKILL.md 缺少 --- frontmatter ---',
+        frontmatter_invalid: 'SKILL.md frontmatter 不是合法 YAML',
+        invalid_name: 'frontmatter.name 必须是英文小写、数字和连字符',
+        description_required: 'frontmatter 必须包含 description',
+        package_too_large: '技能包不能超过 10MB',
+        file_too_large: '包内单个文件不能超过 5MB',
+        invalid_path: '技能包里有非法路径',
+        invalid_zip: '不是合法的 zip 文件',
+      };
+      if (map[code]) setError(map[code]);
+      else handleErr(err);
+    } finally {
+      setUploading(false);
+      if (uploadRef.current) uploadRef.current.value = '';
+    }
+  }
 
   async function save() {
     if (!form || inFlight.current) return;
@@ -209,6 +250,24 @@ export default function SkillsPage() {
               >
                 新建技能
               </Button>
+              <Button
+                icon={<UploadOutlined />}
+                loading={uploading}
+                disabled={busy}
+                onClick={() => uploadRef.current?.click()}
+              >
+                上传技能包
+              </Button>
+              <input
+                ref={uploadRef}
+                type="file"
+                accept=".zip,application/zip"
+                hidden
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  if (file) void upload(file);
+                }}
+              />
             </Space>
           </header>
 
@@ -244,10 +303,11 @@ export default function SkillsPage() {
                           <Tag>个人</Tag>
                         )}
                         {item.source === 'run' ? <Tag color="blue">任务总结</Tag> : null}
+                        {item.source === 'upload' ? <Tag color="purple">技能包</Tag> : null}
                       </Space>
                     }
                     extra={
-                      item.owned && item.scope === 'personal' ? (
+                      item.owned && item.scope === 'personal' && item.files.length === 0 ? (
                         <Space size={4}>
                           <Button
                             size="small"
@@ -270,10 +330,34 @@ export default function SkillsPage() {
                             删除
                           </Button>
                         </Space>
+                      ) : item.owned && item.files.length > 0 ? (
+                        <Space size={4}>
+                          <Button size="small" disabled={busy} onClick={() => setFilesFor(item)}>
+                            文件 {item.files.length}
+                          </Button>
+                          {item.scope === 'personal' ? (
+                            <>
+                              <Button size="small" disabled={busy} onClick={() => share(item)}>
+                                共享
+                              </Button>
+                              <Button size="small" danger disabled={busy} onClick={() => remove(item)}>
+                                删除
+                              </Button>
+                            </>
+                          ) : (
+                            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                              已共享
+                            </Typography.Text>
+                          )}
+                        </Space>
                       ) : item.owned ? (
                         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                           已共享
                         </Typography.Text>
+                      ) : item.files.length > 0 ? (
+                        <Button size="small" onClick={() => setFilesFor(item)}>
+                          文件 {item.files.length}
+                        </Button>
                       ) : null
                     }
                   >
@@ -315,6 +399,19 @@ export default function SkillsPage() {
         {form ? (
           <Space direction="vertical" size={12} style={{ width: '100%' }}>
             <div>
+              <Typography.Text type="secondary">
+                技能标识（SKILL.md 的 name：英文小写/数字/连字符）
+              </Typography.Text>
+              <Input
+                style={{ marginTop: 4 }}
+                maxLength={64}
+                value={form.slug ?? ''}
+                disabled={busy}
+                placeholder="如：weekly-report，留空则按名称自动生成"
+                onChange={(e) => setForm({ ...form, slug: e.target.value })}
+              />
+            </div>
+            <div>
               <Typography.Text type="secondary">技能名称</Typography.Text>
               <Input
                 style={{ marginTop: 4 }}
@@ -329,7 +426,7 @@ export default function SkillsPage() {
               <Typography.Text type="secondary">一句话简介</Typography.Text>
               <Input
                 style={{ marginTop: 4 }}
-                maxLength={200}
+                maxLength={1024}
                 value={form.description ?? ''}
                 disabled={busy}
                 placeholder="技能市场列表里展示"
@@ -338,12 +435,12 @@ export default function SkillsPage() {
             </div>
             <div>
               <Typography.Text type="secondary">
-                技能内容（会拼进系统提示词，写清适用场景、步骤与注意事项）
+                技能正文（SKILL.md frontmatter 之后的内容，会拼进系统提示词）
               </Typography.Text>
               <Input.TextArea
                 style={{ marginTop: 4 }}
                 rows={10}
-                maxLength={4000}
+                maxLength={20000}
                 showCount
                 value={form.content}
                 disabled={busy}
@@ -353,6 +450,47 @@ export default function SkillsPage() {
             </div>
           </Space>
         ) : null}
+      </Modal>
+
+      <Modal
+        title={`技能包文件 · ${filesFor?.name ?? ''}`}
+        open={filesFor !== null}
+        footer={null}
+        width={600}
+        onCancel={() => setFilesFor(null)}
+      >
+        {filesFor && filesFor.files.length > 0 ? (
+          <List
+            size="small"
+            dataSource={filesFor.files}
+            renderItem={(file) => (
+              <List.Item
+                actions={[
+                  <Button
+                    key="download"
+                    size="small"
+                    onClick={() =>
+                      void downloadSkillFile(
+                        filesFor.id,
+                        file.path,
+                        file.path.split('/').pop() ?? 'file',
+                      ).catch((err) => handleErr(err))
+                    }
+                  >
+                    下载
+                  </Button>,
+                ]}
+              >
+                <Typography.Text code>{file.path}</Typography.Text>
+                <Typography.Text type="secondary" style={{ marginLeft: 8, fontSize: 12 }}>
+                  {formatBytes(file.size)}
+                </Typography.Text>
+              </List.Item>
+            )}
+          />
+        ) : (
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="该技能没有附带文件" />
+        )}
       </Modal>
     </AppShell>
   );

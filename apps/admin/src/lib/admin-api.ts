@@ -50,7 +50,7 @@ import type {
   SkillDto,
   SkillInput,
 } from '@ai-office/shared';
-import { authFetch, errorText } from '@ai-office/web-core';
+import { authFetch, BFF_URL, errorText, getToken } from '@ai-office/web-core';
 
 export function isForbidden(err: unknown): boolean {
   return err instanceof Error && err.message === 'forbidden';
@@ -458,6 +458,51 @@ export function setAdminSkillEnabled(id: string, enabled: boolean): Promise<Skil
 
 export function deleteAdminSkill(id: string): Promise<void> {
   return request(`/api/admin/skills/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
+/** 上传公共技能包：multipart 不能走 request（会强制 JSON content-type）。 */
+export async function uploadAdminSkillPackage(file: File): Promise<SkillDto> {
+  const token = getToken();
+  const form = new FormData();
+  form.append('file', file);
+  const res = await fetch(`${BFF_URL}/api/admin/skills/upload`, {
+    method: 'POST',
+    headers: token ? { authorization: `Bearer ${token}` } : {},
+    body: form,
+  });
+  if (res.status === 403) throw new Error('forbidden');
+  if (!res.ok) {
+    let code = '';
+    try {
+      const body = (await res.json()) as { error?: unknown };
+      if (typeof body.error === 'string') code = body.error;
+    } catch {
+      // 错误体不一定是 JSON。
+    }
+    throw new Error(code || `admin_failed_${res.status}`);
+  }
+  return (await res.json()) as SkillDto;
+}
+
+/** 下载技能包内文件。 */
+export async function downloadAdminSkillFile(
+  id: string,
+  path: string,
+  filename: string,
+): Promise<void> {
+  const res = await authFetch(
+    `/api/admin/skills/${encodeURIComponent(id)}/file?path=${encodeURIComponent(path)}`,
+  );
+  if (!res.ok) throw new Error(`admin_failed_${res.status}`);
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
 // ------------------------------------------------------------------ 参数 / 审计

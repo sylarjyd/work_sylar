@@ -414,14 +414,17 @@ runtime ──▶ shared, telemetry
 
 ### 5.7 技能市场
 
-技能是「提示词片段」，不是工具权限：
+技能遵循 **Agent Skills** 规范：`SKILL.md`（YAML frontmatter + 正文）+ 可选包内文件（scripts/references/assets）。
 
-1. `Skill.scope`：`personal`（仅 `tenantId + ownerUserId` 可见）/ `public`（跨租户可见）；用户共享后 `scope=public` 并写 `sharedAt`，之后由运营端维护。
-2. `Assistant.skillIds[]` 绑定技能；保存时校验只能是「启用的公共技能」或「本人个人技能」，非法 id 整单 400。
-3. 发起任务时 `SkillsService.resolveForRun` 解析为 `{id,name,content}[]` 写进 `Task.input` 快照，执行器用 `skillsToPrompt` 拼在助手提示词之后；排队期间技能被改不影响本次运行。
-4. 对话沉淀：runtime 工具 `skill.save` 只做校验并回传草稿，agent-loop 额外产出 `skill` step；BFF 收到该 step 后按 `sourceRunId` 幂等落为个人技能。
+1. **存储字段**：frontmatter 的 `name` 存 `slug`、`description`、`version`、`license`、`allowed-tools`（只展示，不授权）；正文存 `content`；包存 `packageKey/packageSize`，清单存 `files`。
+2. **可见性**：`personal`（仅 `tenantId + ownerUserId` 可见）/ `public`（跨租户可见）；共享后 `scope=public` 并写 `sharedAt`，之后由运营端维护。
+3. **上传**：`POST /api/skills/upload`、`POST /api/admin/skills/upload`（multipart zip）。解析在 `skills/skill-package.ts`：允许根目录或单层目录下的 `SKILL.md`，拒绝目录穿越、非 UTF-8、超过 10MB/200 文件的包；错误码（`skill_md_missing`、`description_required`…）直接返回给前端。
+4. **绑定与运行**：`Assistant.skillIds[]` 保存时校验「启用的公共技能 / 本人个人技能」；入队时 `resolveForRun` 固化为 `{id,name,content,files}`。提示词会列出包内文件，模型用 `skill.read` 经 BFF 内部端点读取（`INTERNAL_TOKEN` / 回环 fail-closed）。
+5. **对话沉淀**：runtime 工具 `skill.save` 只做校验并回传草稿，agent-loop 产出 `skill` step；BFF 按 `sourceRunId` 幂等落为个人技能。
 
-> 公共技能对所有租户开放，正文会进系统提示词——运营端下架（`enabled=false`）后新运行立即不再注入，历史运行不受影响。
+> 平台级工具（`file.write`/`chart.render`/`skill.save`）不受助手技能开关影响——它们不是「能力型」技能，否则绑了助手的会话连技能都存不下来。
+>
+> 公共技能正文会进所有租户的系统提示词；运营端下架（`enabled=false`）后新运行不再注入，历史运行不受影响。
 
 ---
 

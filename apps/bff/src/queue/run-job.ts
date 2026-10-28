@@ -67,7 +67,12 @@ export function skillsToPrompt(skills: readonly RunSkill[] | undefined): string 
   return [
     '## 已启用技能',
     '以下是用户启用或共享的技能，遇到匹配场景时按其中的步骤执行；与用户当前指令冲突时以用户指令为准。',
-    ...skills.map((skill) => `### 技能：${skill.name}\n${skill.content.trim()}`),
+    ...skills.map((skill) => {
+      const files = skill.files?.length
+        ? `\n\n可用文件（需要时用 skill.read 读取）：\n${skill.files.map((path) => `- ${path}`).join('\n')}`
+        : '';
+      return `### 技能：${skill.name}\n${skill.content.trim()}${files}`;
+    }),
   ].join('\n\n');
 }
 

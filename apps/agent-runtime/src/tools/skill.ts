@@ -27,14 +27,24 @@ export function createSkillTool(): Tool {
       },
       required: ['name', 'content'],
     },
-    async execute(args): Promise<{ ok: true; skill: { name: string; description: string; content: string } }> {
+    async execute(args): Promise<{
+      ok: true;
+      skill: { name: string; description: string; content: string };
+    }> {
       const skill = normalizeSkillInput(args);
       if (!skill) {
         throw new Error(
-          'invalid_skill：name 与 content 必填，name 不超过 40 字、content 不超过 4000 字',
+          'invalid_skill：name 与 content 必填，name 不超过 40 字、content 不超过 20000 字',
         );
       }
-      return { ok: true, skill };
+      return {
+        ok: true,
+        skill: {
+          name: skill.name,
+          description: skill.description ?? '',
+          content: skill.content,
+        },
+      };
     },
   };
 }

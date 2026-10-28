@@ -9,6 +9,6 @@ import { ATTACHMENT_STORAGE, createAttachmentStorage } from './attachments.stora
     AttachmentsService,
     { provide: ATTACHMENT_STORAGE, useFactory: () => createAttachmentStorage() },
   ],
-  exports: [AttachmentsService],
+  exports: [AttachmentsService, ATTACHMENT_STORAGE],
 })
 export class AttachmentsModule {}

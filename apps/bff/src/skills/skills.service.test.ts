@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { strToU8, zipSync } from 'fflate';
 import type { PrismaService } from '../db/prisma.service';
 import { SkillsService } from './skills.service';
 
@@ -79,9 +80,29 @@ function makeService(seed: Partial<Row>[] = []) {
         rows.splice(index, 1);
         return {};
       },
+      findUnique: async ({ where }: any) => rows.find((item) => item.id === where.id) ?? null,
     },
   } as unknown as PrismaService;
-  return { svc: new SkillsService(prisma), rows };
+  // 技能包相关：用内存对象存储替代 S3。
+  const objects = new Map<string, Buffer>();
+  const storage = {
+    putObject: async (key: string, body: Buffer) => {
+      objects.set(key, Buffer.from(body));
+    },
+    getObjectBuffer: async (key: string) => {
+      const buffer = objects.get(key);
+      if (!buffer) throw new Error('NoSuchKey');
+      return buffer;
+    },
+    deleteObject: async (key: string) => {
+      objects.delete(key);
+    },
+  };
+  return {
+    svc: new SkillsService(prisma, storage as never),
+    rows,
+    objects,
+  };
 }
 
 describe('SkillsService', () => {
@@ -140,5 +161,41 @@ describe('SkillsService', () => {
     const out = await svc.resolveForRun(['pub', 'off', 'mine', 'other', 'missing'], 't1', 'u1');
     expect(out.map((item) => item.id)).toEqual(['pub', 'mine']);
     expect(out[0]).toMatchObject({ name: '技能1', content: '正文' });
+  });
+
+  it('上传技能包：解析 SKILL.md、存 zip、可按路径读取包内文件', async () => {
+    const { svc, objects } = makeService();
+    const buffer = Buffer.from(
+      zipSync({
+        'SKILL.md': strToU8('---\nname: weekly-report\ndescription: 写周报\n---\n\n先列完成项'),
+        'references/template.md': strToU8('模板内容'),
+      }),
+    );
+    const created = await svc.createFromPackage('t1', 'u1', buffer);
+    expect(created).toMatchObject({
+      scope: 'personal',
+      source: 'upload',
+      slug: 'weekly-report',
+      description: '写周报',
+    });
+    expect(created.files).toEqual([expect.objectContaining({ path: 'references/template.md' })]);
+    expect(objects.size).toBe(1);
+
+    const file = await svc.readPackageFile(
+      created.id,
+      { tenantId: 't1', userId: 'u1' },
+      'references/template.md',
+    );
+    expect(file.buffer.toString('utf8')).toBe('模板内容');
+
+    // 越权用户读不到包内文件。
+    await expect(
+      svc.readPackageFile(created.id, { tenantId: 't1', userId: 'u2' }, 'references/template.md'),
+    ).rejects.toBeInstanceOf(NotFoundException);
+
+    // 非 zip 直接拒绝，不落库。
+    await expect(svc.createFromPackage('t1', 'u1', Buffer.from('bad'))).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
   });
 });

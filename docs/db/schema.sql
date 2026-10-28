@@ -480,9 +480,16 @@ CREATE TABLE "Skill" (
     "tenantId" TEXT,
     "ownerUserId" TEXT,
     "scope" TEXT NOT NULL DEFAULT 'personal',
+    "slug" TEXT NOT NULL DEFAULT '',
     "name" TEXT NOT NULL,
     "description" TEXT NOT NULL DEFAULT '',
     "content" TEXT NOT NULL,
+    "version" TEXT,
+    "license" TEXT,
+    "allowedTools" TEXT[] DEFAULT ARRAY[]::TEXT[],
+    "packageKey" TEXT,
+    "packageSize" INTEGER,
+    "files" JSONB,
     "source" TEXT NOT NULL DEFAULT 'manual',
     "sourceRunId" TEXT,
     "sharedAt" TIMESTAMP(3),
@@ -1037,10 +1044,17 @@ COMMENT ON COLUMN "Skill"."id" IS '技能 ID';
 COMMENT ON COLUMN "Skill"."tenantId" IS '归属租户 ID；公共技能为空（跨租户）';
 COMMENT ON COLUMN "Skill"."ownerUserId" IS '创建者用户 ID；运营端创建的公共技能为空';
 COMMENT ON COLUMN "Skill"."scope" IS '可见范围：public（公共）/ personal（个人）';
+COMMENT ON COLUMN "Skill"."slug" IS 'Agent Skills 规范名（小写字母/数字/连字符，≤64）';
 COMMENT ON COLUMN "Skill"."name" IS '技能名称';
 COMMENT ON COLUMN "Skill"."description" IS '一句话简介（市场列表展示）';
-COMMENT ON COLUMN "Skill"."content" IS '技能正文：适用场景、步骤与注意事项，运行时拼接进系统提示词';
-COMMENT ON COLUMN "Skill"."source" IS '来源：manual（手工创建）/ run（任务总结生成）';
+COMMENT ON COLUMN "Skill"."content" IS 'SKILL.md 正文（frontmatter 之后的指令），运行时拼接进系统提示词';
+COMMENT ON COLUMN "Skill"."version" IS 'frontmatter version（可选）';
+COMMENT ON COLUMN "Skill"."license" IS 'frontmatter license（可选）';
+COMMENT ON COLUMN "Skill"."allowedTools" IS 'frontmatter allowed-tools：仅展示与审计，不授予工具权限';
+COMMENT ON COLUMN "Skill"."packageKey" IS '技能包 zip 的对象存储 Key；手工创建为空';
+COMMENT ON COLUMN "Skill"."packageSize" IS '技能包大小（字节）';
+COMMENT ON COLUMN "Skill"."files" IS '包内文件清单 [{path,size}]，供展示与运行时读取';
+COMMENT ON COLUMN "Skill"."source" IS '来源：manual（手工创建）/ upload（技能包上传）/ run（任务总结生成）';
 COMMENT ON COLUMN "Skill"."sourceRunId" IS '生成该技能的运行 ID；手工创建为空';
 COMMENT ON COLUMN "Skill"."sharedAt" IS '个人技能共享为公共的时间；未共享为空';
 COMMENT ON COLUMN "Skill"."enabled" IS '是否启用；运营端可下架公共技能';

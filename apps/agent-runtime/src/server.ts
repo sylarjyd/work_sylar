@@ -21,6 +21,7 @@ import { resolveRunConfig } from './run-config';
 import { createGateway, createGatewayFromRoutes } from './model/create-gateway';
 import type { ModelGateway } from './model/types';
 import { createTools } from './tools/registry';
+import { createSkillReadTool } from './tools/skill-read';
 import { emit } from './tools/doc';
 import type { Tool } from './tools/types';
 import { ConfirmBroker } from './confirm/broker';
@@ -262,9 +263,14 @@ export function createRuntimeServer(deps: RuntimeDeps = {}): Server {
                 try {
                   // 助手技能只约束内置工具；账号级连接器（MCP）由用户在连接器页单独启停。
                   const enabledBase = filterTools(baseTools, runReq.enabledTools);
+                  // 技能包文件按本次绑定动态挂载：未绑定技能时连工具都不出现。
+                  const skillTools =
+                    runReq.skills && runReq.skills.some((skill) => (skill.files?.length ?? 0) > 0)
+                      ? [createSkillReadTool(runReq.skills)]
+                      : [];
                   const runTools = extraTools
-                    ? [...enabledBase, ...(await extraTools(runReq.tenantId))]
-                    : enabledBase;
+                    ? [...enabledBase, ...skillTools, ...(await extraTools(runReq.tenantId))]
+                    : [...enabledBase, ...skillTools];
                   const config = resolveRunConfig(runReq.config, process.env);
                   // 本次运行优先使用 BFF 下发的厂商路由；缺省沿用启动网关。
                   const runGateway =

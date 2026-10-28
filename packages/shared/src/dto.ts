@@ -189,6 +189,8 @@ export interface RunSkill {
   id: string;
   name: string;
   content: string;
+  /** 包内文件路径；运行时可用 skill.read 读取。 */
+  files?: string[];
 }
 
 export interface RegisterRequest {
@@ -474,9 +476,19 @@ export function normalizeSkills(raw: readonly string[]): AssistantSkillKey[] {
   return ASSISTANT_SKILLS.filter((s) => set.has(s.key)).map((s) => s.key as AssistantSkillKey);
 }
 
-/** 把技能展开为运行时工具名（去重保序）；空技能返回空数组，表示禁用全部内置工具。 */
+/**
+ * 平台级工具：不属于任何「能力型」技能，助手勾选技能时也不会被关掉。
+ * 落文件、画图、沉淀技能都是通用动作，若跟着技能开关一起消失，
+ * 「文档生成」连非 Office 文件都写不出、对话里也没法把做法存成技能。
+ */
+export const PLATFORM_TOOLS = ['file.write', 'chart.render', 'skill.save'] as const;
+
+/**
+ * 把技能展开为运行时工具名（去重保序）。
+ * 空技能表示禁用全部能力型工具（联网/文档/代码/知识库），平台级工具始终保留。
+ */
 export function toolsForSkills(skills: readonly string[]): string[] {
-  const allowed = new Set(toolsForSkillSet(skills));
+  const allowed = new Set<string>([...toolsForSkillSet(skills), ...PLATFORM_TOOLS]);
   return [...allowed];
 }
 
@@ -532,18 +544,50 @@ export function isSkillScope(value: unknown): value is SkillScope {
 /** 技能正文长度上限：会整体拼进系统提示词，过长会挤占运行上下文。 */
 export const SKILL_LIMITS = {
   name: 40,
-  description: 200,
-  content: 4000,
+  slug: 64,
+  description: 1024,
+  content: 20000,
+  packageBytes: 10 * 1024 * 1024,
+  packageFiles: 200,
+  fileBytes: 5 * 1024 * 1024,
 } as const;
+
+/** Agent Skills 规范名：小写字母/数字，连字符分段，不超过 64。 */
+export const SKILL_SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+/** 纯 ASCII 折叠成 slug；中文名无法直接转，返回空串由调用方要求显式填写。 */
+export function slugifySkillName(name: string): string {
+  const ascii = name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, SKILL_LIMITS.slug);
+  return SKILL_SLUG_PATTERN.test(ascii) ? ascii : '';
+}
+
+export interface SkillFileEntry {
+  path: string;
+  size: number;
+}
 
 export interface SkillDto {
   id: string;
   scope: SkillScope;
+  /** Agent Skills 规范名（SKILL.md frontmatter 的 name）。 */
+  slug: string;
   name: string;
   description: string;
+  /** SKILL.md 正文（frontmatter 之后的指令）。 */
   content: string;
-  /** manual：手工创建；run：任务结束后由模型总结生成。 */
-  source: 'manual' | 'run';
+  version: string | null;
+  license: string | null;
+  /** frontmatter allowed-tools：仅展示，不授予工具权限。 */
+  allowedTools: string[];
+  /** 包内文件清单；手工创建的技能为空数组。 */
+  files: SkillFileEntry[];
+  packageSize: number | null;
+  /** manual：手工创建；upload：技能包上传；run：任务结束后由模型总结生成。 */
+  source: 'manual' | 'upload' | 'run';
   enabled: boolean;
   /** 当前用户创建（含已共享为公共的个人技能）。 */
   owned: boolean;
@@ -556,8 +600,12 @@ export interface SkillDto {
 
 export interface SkillInput {
   name: string;
+  slug?: string;
   description?: string;
   content: string;
+  version?: string;
+  license?: string;
+  allowedTools?: string[];
 }
 
 /** 技能市场列表：公共技能 + 我的个人技能，按更新时间倒序。 */
@@ -573,11 +621,29 @@ export function normalizeSkillInput(raw: unknown): SkillInput | null {
   const content = typeof input.content === 'string' ? input.content.trim() : '';
   if (!name || [...name].length > SKILL_LIMITS.name) return null;
   if (!content || [...content].length > SKILL_LIMITS.content) return null;
+  const rawSlug = typeof input.slug === 'string' ? input.slug.trim().toLowerCase() : '';
+  const slug = rawSlug || slugifySkillName(name);
+  if (slug && (!SKILL_SLUG_PATTERN.test(slug) || slug.length > SKILL_LIMITS.slug)) return null;
   const description =
     typeof input.description === 'string'
       ? [...input.description.trim()].slice(0, SKILL_LIMITS.description).join('')
       : '';
-  return { name, description, content };
+  const version = typeof input.version === 'string' ? input.version.trim().slice(0, 40) : '';
+  const license = typeof input.license === 'string' ? input.license.trim().slice(0, 80) : '';
+  const allowedTools = Array.isArray(input.allowedTools)
+    ? [...new Set(input.allowedTools.filter((v): v is string => typeof v === 'string' && v.trim() !== ''))]
+        .map((v) => v.trim().slice(0, 80))
+        .slice(0, 50)
+    : [];
+  return {
+    name,
+    ...(slug ? { slug } : {}),
+    description,
+    content,
+    ...(version ? { version } : {}),
+    ...(license ? { license } : {}),
+    ...(allowedTools.length > 0 ? { allowedTools } : {}),
+  };
 }
 
 // ---------------------------------------------------------------------------
