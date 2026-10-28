@@ -41,6 +41,7 @@ COMMENT ON COLUMN "Assistant"."systemPrompt" IS '系统提示词';
 COMMENT ON COLUMN "Assistant"."permissionMode" IS '权限模式：standard（标准）/ readonly（只读）/ auto（自动执行）';
 COMMENT ON COLUMN "Assistant"."model" IS '默认模型名；为空时使用运营端默认模型';
 COMMENT ON COLUMN "Assistant"."skills" IS '启用的技能键列表';
+COMMENT ON COLUMN "Assistant"."skillIds" IS '绑定的技能市场技能 ID 列表；运行期拼接对应技能正文';
 COMMENT ON COLUMN "Assistant"."kbIds" IS '绑定的知识库 ID 列表';
 COMMENT ON COLUMN "Assistant"."kbDocIds" IS '已废弃：旧文档级绑定，迁移到 kbIds 后置空';
 COMMENT ON COLUMN "Assistant"."createdAt" IS '创建时间';
@@ -323,3 +324,18 @@ COMMENT ON COLUMN "AlertEvent"."deliveryStatus" IS '通知投递状态：sent / 
 COMMENT ON COLUMN "AlertEvent"."deliveryError" IS '投递失败原因';
 COMMENT ON COLUMN "AlertEvent"."openKey" IS '未恢复事件唯一键：firing 为 ruleId，resolved 为 NULL，保证每条规则最多一个未恢复事件';
 COMMENT ON COLUMN "AlertEvent"."createdAt" IS '创建时间';
+
+COMMENT ON TABLE "Skill" IS '技能市场表：公共技能跨租户可见，个人技能仅创建者可见，可共享转为公共';
+COMMENT ON COLUMN "Skill"."id" IS '技能 ID';
+COMMENT ON COLUMN "Skill"."tenantId" IS '归属租户 ID；公共技能为空（跨租户）';
+COMMENT ON COLUMN "Skill"."ownerUserId" IS '创建者用户 ID；运营端创建的公共技能为空';
+COMMENT ON COLUMN "Skill"."scope" IS '可见范围：public（公共）/ personal（个人）';
+COMMENT ON COLUMN "Skill"."name" IS '技能名称';
+COMMENT ON COLUMN "Skill"."description" IS '一句话简介（市场列表展示）';
+COMMENT ON COLUMN "Skill"."content" IS '技能正文：适用场景、步骤与注意事项，运行时拼接进系统提示词';
+COMMENT ON COLUMN "Skill"."source" IS '来源：manual（手工创建）/ run（任务总结生成）';
+COMMENT ON COLUMN "Skill"."sourceRunId" IS '生成该技能的运行 ID；手工创建为空';
+COMMENT ON COLUMN "Skill"."sharedAt" IS '个人技能共享为公共的时间；未共享为空';
+COMMENT ON COLUMN "Skill"."enabled" IS '是否启用；运营端可下架公共技能';
+COMMENT ON COLUMN "Skill"."createdAt" IS '创建时间';
+COMMENT ON COLUMN "Skill"."updatedAt" IS '更新时间';

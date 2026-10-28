@@ -8,6 +8,7 @@ import { toolsForSkills, type RunModelRoute } from '@ai-office/shared';
 import { initTelemetry, shutdownTelemetry } from '@ai-office/telemetry';
 import pino from 'pino';
 import { TasksController } from './tasks.controller';
+import { SkillsService } from '../skills/skills.service';
 import { TasksService } from './tasks.service';
 import { AttachmentsService } from '../attachments/attachments.service';
 import { SessionsController } from '../sessions/sessions.controller';
@@ -272,6 +273,13 @@ beforeAll(async () => {
       { provide: RunQueueService, useValue: fakeQueue },
       { provide: RunRelayService, useValue: fakeRelay },
       { provide: SessionTitleService, useValue: fakeTitles },
+      {
+        provide: SkillsService,
+        useValue: {
+          // 技能绑定解析：本文件不关心技能内容，返回空数组即可。
+          resolveForRun: async () => [],
+        },
+      },
       { provide: BFF_METRICS, useValue: createBffMetrics({ defaultMetrics: false }) },
     ],
   }).compile();

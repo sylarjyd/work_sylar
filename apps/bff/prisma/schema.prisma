@@ -74,6 +74,8 @@ model Assistant {
   permissionMode String   @default("standard") // standard | readonly | auto
   model          String?
   skills         String[] @default([])
+  /// 技能市场里绑定的技能 id：个人技能或公共技能，运行期拼接进系统提示词。
+  skillIds       String[] @default([])
   kbIds          String[] @default([])
   /// @deprecated 旧文档级绑定：由 backfill-kb.mjs 转换到 kbIds 并清空，下一版删除该列。
   kbDocIds       String[] @default([])
@@ -501,4 +503,32 @@ model AlertEvent {
   @@index([ruleId, startedAt])
   @@index([status, startedAt])
   @@index([startedAt])
+}
+
+/// 技能市场：运营端创建的公共技能所有租户可见；用户创建的个人技能仅本人可见，共享后转为公共。
+/// 技能正文会拼接进助手/会话的系统提示词，不授予工具权限（工具仍由助手的 skills 决定）。
+model Skill {
+  id          String    @id @default(uuid())
+  /// 公共技能为 null（跨租户）；个人技能记录归属租户。
+  tenantId    String?
+  /// 公共技能为 null（由运营端维护）；个人技能记录创建者。
+  ownerUserId String?
+  /// public | personal
+  scope       String    @default("personal")
+  name        String
+  description String    @default("")
+  /// 技能正文：适用场景、步骤、注意事项，直接进系统提示词。
+  content     String
+  /// 来源：manual（手工创建）/ run（任务结束后由模型总结生成）。
+  source      String    @default("manual")
+  sourceRunId String?
+  /// 个人技能共享为公共的时间；未共享为 null。
+  sharedAt    DateTime?
+  /// 运营端可下架公共技能；个人技能默认启用。
+  enabled     Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([scope, enabled, updatedAt])
+  @@index([tenantId, ownerUserId])
 }

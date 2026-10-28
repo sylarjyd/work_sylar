@@ -176,10 +176,19 @@ export interface RunRequest {
   permissionMode?: AssistantPermissionMode;
   /** 助手绑定的知识库；缺省或空数组表示检索全部知识库。 */
   kbIds?: string[];
+  /** 技能市场里绑定的技能（名称 + 正文）；由 BFF 解析后下发，runtime 拼进系统提示词。 */
+  skills?: RunSkill[];
   /** 断点续跑：由 BFF 从 RunCheckpoint 读出后下发。 */
   resume?: RunResume;
   /** 任务分类：办公/开发模式在没有任何产出物时由 runtime 兜底落一份结果文件。 */
   mode?: SessionMode;
+}
+
+/** 运行期技能：只保留注入提示词需要的名称与正文，不带权限信息。 */
+export interface RunSkill {
+  id: string;
+  name: string;
+  content: string;
 }
 
 export interface RegisterRequest {
@@ -488,6 +497,8 @@ export interface AssistantDto {
   permissionMode: AssistantPermissionMode;
   model: string | null;
   skills: AssistantSkillKey[];
+  /** 绑定的技能市场技能 ID（公共技能或自己的个人技能）。 */
+  skillIds: string[];
   /** 绑定知识库 ID；空数组表示检索全部知识库。 */
   kbIds: string[];
   createdAt: string;
@@ -501,10 +512,73 @@ export interface AssistantInput {
   permissionMode?: AssistantPermissionMode;
   model?: string | null;
   skills?: string[];
+  skillIds?: string[];
   kbIds?: string[];
 }
 
 export type AssistantPatch = Partial<AssistantInput>;
+
+// ---------------------------------------------------------------------------
+// 技能市场
+// ---------------------------------------------------------------------------
+
+export const SKILL_SCOPES = ['personal', 'public'] as const;
+export type SkillScope = (typeof SKILL_SCOPES)[number];
+
+export function isSkillScope(value: unknown): value is SkillScope {
+  return typeof value === 'string' && (SKILL_SCOPES as readonly string[]).includes(value);
+}
+
+/** 技能正文长度上限：会整体拼进系统提示词，过长会挤占运行上下文。 */
+export const SKILL_LIMITS = {
+  name: 40,
+  description: 200,
+  content: 4000,
+} as const;
+
+export interface SkillDto {
+  id: string;
+  scope: SkillScope;
+  name: string;
+  description: string;
+  content: string;
+  /** manual：手工创建；run：任务结束后由模型总结生成。 */
+  source: 'manual' | 'run';
+  enabled: boolean;
+  /** 当前用户创建（含已共享为公共的个人技能）。 */
+  owned: boolean;
+  /** 运营端列表才有：创建者邮箱；公共技能为 null。 */
+  ownerEmail?: string | null;
+  sharedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SkillInput {
+  name: string;
+  description?: string;
+  content: string;
+}
+
+/** 技能市场列表：公共技能 + 我的个人技能，按更新时间倒序。 */
+export interface SkillListDto {
+  items: SkillDto[];
+}
+
+/** 校验并裁剪技能输入：名称/正文必填且有上限，简介超长截断而不是整条拒绝。 */
+export function normalizeSkillInput(raw: unknown): SkillInput | null {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const input = raw as Record<string, unknown>;
+  const name = typeof input.name === 'string' ? input.name.trim() : '';
+  const content = typeof input.content === 'string' ? input.content.trim() : '';
+  if (!name || [...name].length > SKILL_LIMITS.name) return null;
+  if (!content || [...content].length > SKILL_LIMITS.content) return null;
+  const description =
+    typeof input.description === 'string'
+      ? [...input.description.trim()].slice(0, SKILL_LIMITS.description).join('')
+      : '';
+  return { name, description, content };
+}
 
 // ---------------------------------------------------------------------------
 // M4b 连接器 / MCP

@@ -35,6 +35,7 @@ import { QueueFullError, RunQueueService } from '../queue/run-queue.service';
 import { RunRelayService } from '../queue/run-relay.service';
 import type { RunSnapshot } from '../queue/run-job';
 import { SessionTitleService } from '../sessions/session-title.service';
+import { SkillsService } from '../skills/skills.service';
 
 @Controller('api/sessions')
 @UseGuards(JwtGuard)
@@ -50,6 +51,7 @@ export class TasksController {
     private readonly queue: RunQueueService,
     private readonly relay: RunRelayService,
     private readonly titles: SessionTitleService,
+    private readonly skills: SkillsService,
   ) {}
 
   @Post(':id/tasks')
@@ -82,6 +84,10 @@ export class TasksController {
     // 与 prepare 内的归属校验重复一次查询，换取「404 早于准入」。
     const session = await this.tasks.assertOwned(sessionId, user.tenantId, user.sub);
     const assistant = session.assistant;
+    // 技能正文在入队时固化：排队期间技能被改/下架不影响本次运行。
+    const boundSkills = assistant
+      ? await this.skills.resolveForRun(assistant.skillIds, user.tenantId, user.sub)
+      : [];
     // 助手绑定时 skills 才生效：空数组表示禁用全部内置技能；未绑定助手时不限制工具。
     const runAssistant = assistant
       ? {
@@ -89,6 +95,7 @@ export class TasksController {
           enabledTools: toolsForSkills(assistant.skills),
           permissionMode: assistant.permissionMode,
           kbIds: assistant.kbIds.length > 0 ? assistant.kbIds : undefined,
+          ...(boundSkills.length > 0 ? { skills: boundSkills } : {}),
         }
       : null;
 

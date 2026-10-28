@@ -20,6 +20,7 @@ const MAX_NAME = 40;
 const MAX_DESCRIPTION = 200;
 const MAX_SYSTEM_PROMPT = 8000;
 const MAX_KB_BASES = 100;
+const MAX_SKILL_BINDINGS = 20;
 
 interface AssistantRow {
   id: string;
@@ -29,6 +30,7 @@ interface AssistantRow {
   permissionMode: string;
   model: string | null;
   skills: string[];
+  skillIds: string[];
   kbIds: string[];
   createdAt: Date;
   updatedAt: Date;
@@ -58,6 +60,7 @@ export class AssistantsService {
     const permissionMode = parsePermissionMode(input?.permissionMode ?? 'standard');
     const model = parseModel(input?.model === undefined ? null : input.model);
     const skills = parseSkills(input?.skills ?? []);
+    const skillIds = await this.parseSkillIds(input?.skillIds ?? [], tenantId, userId);
     const kbIds = await this.parseKbIds(input?.kbIds ?? [], tenantId, userId);
 
     try {
@@ -71,6 +74,7 @@ export class AssistantsService {
           permissionMode,
           model,
           skills,
+          skillIds,
           kbIds,
         },
       });
@@ -94,6 +98,7 @@ export class AssistantsService {
       permissionMode?: AssistantPermissionMode;
       model?: string | null;
       skills?: AssistantSkillKey[];
+      skillIds?: string[];
       kbIds?: string[];
     } = {};
     if (patch && Object.hasOwn(patch, 'name')) data.name = parseName(patch.name);
@@ -108,6 +113,9 @@ export class AssistantsService {
     }
     if (patch && Object.hasOwn(patch, 'model')) data.model = parseModel(patch.model ?? null);
     if (patch && Object.hasOwn(patch, 'skills')) data.skills = parseSkills(patch.skills ?? []);
+    if (patch && Object.hasOwn(patch, 'skillIds')) {
+      data.skillIds = await this.parseSkillIds(patch.skillIds ?? [], tenantId, userId);
+    }
     if (patch && Object.hasOwn(patch, 'kbIds')) {
       data.kbIds = await this.parseKbIds(patch.kbIds ?? [], tenantId, userId);
     }
@@ -136,8 +144,7 @@ export class AssistantsService {
   }
 
   /** 绑定的知识库必须属于当前用户；空数组表示检索全部知识库。 */
-  private async parseKbIds(raw: unknown, tenantId: string, userId: string): Promise<string[]> {
-    if (!Array.isArray(raw) || raw.length > MAX_KB_BASES) {
+  private async parseKbIds(raw: unknown, tenantId: string, userId: string): Promise<string[]> {    if (!Array.isArray(raw) || raw.length > MAX_KB_BASES) {
       throw new BadRequestException('invalid_kb_ids');
     }
     const ids: string[] = [];
@@ -153,6 +160,36 @@ export class AssistantsService {
       where: { id: { in: ids }, tenantId, userId },
     });
     if (count !== ids.length) throw new BadRequestException('invalid_kb_ids');
+    return ids;
+  }
+
+  /**
+   * 绑定的技能只能是自己可见的：启用的公共技能或本人个人技能。
+   * 已下架/已删除的技能会让保存失败，避免绑定了却运行期静默丢失。
+   */
+  private async parseSkillIds(raw: unknown, tenantId: string, userId: string): Promise<string[]> {
+    if (!Array.isArray(raw) || raw.length > MAX_SKILL_BINDINGS) {
+      throw new BadRequestException('invalid_skill_ids');
+    }
+    const ids: string[] = [];
+    for (const item of raw) {
+      if (typeof item !== 'string' || item.trim() === '') {
+        throw new BadRequestException('invalid_skill_ids');
+      }
+      const id = item.trim();
+      if (!ids.includes(id)) ids.push(id);
+    }
+    if (ids.length === 0) return [];
+    const count = await this.prisma.skill.count({
+      where: {
+        id: { in: ids },
+        OR: [
+          { scope: 'public', enabled: true },
+          { scope: 'personal', tenantId, ownerUserId: userId },
+        ],
+      },
+    });
+    if (count !== ids.length) throw new BadRequestException('invalid_skill_ids');
     return ids;
   }
 }
@@ -223,6 +260,7 @@ function toDto(row: AssistantRow): AssistantDto {
       : 'standard',
     model: row.model ?? null,
     skills: normalizeSkills(row.skills),
+    skillIds: row.skillIds ?? [],
     kbIds: row.kbIds ?? [],
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),

@@ -35,6 +35,8 @@ export interface SessionAssistantRef {
   systemPrompt: string;
   permissionMode: AssistantPermissionMode;
   skills: AssistantSkillKey[];
+  /** 绑定的技能市场技能 ID；运行前解析成正文并在入队时固化。 */
+  skillIds: string[];
   kbIds: string[];
 }
 
@@ -56,6 +58,7 @@ interface AssistantRow {
   /** 仅建会话选模时读取；运行时配置不需要。 */
   model?: string | null;
   skills: string[];
+  skillIds?: string[];
   kbIds: string[];
 }
 
@@ -184,6 +187,7 @@ export class SessionsService {
           permissionMode: true,
           model: true,
           skills: true,
+          skillIds: true,
           kbIds: true,
         },
       });
@@ -355,6 +359,7 @@ function toAssistantRef(row: AssistantRow): SessionAssistantRef {
       ? row.permissionMode
       : 'standard',
     skills: normalizeSkills(row.skills),
+    skillIds: row.skillIds ?? [],
     kbIds: row.kbIds ?? [],
   };
 }

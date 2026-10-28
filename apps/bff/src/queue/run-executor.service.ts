@@ -14,7 +14,13 @@ import type {
 } from '@ai-office/shared';
 import { createSseParser } from '@ai-office/shared';
 import { endSpan, injectTraceparent, startSpan } from '@ai-office/telemetry';
-import { SESSION_MODE_PROMPTS, parseSnapshot, type RunJob, type RunSnapshot } from './run-job';
+import {
+  SESSION_MODE_PROMPTS,
+  parseSnapshot,
+  skillsToPrompt,
+  type RunJob,
+  type RunSnapshot,
+} from './run-job';
 import { RUN_CONTROL_BUS, RUN_EVENT_BUS } from './queue.tokens';
 import type { RunEventBus } from './run-event-bus';
 import type { RunControlBus } from './run-control-bus';
@@ -763,6 +769,7 @@ export class RunExecutor {
     // 参考内容也不能覆盖角色设定。
     const systemPrompt = [
       snapshot.assistant?.systemPrompt?.trim(),
+      skillsToPrompt(snapshot.assistant?.skills),
       snapshot.mode ? SESSION_MODE_PROMPTS[snapshot.mode] : undefined,
       // 记忆段落顺序由 MemoryService 固定：长期记忆 → 会话摘要。
       ...opts.memorySections,

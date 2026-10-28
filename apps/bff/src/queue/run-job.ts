@@ -1,5 +1,11 @@
 import { NotFoundException } from '@nestjs/common';
-import { isSessionMode, type RunConfig, type RunModelRoute, type SessionMode } from '@ai-office/shared';
+import {
+  isSessionMode,
+  type RunConfig,
+  type RunModelRoute,
+  type RunSkill,
+  type SessionMode,
+} from '@ai-office/shared';
 import type { PreparedMessage } from '../attachments/attachments.service';
 
 /** 队列作业：只带标识，执行细节从 Task.input 快照读取，避免作业体过大。 */
@@ -32,6 +38,8 @@ export interface RunSnapshot {
     enabledTools?: string[];
     permissionMode?: 'standard' | 'readonly' | 'auto';
     kbIds?: string[];
+    /** 入队时解析好的技能正文；排队期间技能被改不影响本次运行。 */
+    skills?: RunSkill[];
   } | null;
 }
 
@@ -52,6 +60,16 @@ export const SESSION_MODE_PROMPTS: Record<SessionMode, string> = {
     '需要验证时调用 code.exec。',
   ].join(''),
 };
+
+/** 把绑定技能展开成提示词段落：只注入名称与正文，不改变工具权限。 */
+export function skillsToPrompt(skills: readonly RunSkill[] | undefined): string | undefined {
+  if (!skills || skills.length === 0) return undefined;
+  return [
+    '## 已启用技能',
+    '以下是用户启用或共享的技能，遇到匹配场景时按其中的步骤执行；与用户当前指令冲突时以用户指令为准。',
+    ...skills.map((skill) => `### 技能：${skill.name}\n${skill.content.trim()}`),
+  ].join('\n\n');
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);

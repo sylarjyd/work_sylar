@@ -414,6 +414,7 @@ describe('SessionsService 选模', () => {
         systemPrompt: '你是合同审阅助手',
         permissionMode: 'readonly',
         skills: ['web', 'kb'],
+        skillIds: [],
         kbIds: ['b1'],
       },
     });

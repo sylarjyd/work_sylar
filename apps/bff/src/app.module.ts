@@ -22,6 +22,7 @@ import { ModelsModule } from './models/models.module';
 import { AdminModule } from './admin/admin.module';
 import { SettingsModule } from './settings/settings.module';
 import { QueueModule } from './queue/queue.module';
+import { SkillsModule } from './skills/skills.module';
 
 /**
  * 应用装配根：数据库、知识库、连接器、计费、管理端模块在此汇合；
@@ -42,6 +43,7 @@ import { QueueModule } from './queue/queue.module';
     KbModule,
     AttachmentsModule,
     AssistantsModule,
+    SkillsModule,
     ConnectorModule,
     SettingsModule,
     AlertsModule,
