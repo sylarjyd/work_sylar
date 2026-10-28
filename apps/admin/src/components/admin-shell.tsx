@@ -22,11 +22,13 @@ import {
   MenuUnfoldOutlined,
   MessageOutlined,
   MonitorOutlined,
+  RocketOutlined,
   SafetyCertificateOutlined,
   SettingOutlined,
   TagsOutlined,
   TeamOutlined,
   ThunderboltOutlined,
+  BulbOutlined,
 } from '@ant-design/icons';
 import { clearToken, getRole } from '@ai-office/web-core';
 import { ADMIN_NAV, ADMIN_NAV_ITEMS, selectedNavKey } from '../lib/admin-nav';
@@ -48,6 +50,7 @@ const ICONS: Record<string, ReactNode> = {
   '/sessions': <MessageOutlined />,
   '/tasks': <ThunderboltOutlined />,
   '/kb': <DatabaseOutlined />,
+  '/skills': <BulbOutlined />,
   '/models': <ApiOutlined />,
   '/settings': <SettingOutlined />,
   '/qa-cache': <CloudServerOutlined />,
@@ -60,6 +63,7 @@ const GROUP_ICONS: Record<string, ReactNode> = {
   customers: <ContactsOutlined />,
   conversations: <CommentOutlined />,
   knowledge: <BookOutlined />,
+  skills: <RocketOutlined />,
   models: <DeploymentUnitOutlined />,
   security: <AuditOutlined />,
 };
