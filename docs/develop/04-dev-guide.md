@@ -365,9 +365,13 @@ runtime ──▶ shared, telemetry
 ### 5.4 修改数据模型
 
 1. 改 `apps/bff/prisma/schema.prisma`。
-2. 本地同步：`pnpm --filter @ai-office/bff db:push`（开发）；**生产用迁移**（见部署文档）。
-3. 同步更新 `docs/db/schema.sql` 与详细设计文档。
-4. 涉及跨层字段（如产物）时同步 `shared/dto.ts`。
+2. **补中文注释（强制）**：在 `apps/bff/prisma/comments.sql` 为新增的表补表级注释，并为每个新增字段补字段级注释；只加表不加字段注释同样视为未完成。
+3. 本地同步：`pnpm --filter @ai-office/bff db:push`（开发）；该命令会自动应用注释并执行 `db:comments:check` 校验。**生产用迁移**（见部署文档）。
+4. 同步更新 `docs/db/schema.sql` 与详细设计文档。
+5. 涉及跨层字段（如产物）时同步 `shared/dto.ts`。
+
+> Prisma 不会把 `///` 文档注释同步到数据库，注释的唯一来源是 `comments.sql`。可随时用
+> `pnpm --filter @ai-office/bff db:comments:check` 检查覆盖情况，缺失时会列出表/字段并非零退出。
 
 ---
 

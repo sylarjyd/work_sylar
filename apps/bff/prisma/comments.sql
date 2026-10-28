@@ -1,6 +1,6 @@
 -- 数据库表与字段的中文注释。
 -- Prisma 不会把注释同步到数据库，本文件由 scripts/apply-comments.mjs 执行；
--- 新增表/字段时请同步在此补充注释。
+-- 约定：新增表或字段时必须同时补表级与字段级中文注释，否则 db:comments:check 会失败。
 
 COMMENT ON TABLE "Tenant" IS '租户表：个人或组织空间，业务数据按租户隔离';
 COMMENT ON COLUMN "Tenant"."id" IS '租户 ID';
@@ -23,8 +23,28 @@ COMMENT ON COLUMN "Session"."id" IS '会话 ID';
 COMMENT ON COLUMN "Session"."tenantId" IS '所属租户 ID';
 COMMENT ON COLUMN "Session"."userId" IS '所属用户 ID';
 COMMENT ON COLUMN "Session"."title" IS '会话标题';
-COMMENT ON COLUMN "Session"."status" IS '会话状态：active（进行中）/ archived（已归档）';
+COMMENT ON COLUMN "Session"."titleSource" IS '标题来源：auto（待自动生成）/ generated（自动生成）/ manual（用户改名）';
+COMMENT ON COLUMN "Session"."status" IS '会话状态：active（进行中）/ archived（已归档）/ deleted（用户删除，软删除）';
+COMMENT ON COLUMN "Session"."pinned" IS '是否置顶：列表排序优先，不改变创建时间';
+COMMENT ON COLUMN "Session"."model" IS '会话选定的模型名；历史会话为空，首次运行后回填';
+COMMENT ON COLUMN "Session"."assistantId" IS '会话选定的自定义助手 ID；助手被删除后置空';
+COMMENT ON COLUMN "Session"."mode" IS '任务分类：chat（对话）/ task（任务）/ code（编码）';
 COMMENT ON COLUMN "Session"."createdAt" IS '创建时间';
+
+COMMENT ON TABLE "Assistant" IS '自定义助手表：系统提示词、技能、权限模式、默认模型与知识库范围';
+COMMENT ON COLUMN "Assistant"."id" IS '助手 ID';
+COMMENT ON COLUMN "Assistant"."tenantId" IS '所属租户 ID';
+COMMENT ON COLUMN "Assistant"."userId" IS '创建者用户 ID';
+COMMENT ON COLUMN "Assistant"."name" IS '助手名称，同一用户下唯一';
+COMMENT ON COLUMN "Assistant"."description" IS '助手简介';
+COMMENT ON COLUMN "Assistant"."systemPrompt" IS '系统提示词';
+COMMENT ON COLUMN "Assistant"."permissionMode" IS '权限模式：standard（标准）/ readonly（只读）/ auto（自动执行）';
+COMMENT ON COLUMN "Assistant"."model" IS '默认模型名；为空时使用运营端默认模型';
+COMMENT ON COLUMN "Assistant"."skills" IS '启用的技能键列表';
+COMMENT ON COLUMN "Assistant"."kbIds" IS '绑定的知识库 ID 列表';
+COMMENT ON COLUMN "Assistant"."kbDocIds" IS '已废弃：旧文档级绑定，迁移到 kbIds 后置空';
+COMMENT ON COLUMN "Assistant"."createdAt" IS '创建时间';
+COMMENT ON COLUMN "Assistant"."updatedAt" IS '更新时间';
 
 COMMENT ON TABLE "Message" IS '消息表：会话中的用户与助手消息';
 COMMENT ON COLUMN "Message"."id" IS '消息 ID';
@@ -35,20 +55,50 @@ COMMENT ON COLUMN "Message"."seq" IS '会话内序号，从 1 递增';
 COMMENT ON COLUMN "Message"."tokens" IS '该消息消耗的 token 数';
 COMMENT ON COLUMN "Message"."createdAt" IS '创建时间';
 
+COMMENT ON TABLE "Attachment" IS '聊天附件表：用户上传的图片与文件，发送时绑定到消息';
+COMMENT ON COLUMN "Attachment"."id" IS '附件 ID';
+COMMENT ON COLUMN "Attachment"."tenantId" IS '所属租户 ID';
+COMMENT ON COLUMN "Attachment"."userId" IS '上传用户 ID';
+COMMENT ON COLUMN "Attachment"."sessionId" IS '所属会话 ID；发送前为空';
+COMMENT ON COLUMN "Attachment"."messageId" IS '绑定的消息 ID；发送前为空';
+COMMENT ON COLUMN "Attachment"."kind" IS '附件类型：text / image / audio / video';
+COMMENT ON COLUMN "Attachment"."filename" IS '原始文件名';
+COMMENT ON COLUMN "Attachment"."mime" IS 'MIME 类型';
+COMMENT ON COLUMN "Attachment"."size" IS '文件大小（字节）';
+COMMENT ON COLUMN "Attachment"."storageKey" IS '对象存储键';
+COMMENT ON COLUMN "Attachment"."createdAt" IS '上传时间';
+
 COMMENT ON TABLE "Task" IS '任务表：用户提交给智能体的一次目标';
 COMMENT ON COLUMN "Task"."id" IS '任务 ID';
 COMMENT ON COLUMN "Task"."sessionId" IS '所属会话 ID';
 COMMENT ON COLUMN "Task"."goal" IS '用户任务目标';
-COMMENT ON COLUMN "Task"."status" IS '任务状态：queued / running / succeeded / failed';
+COMMENT ON COLUMN "Task"."status" IS '任务状态：queued（排队）/ running（执行中）/ done（成功）/ failed（失败）/ canceled（已取消）';
+COMMENT ON COLUMN "Task"."input" IS '入队时的运行快照：消息历史、助手配置、会话模型与 traceId（JSON）';
+COMMENT ON COLUMN "Task"."attempts" IS '已创建的运行次数（含重试）';
+COMMENT ON COLUMN "Task"."lastError" IS '最近一次失败原因';
+COMMENT ON COLUMN "Task"."queuedAt" IS '入队时间';
+COMMENT ON COLUMN "Task"."startedAt" IS '开始执行时间';
+COMMENT ON COLUMN "Task"."endedAt" IS '结束时间';
 COMMENT ON COLUMN "Task"."createdAt" IS '创建时间';
 
 COMMENT ON TABLE "Run" IS '执行表：任务的一次具体执行';
 COMMENT ON COLUMN "Run"."id" IS '执行 ID';
 COMMENT ON COLUMN "Run"."taskId" IS '所属任务 ID';
-COMMENT ON COLUMN "Run"."status" IS '执行状态：running / succeeded / failed';
+COMMENT ON COLUMN "Run"."attempt" IS '第几次尝试：首次为 1，手动重试逐次递增';
+COMMENT ON COLUMN "Run"."status" IS '执行状态：queued（排队）/ running（执行中）/ done（成功）/ failed（失败）/ canceled（已取消）';
 COMMENT ON COLUMN "Run"."startedAt" IS '开始时间';
 COMMENT ON COLUMN "Run"."endedAt" IS '结束时间';
+COMMENT ON COLUMN "Run"."cancelRequestedAt" IS '取消请求时间；为空表示未请求取消';
 COMMENT ON COLUMN "Run"."traceId" IS '发起本次运行的前端/BFF traceId，用于串联调用链';
+
+COMMENT ON TABLE "RunCheckpoint" IS '运行断点表：每 run 仅一行，记录最后完整轮次的恢复状态';
+COMMENT ON COLUMN "RunCheckpoint"."runId" IS '所属执行 ID（主键，一 run 一行）';
+COMMENT ON COLUMN "RunCheckpoint"."round" IS '已完成的轮次数（下一轮从 round+1 开始）';
+COMMENT ON COLUMN "RunCheckpoint"."seq" IS '下一事件序号（已落库步骤的最大 seq + 1）';
+COMMENT ON COLUMN "RunCheckpoint"."deltas" IS '截至该轮的 assistant/tool 消息累计（JSON）';
+COMMENT ON COLUMN "RunCheckpoint"."usage" IS '截至该轮的 token 与积分用量（JSON）';
+COMMENT ON COLUMN "RunCheckpoint"."artifactIds" IS '已落库的产物 ID 列表；续跑时清理未列入的记录';
+COMMENT ON COLUMN "RunCheckpoint"."updatedAt" IS '更新时间';
 
 COMMENT ON TABLE "Step" IS '步骤表：执行过程中的思考、工具调用与产物事件';
 COMMENT ON COLUMN "Step"."id" IS '步骤 ID';
@@ -70,10 +120,20 @@ COMMENT ON COLUMN "Artifact"."size" IS '文件大小（字节）';
 COMMENT ON COLUMN "Artifact"."version" IS '版本号';
 COMMENT ON COLUMN "Artifact"."createdAt" IS '创建时间';
 
+COMMENT ON TABLE "KnowledgeBase" IS '知识库表：每用户可建多个，文档与助手绑定都落到这一层';
+COMMENT ON COLUMN "KnowledgeBase"."id" IS '知识库 ID';
+COMMENT ON COLUMN "KnowledgeBase"."tenantId" IS '所属租户 ID';
+COMMENT ON COLUMN "KnowledgeBase"."userId" IS '所属用户 ID';
+COMMENT ON COLUMN "KnowledgeBase"."name" IS '知识库名称，同一用户下唯一';
+COMMENT ON COLUMN "KnowledgeBase"."description" IS '知识库简介';
+COMMENT ON COLUMN "KnowledgeBase"."createdAt" IS '创建时间';
+COMMENT ON COLUMN "KnowledgeBase"."updatedAt" IS '更新时间';
+
 COMMENT ON TABLE "KbDoc" IS '知识库文档表：上传的原始文档及其摄取状态';
 COMMENT ON COLUMN "KbDoc"."id" IS '文档 ID';
 COMMENT ON COLUMN "KbDoc"."tenantId" IS '所属租户 ID';
 COMMENT ON COLUMN "KbDoc"."userId" IS '上传用户 ID';
+COMMENT ON COLUMN "KbDoc"."knowledgeBaseId" IS '所属知识库 ID；存量数据可能为空，回填后强制赋值';
 COMMENT ON COLUMN "KbDoc"."filename" IS '原始文件名';
 COMMENT ON COLUMN "KbDoc"."mime" IS 'MIME 类型';
 COMMENT ON COLUMN "KbDoc"."size" IS '文件大小（字节）';
@@ -92,6 +152,17 @@ COMMENT ON COLUMN "KbChunk"."seq" IS '文档内切片序号';
 COMMENT ON COLUMN "KbChunk"."text" IS '切片文本内容';
 COMMENT ON COLUMN "KbChunk"."vector" IS '文本向量（pgvector，1024 维）';
 COMMENT ON COLUMN "KbChunk"."createdAt" IS '创建时间';
+
+COMMENT ON TABLE "UserMemory" IS '长期记忆表：跨会话的用户偏好与事实，按租户 + 用户隔离';
+COMMENT ON COLUMN "UserMemory"."id" IS '记忆 ID';
+COMMENT ON COLUMN "UserMemory"."tenantId" IS '所属租户 ID';
+COMMENT ON COLUMN "UserMemory"."userId" IS '所属用户 ID';
+COMMENT ON COLUMN "UserMemory"."sessionId" IS '来源会话 ID，仅作溯源，不建外键';
+COMMENT ON COLUMN "UserMemory"."content" IS '记忆正文（一句事实或偏好）';
+COMMENT ON COLUMN "UserMemory"."hash" IS '归一化内容的 SHA-256，用于同用户去重';
+COMMENT ON COLUMN "UserMemory"."vector" IS '记忆向量（pgvector，1024 维）';
+COMMENT ON COLUMN "UserMemory"."createdAt" IS '写入时间';
+COMMENT ON COLUMN "UserMemory"."lastUsedAt" IS '最近一次被检索注入的时间';
 
 COMMENT ON TABLE "Connector" IS '连接器表：接入的外部 MCP Server 配置';
 COMMENT ON COLUMN "Connector"."id" IS '连接器 ID';
@@ -176,8 +247,23 @@ COMMENT ON COLUMN "UsageRecord"."status" IS '状态：pending / settled / void';
 COMMENT ON COLUMN "UsageRecord"."createdAt" IS '创建时间';
 COMMENT ON COLUMN "UsageRecord"."settledAt" IS '结算时间';
 
-COMMENT ON TABLE "ModelPrice" IS '模型价格表：每千 token 的毫积分费率';
+COMMENT ON TABLE "ModelProvider" IS '模型厂商表：运营端配置的 OpenAI 兼容接入点与加密密钥';
+COMMENT ON COLUMN "ModelProvider"."id" IS '厂商 ID';
+COMMENT ON COLUMN "ModelProvider"."name" IS '厂商名称，全局唯一';
+COMMENT ON COLUMN "ModelProvider"."baseUrl" IS 'OpenAI 兼容接口地址';
+COMMENT ON COLUMN "ModelProvider"."apiKeyEnc" IS '加密后的 API Key（AES-256-GCM），永不回传前端';
+COMMENT ON COLUMN "ModelProvider"."apiKeyHint" IS 'API Key 尾号提示，供运营端展示';
+COMMENT ON COLUMN "ModelProvider"."createdAt" IS '创建时间';
+COMMENT ON COLUMN "ModelProvider"."updatedAt" IS '更新时间';
+
+COMMENT ON TABLE "ModelPrice" IS '模型配置表：模型目录、能力与模态，以及每千 token 的毫积分费率';
 COMMENT ON COLUMN "ModelPrice"."model" IS '模型名（与 runtime 上报一致）';
+COMMENT ON COLUMN "ModelPrice"."providerId" IS '所属模型厂商 ID；为空表示使用环境变量里的默认接入点';
+COMMENT ON COLUMN "ModelPrice"."displayName" IS '展示名称；为空时使用模型名';
+COMMENT ON COLUMN "ModelPrice"."enabled" IS '是否启用：启用后才出现在可用模型目录';
+COMMENT ON COLUMN "ModelPrice"."modalities" IS '支持的输入/输出模态：text / image / audio / video';
+COMMENT ON COLUMN "ModelPrice"."capabilities" IS '模型能力分类：chat / embedding / rerank / tts / asr';
+COMMENT ON COLUMN "ModelPrice"."sortOrder" IS '目录排序值，越小越靠前';
 COMMENT ON COLUMN "ModelPrice"."inputMilliCreditsPer1k" IS '输入每千 token 毫积分费率';
 COMMENT ON COLUMN "ModelPrice"."outputMilliCreditsPer1k" IS '输出每千 token 毫积分费率';
 COMMENT ON COLUMN "ModelPrice"."updatedAt" IS '更新时间';
