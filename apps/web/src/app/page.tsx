@@ -10,6 +10,7 @@ import {
   SESSION_MODE_LABELS,
   SESSION_PAGE_SIZE,
   attachmentKindLabel,
+  normalizeChartSpec,
   type AgentEvent,
   type ArtifactDto,
   type AssistantDto,
@@ -27,6 +28,7 @@ import { ArtifactDrawer } from '../components/artifact-drawer';
 import { Markdown } from '../components/markdown';
 import {
   IconArrowUpRight,
+  IconChart,
   IconCheck,
   IconChevron,
   IconCopy,
@@ -38,6 +40,7 @@ import {
   IconX,
 } from '../components/icons';
 import { errorText } from '@ai-office/web-core';
+import { EChart, buildChartOption } from '@ai-office/web-core/chart';
 import {
   consumeRunStream,
   type RunStreamHandlers,
@@ -276,6 +279,8 @@ function EventRow({
   const [expanded, setExpanded] = useState(false);
   const copyTimer = useRef<number | undefined>(undefined);
   const text = renderStep(ev);
+  // 图表 payload 是 ChartSpec：渲染成 ECharts 卡片，文本渲染只用于复制与降级。
+  const chartSpec = ev.type === 'chart' ? normalizeChartSpec(ev.payload) : null;
   // 工具参数默认折叠：调用内容往往又长又散，平铺会淹没对话主线。
   const toolArgs = ev.type === 'tool_call' ? ev.payload.args : undefined;
   const hasToolArgs = toolArgs != null && JSON.stringify(toolArgs) !== '{}';
@@ -314,6 +319,10 @@ function EventRow({
     meta = '文档产出';
     iconCls = 'artifact';
     icon = <IconFile size={15} />;
+  } else if (ev.type === 'chart') {
+    meta = '数据图表';
+    iconCls = 'artifact';
+    icon = <IconChart size={15} />;
   }
 
   async function copy() {
@@ -341,7 +350,11 @@ function EventRow({
       <div className={`wb-event-icon ${iconCls}`}>{icon}</div>
       <div className="wb-event-body">
         <div className="wb-event-meta">{meta}</div>
-        {ev.type === 'tool_call' && hasToolArgs ? (
+        {chartSpec ? (
+          <div className="wb-chart">
+            <EChart option={buildChartOption(chartSpec)} height={260} />
+          </div>
+        ) : ev.type === 'tool_call' && hasToolArgs ? (
           <>
             <button
               type="button"

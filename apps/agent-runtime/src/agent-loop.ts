@@ -1,11 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import type {
-  AgentEvent,
-  ConversationDelta,
-  RunBilling,
-  RunCheckpointEvent,
-  RunRequest,
-  UsageEvent,
+import {
+  normalizeChartSpec,
+  type AgentEvent,
+  type ConversationDelta,
+  type RunBilling,
+  type RunCheckpointEvent,
+  type RunRequest,
+  type UsageEvent,
 } from '@ai-office/shared';
 import { endSpan, startSpan } from '@ai-office/telemetry';
 import type { ModelGateway, ModelMessage, ToolCall } from './model/types';
@@ -268,6 +269,11 @@ export async function* runAgent(req: RunRequest, deps: RunDeps): AsyncGenerator<
         if (artifact) {
           yield step('artifact', artifact);
         }
+        // 图表与产物并列：payload 即 ChartSpec，前端按规格用 ECharts 渲染。
+        const chart = ok ? extractChart(result) : undefined;
+        if (chart) {
+          yield step('chart', chart);
+        }
         // 工具结果回填进对话，供下一轮模型使用（截断防上下文爆炸）。
         const toolMsg: ModelMessage = {
           role: 'tool',
@@ -345,6 +351,13 @@ function extractArtifact(result: unknown): Record<string, unknown> | undefined {
   const ref = (result as { artifact?: unknown }).artifact;
   if (ref === null || typeof ref !== 'object' || Array.isArray(ref)) return undefined;
   return ref as Record<string, unknown>;
+}
+
+/** 工具返回 `{ chart: ChartSpec }` 时取出并复核规格；不合法就当没有图表，不让脏 payload 进前端。 */
+function extractChart(result: unknown): Record<string, unknown> | undefined {
+  if (result === null || typeof result !== 'object' || Array.isArray(result)) return undefined;
+  const spec = normalizeChartSpec((result as { chart?: unknown }).chart);
+  return spec ? { ...spec } : undefined;
 }
 
 /**

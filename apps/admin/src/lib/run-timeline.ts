@@ -6,6 +6,7 @@ const KIND_LABEL: Record<AdminTimelineNodeKind, string> = {
   tool: '工具',
   confirm: '确认',
   artifact: '成果',
+  chart: '图表',
   notice: '提示',
   finished: '完成',
 };

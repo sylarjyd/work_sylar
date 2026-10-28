@@ -1140,6 +1140,7 @@ export type AdminTimelineNodeKind =
   | 'tool'
   | 'confirm'
   | 'artifact'
+  | 'chart'
   | 'notice'
   | 'finished';
 

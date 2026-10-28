@@ -166,6 +166,12 @@ export function buildTimelineNodes(
         nodes.push(makeNode(current.id, 'artifact', label, 'ok', current.ts, null));
         break;
       }
+      case 'chart': {
+        // 只展示图表标题，不回传系列数据：时间线是运行概览，不是数据面板。
+        const label = labelOf(payloadOf(current.payload).title, '数据图表', FILE_LABEL_LIMIT);
+        nodes.push(makeNode(current.id, 'chart', label, 'ok', current.ts, null));
+        break;
+      }
       case 'notice': {
         const budget = payloadOf(current.payload).code === 'budget_exceeded';
         nodes.push(

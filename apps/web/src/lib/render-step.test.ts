@@ -31,6 +31,11 @@ describe('renderStep', () => {
     expect(out).toContain('产出文档');
     expect(out).not.toContain('{');
   });
+  it('chart 展示图表标题，无标题时用默认文案', () => {
+    expect(renderStep(ev('chart', { title: '月度收入' }))).toBe('图表：月度收入');
+    expect(renderStep(ev('chart', {}))).toBe('图表：数据图表');
+  });
+
   it('confirm_request 返回空串（卡片由工作台渲染）', () => {
     expect(renderStep(ev('confirm_request', { confirmId: 'c1', tool: 'code.exec', args: {} }))).toBe('');
   });

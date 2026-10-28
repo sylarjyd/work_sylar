@@ -97,7 +97,7 @@ flowchart LR
 - 技术：Node/TS 独立服务，原生 `http` 建服务；工具与文档库。
 - 职责：
   - **Agent Loop**：plan→act→observe，受 `maxRounds` 保护；按 `checkpoint` 续跑。
-  - **工具注册表**：`web.search` / `web.fetch` / `doc.docx` / `doc.xlsx` / `doc.pptx` / `code.exec`（沙箱）/ `kb.retrieve`；MCP 工具以 `mcp.<server>.<tool>` 动态注入。
+  - **工具注册表**：`web.search` / `web.fetch` / `doc.docx` / `doc.xlsx` / `doc.pptx` / `code.exec`（沙箱）/ `kb.retrieve` / `chart.render`（图表规格）；MCP 工具以 `mcp.<server>.<tool>` 动态注入。
   - **权限与确认**：工具标注 `safe` / `confirm` / `blocked`，`confirm` 执行前挂起并下发确认卡片。
   - **模型网关**：OpenAI 兼容协议接入（默认 DeepSeek），多路由与 fallback，无 key 时确定性 Mock。
   - **对象存储写入**：产物字节直传 S3 兼容存储。

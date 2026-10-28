@@ -143,7 +143,7 @@ interface Tool {
 
 ### B.4 `src/tools/registry.ts` —— 工具注册表
 
-**`createTools(env = process.env, storage = createStorage(env)): Tool[]`** → `[web.search, web.fetch, doc.docx, doc.xlsx, doc.pptx]`。
+**`createTools(env = process.env, storage = createStorage(env)): Tool[]`** → `[web.search, web.fetch, doc.docx, doc.xlsx, doc.pptx, file.write, code.exec, kb.retrieve, chart.render]`。
 
 ### B.5 `src/tools/web-search.ts` —— 联网搜索
 

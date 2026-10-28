@@ -328,6 +328,84 @@ describe('runAgent', () => {
     expect(art?.payload).toMatchObject({ kind: 'pptx', filename: 'a.pptx', storageKey: 'k', size: 3 });
   });
 
+  it('工具结果含 chart 时额外产出一条 chart step，并复核规格', async () => {
+    let round = 0;
+    const gateway: ModelGateway = {
+      async chat() {
+        round++;
+        if (round === 1) {
+          return {
+            content: '画图',
+            toolCalls: [{ id: 'c1', name: 'chart.render', args: { kind: 'bar' } }],
+            usage: { input: 0, output: 0 },
+            model: 'mock',
+          };
+        }
+        return { content: '完成', toolCalls: [], usage: { input: 0, output: 0 }, model: 'mock' };
+      },
+    };
+    const chartTool: Tool = {
+      name: 'chart.render',
+      description: 'd',
+      parameters: {},
+      permission: 'safe',
+      async execute() {
+        return {
+          ok: true,
+          chart: {
+            kind: 'bar',
+            categories: ['一月', '二月'],
+            series: [{ name: '收入', data: [10, 20] }],
+            title: '月度收入',
+          },
+        };
+      },
+    };
+    const events = await collect(runAgent(req, { gateway, tools: [chartTool] }));
+    expect(events.map((e) => e.type)).toEqual([
+      'think',
+      'tool_call',
+      'tool_result',
+      'chart',
+      'think',
+    ]);
+    const chart = events.find((e) => e.type === 'chart');
+    expect(chart?.payload).toMatchObject({
+      kind: 'bar',
+      categories: ['一月', '二月'],
+      title: '月度收入',
+    });
+  });
+
+  it('chart 结构非法时不产出 chart step', async () => {
+    let round = 0;
+    const gateway: ModelGateway = {
+      async chat() {
+        round++;
+        if (round === 1) {
+          return {
+            content: '画图',
+            toolCalls: [{ id: 'c1', name: 'chart.render', args: {} }],
+            usage: { input: 0, output: 0 },
+            model: 'mock',
+          };
+        }
+        return { content: '完成', toolCalls: [], usage: { input: 0, output: 0 }, model: 'mock' };
+      },
+    };
+    const chartTool: Tool = {
+      name: 'chart.render',
+      description: 'd',
+      parameters: {},
+      permission: 'safe',
+      async execute() {
+        return { chart: { kind: 'nope', categories: [], series: [] } };
+      },
+    };
+    const events = await collect(runAgent(req, { gateway, tools: [chartTool] }));
+    expect(events.some((e) => e.type === 'chart')).toBe(false);
+  });
+
   it('工具失败时即使结果里有 artifact 也不产出 artifact step', async () => {
     let round = 0;
     const gateway: ModelGateway = {

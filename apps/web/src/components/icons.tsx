@@ -38,6 +38,14 @@ export function IconPlus(props: IconProps) {
   );
 }
 
+export function IconChart(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M4 19V10M9.3 19V5M14.7 19v-6M20 19V8" />
+    </Svg>
+  );
+}
+
 export function IconChat(props: IconProps) {
   return (
     <Svg {...props}>

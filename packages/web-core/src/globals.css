@@ -3757,6 +3757,20 @@ a {
   word-break: break-word;
 }
 
+/* 图表卡片：宽度跟随会话正文，窄屏由 ECharts 自己 resize。 */
+.wb-chart {
+  margin-top: 8px;
+  padding: 10px 12px 4px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.wb-chart .echart {
+  width: 100%;
+  min-width: 0;
+}
+
 .wb-event-toggle {
   display: inline-flex;
   gap: 6px;

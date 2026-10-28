@@ -28,7 +28,14 @@ const steps: TimelineStep[] = [
   step('s7', 6, 'tool_call', { tool: 'http.get' }, 7),
   step('s8', 7, 'tool_result', { tool: 'http.get', ok: false, error: '敏感错误' }, 8),
   step('s9', 8, 'artifact', { kind: 'file', filename: 'report.xlsx', storageKey: 'k', size: 10 }, 9),
-  step('s10', 9, 'notice', { code: 'budget_exceeded', text: '敏感提示' }, 9),
+  step(
+    's10',
+    9,
+    'chart',
+    { kind: 'bar', title: '月度收入', categories: ['一月'], series: [{ name: '收入', data: [1] }] },
+    9,
+  ),
+  step('s11', 10, 'notice', { code: 'budget_exceeded', text: '敏感提示' }, 9),
 ];
 
 describe('buildTimelineNodes', () => {
@@ -42,6 +49,7 @@ describe('buildTimelineNodes', () => {
       'tool',
       'tool',
       'artifact',
+      'chart',
       'notice',
       'finished',
     ]);
@@ -72,8 +80,10 @@ describe('buildTimelineNodes', () => {
       status: 'ok',
       startedAt: '2026-10-01T00:00:09.000Z',
     });
-    expect(nodes[7]).toMatchObject({ label: '预算超限', status: 'failed' });
-    expect(nodes[8]).toMatchObject({ kind: 'finished', status: 'ok' });
+    // 图表节点只透出标题，不带系列数据。
+    expect(nodes[7]).toMatchObject({ kind: 'chart', label: '月度收入', status: 'ok' });
+    expect(nodes[8]).toMatchObject({ label: '预算超限', status: 'failed' });
+    expect(nodes[9]).toMatchObject({ kind: 'finished', status: 'ok' });
     expect(truncated).toBe(false);
 
     // 时间线会暴露给管理端与页面，不能带出 prompt/入参/结果正文。

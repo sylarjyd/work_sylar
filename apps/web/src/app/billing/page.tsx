@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Alert,
@@ -33,6 +33,8 @@ import {
   listPlans,
 } from '../../lib/api';
 import { errorText } from '@ai-office/web-core';
+import { EChart, buildChartOption } from '@ai-office/web-core/chart';
+import { buildUsageCharts } from '../../lib/usage-chart';
 
 const TYPE_LABEL: Record<string, string> = {
   grant: '发放',
@@ -110,6 +112,8 @@ export default function BillingPage() {
   const [error, setError] = useState('');
   const [loadingBase, setLoadingBase] = useState(true);
   const [loadingUsage, setLoadingUsage] = useState(true);
+  // 用量行数据同时喂给图表与明细表：图表看趋势，表格看精确值。
+  const usageCharts = useMemo(() => buildUsageCharts(usage, groupBy), [usage, groupBy]);
   // 递增序号：只接受最新一次 usage 请求的结果，避免快速切换 tab 时旧响应覆盖新数据。
   const usageSeq = useRef(0);
 
@@ -307,15 +311,29 @@ export default function BillingPage() {
               />
             }
           >
-            <Table<UsageAggregateDto>
-              rowKey="key"
-              size="small"
-              loading={loadingUsage}
-              columns={useUsageColumns(groupBy)}
-              dataSource={usage}
-              pagination={{ pageSize: 20, hideOnSinglePage: true }}
-              locale={{ emptyText: '暂无用量记录' }}
-            />
+            {usage.length === 0 ? (
+              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无用量记录" />
+            ) : (
+              <>
+                <Row gutter={[12, 12]} style={{ marginBottom: 12 }}>
+                  <Col xs={24} lg={12}>
+                    <EChart option={buildChartOption(usageCharts.credits)} height={240} />
+                  </Col>
+                  <Col xs={24} lg={12}>
+                    <EChart option={buildChartOption(usageCharts.tokens)} height={240} />
+                  </Col>
+                </Row>
+                <Table<UsageAggregateDto>
+                  rowKey="key"
+                  size="small"
+                  loading={loadingUsage}
+                  columns={useUsageColumns(groupBy)}
+                  dataSource={usage}
+                  pagination={{ pageSize: 20, hideOnSinglePage: true }}
+                  locale={{ emptyText: '暂无用量记录' }}
+                />
+              </>
+            )}
           </Card>
 
           <Card size="small" title="积分流水" extra={<Typography.Text type="secondary" style={{ fontSize: 12 }}>最近 30 条</Typography.Text>}>

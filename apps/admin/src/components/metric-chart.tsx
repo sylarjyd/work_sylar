@@ -1,102 +1,46 @@
-'use client';
+﻿'use client';
 
-import {
-  axisTicks,
-  formatCompact,
-  lineGeometry,
-  niceMax,
-  stackSegments,
-} from './chart-geometry';
+import { CHART_PALETTE, EChart, type ChartOption } from '@ai-office/web-core/chart';
+import { formatCompact } from './chart-geometry';
 
 export interface ChartSeries {
   name: string;
   values: number[];
 }
 
-const WIDTH = 640;
-const HEIGHT = 240;
-const PADDING = 40;
-const INNER_WIDTH = WIDTH - PADDING * 2;
-const INNER_HEIGHT = HEIGHT - PADDING * 2;
+const INK = '#565d63';
+const SPLIT_LINE = '#eef0ec';
 
-/** 8 色分类色板；超出的系列循环取色，图例仍按名称区分。 */
-const COLORS = [
-  '#2563eb',
-  '#dc2626',
-  '#059669',
-  '#d97706',
-  '#7c3aed',
-  '#0891b2',
-  '#db2777',
-  '#4d7c0f',
-];
-
-function Legend({ names }: { names: string[] }) {
-  if (names.length === 0) return null;
-  return (
-    <ul className="chart-legend">
-      {names.map((name, index) => (
-        <li key={`${name}-${index}`}>
-          <span
-            className="chart-swatch"
-            style={{ background: COLORS[index % COLORS.length] }}
-            aria-hidden="true"
-          />
-          {name}
-        </li>
-      ))}
-    </ul>
-  );
+function axisBase(labels: string[], formatValue: (value: number) => string) {
+  return {
+    xAxis: {
+      type: 'category' as const,
+      data: labels,
+      axisTick: { show: false },
+      axisLine: { lineStyle: { color: SPLIT_LINE } },
+      axisLabel: { color: INK, hideOverlap: true },
+    },
+    yAxis: {
+      type: 'value' as const,
+      splitLine: { lineStyle: { color: SPLIT_LINE, type: 'dashed' as const } },
+      axisLabel: { color: INK, formatter: (value: number) => formatValue(value) },
+    },
+  };
 }
 
-function YAxis({
-  max,
-  formatValue,
-}: {
-  max: number;
-  formatValue: (value: number) => string;
-}) {
-  return (
-    <>
-      {axisTicks(max).map((tick) => {
-        const y = PADDING + INNER_HEIGHT - (INNER_HEIGHT * tick) / max;
-        return (
-          <g key={tick}>
-            <line x1={PADDING} y1={y} x2={WIDTH - PADDING} y2={y} className="chart-grid" />
-            <text x={PADDING - 8} y={y + 4} textAnchor="end" className="chart-axis">
-              {formatValue(tick)}
-            </text>
-          </g>
-        );
-      })}
-    </>
-  );
+function legendOf(series: ChartSeries[]) {
+  if (series.length <= 1) return undefined;
+  return {
+    bottom: 0,
+    icon: 'roundRect',
+    itemWidth: 10,
+    itemHeight: 10,
+    textStyle: { color: INK, fontSize: 11 },
+  };
 }
 
-/** 只标首、中、尾三个时间点，窄屏上也不会互相压字。 */
-function XAxisLabels({ labels }: { labels: string[] }) {
-  if (labels.length === 0) return null;
-  const indices =
-    labels.length <= 2
-      ? labels.map((_, index) => index)
-      : [0, Math.floor((labels.length - 1) / 2), labels.length - 1];
-  return (
-    <>
-      {indices.map((index) => (
-        <text
-          key={index}
-          x={PADDING + (INNER_WIDTH * index) / Math.max(1, labels.length - 1)}
-          y={HEIGHT - 12}
-          textAnchor={index === 0 ? 'start' : index === labels.length - 1 ? 'end' : 'middle'}
-          className="chart-axis"
-        >
-          {labels[index]}
-        </text>
-      ))}
-    </>
-  );
-}
-
+/**
+ * 鎶樼嚎鍥撅細杩愯惀绔師鏉ユ墜缁?SVG锛屽彧鏀寔鍥哄畾鍧愭爣涓庡皯閲忕偣锛? * 鎹㈡垚 ECharts 鍚庡彲缂╂斁銆佸彲 tooltip 瀵归綈锛屼篃鍜屽伐浣滃彴/璁¤垂椤靛叡鐢ㄤ竴濂楄瑙夈€? */
 export function LineChart({
   title,
   labels,
@@ -108,39 +52,34 @@ export function LineChart({
   series: ChartSeries[];
   formatValue?: (value: number) => string;
 }) {
-  const max = niceMax(Math.max(0, ...series.flatMap((item) => item.values)));
-  const names = series.map((item) => item.name);
+  const legend = legendOf(series);
+  const option: ChartOption = {
+    color: [...CHART_PALETTE],
+    tooltip: { trigger: 'axis' },
+    ...(legend ? { legend } : {}),
+    grid: { left: 8, right: 14, top: 16, bottom: legend ? 28 : 8, containLabel: true },
+    ...axisBase(labels, formatValue),
+    series: series.map((item, index) => ({
+      name: item.name,
+      type: 'line' as const,
+      data: item.values,
+      smooth: true,
+      symbol: labels.length > 40 ? 'none' : 'circle',
+      symbolSize: 4,
+      lineStyle: { width: 2 },
+      itemStyle: { color: CHART_PALETTE[index % CHART_PALETTE.length] },
+      ...(series.length === 1 ? { areaStyle: { opacity: 0.12 } } : {}),
+    })),
+  };
   return (
     <figure className="chart">
       <figcaption className="chart-title">{title}</figcaption>
-      <svg
-        className="chart-svg"
-        viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
-        role="img"
-        aria-label={`${title}趋势图`}
-      >
-        <title>{title}</title>
-        <desc>
-          折线图，共 {labels.length} 个时间点；序列：{names.join('、') || '无'}。
-        </desc>
-        <YAxis max={max} formatValue={formatValue} />
-        {series.map((item, index) => (
-          <path
-            key={item.name}
-            d={lineGeometry(item.values, WIDTH, HEIGHT, PADDING, max).path}
-            fill="none"
-            stroke={COLORS[index % COLORS.length]}
-            strokeWidth={2}
-            strokeLinejoin="round"
-          />
-        ))}
-        <XAxisLabels labels={labels} />
-      </svg>
-      <Legend names={names} />
+      <EChart option={option} height={240} />
     </figure>
   );
 }
 
+/** 鍫嗗彔鏌辩姸鍥撅細鐢ㄤ簬銆屾寜妯″瀷鐨勭Н鍒嗘秷鑰椼€嶏紝鍚勬ā鍨嬫寜鏃堕棿妗惰嚜涓嬭€屼笂鍫嗗彔銆?*/
 export function StackedBarChart({
   title,
   labels,
@@ -150,60 +89,26 @@ export function StackedBarChart({
   labels: string[];
   series: ChartSeries[];
 }) {
-  const totals = labels.map((_, index) =>
-    series.reduce((sum, item) => sum + Math.max(0, item.values[index] ?? 0), 0),
-  );
-  const max = niceMax(Math.max(0, ...totals));
-  const slot = INNER_WIDTH / Math.max(1, labels.length);
-  const barWidth = Math.max(2, slot * 0.6);
-  const names = series.map((item) => item.name);
+  const legend = legendOf(series);
+  const option: ChartOption = {
+    color: [...CHART_PALETTE],
+    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+    ...(legend ? { legend } : {}),
+    grid: { left: 8, right: 14, top: 16, bottom: legend ? 28 : 8, containLabel: true },
+    ...axisBase(labels, formatCompact),
+    series: series.map((item, index) => ({
+      name: item.name,
+      type: 'bar' as const,
+      stack: 'total',
+      data: item.values,
+      barMaxWidth: 18,
+      itemStyle: { color: CHART_PALETTE[index % CHART_PALETTE.length] },
+    })),
+  };
   return (
     <figure className="chart">
       <figcaption className="chart-title">{title}</figcaption>
-      <svg
-        className="chart-svg"
-        viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
-        role="img"
-        aria-label={`${title}堆叠柱状图`}
-      >
-        <title>{title}</title>
-        <desc>
-          堆叠柱状图，共 {labels.length} 个时间点；自下而上依次为：
-          {names.join('、') || '无'}。
-        </desc>
-        <YAxis max={max} formatValue={formatCompact} />
-        {labels.map((label, index) => {
-          const x = PADDING + slot * index + (slot - barWidth) / 2;
-          const segments = stackSegments(
-            series.map((item) => item.values),
-            index,
-            INNER_HEIGHT,
-            max,
-          );
-          return (
-            <g key={`${label}-${index}`}>
-              {segments.map((segment, segmentIndex) =>
-                segment.size > 0 ? (
-                  <rect
-                    key={series[segmentIndex]?.name ?? segmentIndex}
-                    x={x}
-                    y={PADDING + INNER_HEIGHT - segment.start - segment.size}
-                    width={barWidth}
-                    height={segment.size}
-                    fill={COLORS[segmentIndex % COLORS.length]}
-                  >
-                    <title>
-                      {series[segmentIndex]?.name ?? ''} · {label}：{formatCompact(segment.value)}
-                    </title>
-                  </rect>
-                ) : null,
-              )}
-            </g>
-          );
-        })}
-        <XAxisLabels labels={labels} />
-      </svg>
-      <Legend names={names} />
+      <EChart option={option} height={240} />
     </figure>
   );
 }

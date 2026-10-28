@@ -95,7 +95,8 @@ apps/agent-runtime/
       ├─ doc.ts                # doc.docx/xlsx/pptx；safeFilename/artifactKey/emit
       ├─ doc-generators.ts     # 纯函数：JSON → Buffer（docx/exceljs/pptxgenjs）
       ├─ code-exec.ts          # code.exec（受限子进程沙箱）
-      └─ kb-retrieve.ts        # kb.retrieve（经 BFF 内部端点检索）
+      ├─ kb-retrieve.ts        # kb.retrieve（经 BFF 内部端点检索）
+      └─ chart.ts              # chart.render（数据 → ChartSpec，前端用 ECharts 渲染）
 ```
 
 **职责**：Agent 引擎（Loop + 工具 + 模型网关 + 沙箱 + MCP Host + 对象存储写入）。不处理账号/计费/多租户业务。
@@ -142,13 +143,15 @@ apps/bff/
 
 ```
 packages/web-core/
-├─ package.json                # TS 源码直接导出；exports: "." 与 "./globals.css"
+├─ package.json                # TS 源码直接导出；exports: "."、"./antd"、"./chart"、"./globals.css"
 └─ src/
    ├─ index.ts                 # 再导出 auth + errors + trace
    ├─ auth.ts                  # BFF_URL、token/role 存取、authFetch、login/register
    ├─ trace.ts                 # traceparent / request-id 生成
    ├─ errors.ts                # 错误文案
    ├─ antd.tsx                 # Ant Design 主题/别名（运营平台共用）
+   ├─ chart.tsx                # EChart 组件（按需动态加载 echarts）+ ChartOption 类型
+   ├─ chart-option.ts          # 纯函数：ChartSpec → ECharts option
    ├─ globals.css              # 两端唯一的全局样式来源
    └─ *.test.ts
 ```
@@ -182,6 +185,7 @@ apps/web/
       ├─ pending-confirm.ts    # 确认卡片的待办状态
       ├─ attachments.ts        # 附件上传/下载
       ├─ session-filter.ts     # 会话筛选
+       ├─ usage-chart.ts        # 用量行 → 图表规格（/billing）
       └─ format.ts / *.test.ts
 ```
 
@@ -372,6 +376,18 @@ runtime ──▶ shared, telemetry
 
 > Prisma 不会把 `///` 文档注释同步到数据库，注释的唯一来源是 `comments.sql`。可随时用
 > `pnpm --filter @ai-office/bff db:comments:check` 检查覆盖情况，缺失时会列出表/字段并非零退出。
+
+### 5.5 新增一种图表
+
+图表走「模型给规格、前端出配置」，不让模型直接写 ECharts option（避免注入回调、风格漂移）：
+
+1. **契约**：`packages/shared/src/chart.ts` 的 `CHART_KINDS` 增加类型，并在 `normalizeChartSpec` 补校验规则。
+2. **配置**：`packages/web-core/src/chart-option.ts` 的 `buildChartOption` 补该类型的分支（纯函数，写单测）。
+3. **渲染**：`chart.render` 工具（`apps/agent-runtime/src/tools/chart.ts`）无需改动——参数按 ChartSpec 校验，服务端只透传。
+4. **组件**：`EChart` 已按需注册图表类；新增类型要同时 `import` 并 `use` 对应模块（如 `RadarChart`）。
+5. 运营端与工作台统一从 `@ai-office/web-core/chart` 取 `EChart` / `buildChartOption`，不要各写一份。
+
+> 图表数据必须来自用户提供或工具检索到的真实结果；`chart` step 会随其他 step 一起落库与回放。
 
 ---
 

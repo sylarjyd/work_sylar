@@ -27,6 +27,11 @@ export function renderStep(ev: AgentEvent): string {
       const filename = String(ev.payload.filename ?? '');
       return `产出文档 ${filename}（${kind}）`;
     }
+    case 'chart': {
+      // 图表本体由工作台用 ECharts 渲染；这里只提供可复制/可降级的文本。
+      const title = typeof ev.payload.title === 'string' && ev.payload.title ? ev.payload.title : '数据图表';
+      return `图表：${title}`;
+    }
     case 'confirm_request':
       // 卡片由工作台单独渲染；文本渲染器保持纯文本职责，返回空串。
       return '';

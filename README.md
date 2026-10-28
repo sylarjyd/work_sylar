@@ -69,6 +69,12 @@ pnpm --filter @ai-office/bff db:push    # 同步表结构
 - 可观测：pino 结构化日志（敏感字段脱敏）、OTel 全链路 trace、`/metrics` 指标端点
 - 任务队列：BullMQ/Redis 队列（未配 Redis 或 `RUN_QUEUE_ENABLED=0` 时退化为进程内联执行），排队位次与租户/实例并发控制；取消（排队移除 / 执行中按已完成轮次结算）、手动重试、`step` 断点续跑、SSE 断线续流
 
+## 数据图表
+
+- Agent 工具 `chart.render`：模型产出图表规格（折线/面积/柱状/堆叠/饼图/散点），工作台用 ECharts 内联渲染，支持 tooltip、图例与大数据量缩放；图表随 `step` 落库，刷新与续流都能回放。
+- `/billing` 用量页：积分消耗与 token 用量图表；运营端概览的折线与堆叠柱图也已换成 ECharts。
+- 图表组件与配色在 `@ai-office/web-core/chart`，两端共用一套视觉；模型只能给数据与类型，配置由前端生成。
+
 ## 一键容器部署
 
 需要已安装 Docker（含 Compose）。Windows 双击/命令行执行 `deploy.cmd`，Linux/macOS 执行 `./deploy.sh`：
