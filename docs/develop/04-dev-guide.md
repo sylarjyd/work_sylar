@@ -493,8 +493,9 @@ pnpm --filter @ai-office/bff typecheck             # 类型
 2. 注册一个普通账号；再用 `pnpm --filter @ai-office/bff admin:promote <email>` 提升为管理员。
 3. 启动 `pnpm dev`（或单独 `pnpm --filter @ai-office/admin dev`），打开 `http://localhost:3001`，用管理员账号登录；客户端 `http://localhost:3000` 侧栏会出现「运营平台」外链（`NEXT_PUBLIC_ADMIN_URL`，开发默认 3001）。
 4. 依次验证：用户禁用后既有 token 立即 401；为租户开通套餐与调额；创建/停用套餐；修改模型价格；归档会话后普通用户列表不可见；修改 `maxRounds` 后下一次运行按新值停止；审计页能查到上述记录。
-5. 边界验证：普通账号在运营端登录应被拒绝并清除登录态；未登录访问 `/overview` 跳 `/login`；客户端访问 `/admin/users` 应 404；运营端登录态不写入客户端 origin。
-6. 运行 `pnpm test` 与 `pnpm build`。
+5. **模型接入**：`/models` 页「新增厂商」选一个预设（自动填名称与 Base URL）→ 填 API Key → 「获取模型列表」应列出模型；勾选后保存，模型配置出现在列表里（价格默认 0）。编辑已保存厂商时无需重填 Key，探测复用服务端密钥。
+6. 边界验证：普通账号在运营端登录应被拒绝并清除登录态；未登录访问 `/overview` 跳 `/login`；客户端访问 `/admin/users` 应 404；运营端登录态不写入客户端 origin。
+7. 运行 `pnpm test` 与 `pnpm build`。
 
 ---
 

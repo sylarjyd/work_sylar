@@ -512,4 +512,61 @@ describe('AdminModelsService', () => {
     );
     await expect(svc.testModel({ model: 'missing' }, actor)).rejects.toBeInstanceOf(NotFoundException);
   });
+
+  it('探测 /models：兼容 OpenAI 形态，去重排序并带上 Bearer 密钥', async () => {
+    const { svc, audits } = makeService();
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ data: [{ id: 'm2' }, { id: 'm1' }, { id: 'm1' }] }), {
+          status: 200,
+        }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      svc.providerModels({ baseUrl: 'https://api.example.com/v1', apiKey: 'sk-new' }, actor),
+    ).resolves.toEqual({ models: ['m1', 'm2'] });
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe('https://api.example.com/v1/models');
+    expect((init.headers as Record<string, string>).authorization).toBe('Bearer sk-new');
+    expect(audits.some((a) => (a as { action: string }).action === 'modelProvider.probeModels')).toBe(
+      true,
+    );
+  });
+
+  it('探测已保存厂商时用库里的密钥，兼容 Ollama 的 models[].name', async () => {
+    const { svc } = makeService();
+    const fetchMock = vi.fn(
+      async () => new Response(JSON.stringify({ models: [{ name: 'qwen2.5' }] }), { status: 200 }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(svc.providerModels({ providerId: 'p1' }, actor)).resolves.toEqual({
+      models: ['qwen2.5'],
+    });
+    expect((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].headers).toMatchObject({
+      authorization: 'Bearer sk-ark-1234',
+    });
+  });
+
+  it('探测失败给出可读错误：401 / 非 JSON / 缺参数 / 厂商不存在', async () => {
+    const { svc } = makeService();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('nope', { status: 401 })));
+    await expect(
+      svc.providerModels({ baseUrl: 'https://api.example.com/v1', apiKey: 'k' }, actor),
+    ).rejects.toMatchObject({ message: 'provider_unauthorized' });
+
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('<html>', { status: 200 })));
+    await expect(
+      svc.providerModels({ baseUrl: 'https://api.example.com/v1', apiKey: 'k' }, actor),
+    ).rejects.toMatchObject({ message: 'invalid_models_response' });
+
+    await expect(
+      svc.providerModels({ baseUrl: 'https://api.example.com/v1' }, actor),
+    ).rejects.toMatchObject({ message: 'invalid_provider' });
+
+    await expect(svc.providerModels({ providerId: 'missing' }, actor)).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
+  });
 });

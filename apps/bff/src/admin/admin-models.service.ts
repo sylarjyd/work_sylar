@@ -1,4 +1,5 @@
 import {
+  BadGatewayException,
   BadRequestException,
   ConflictException,
   Injectable,
@@ -17,6 +18,7 @@ import {
   type AdminModelProviderDto,
   type AdminModelsDto,
   type AdminModelTestResultDto,
+  type AdminProviderModelsDto,
   type ModelCapability,
   type ModelModality,
 } from '@ai-office/shared';
@@ -33,6 +35,35 @@ import {
 
 const MAX_INT32 = 2_147_483_647;
 const TEST_TIMEOUT_MS = 10_000;
+/** /models 响应上限：正常厂商几百个模型也就几十 KB，超过视为异常响应。 */
+const MODELS_MAX_BYTES = 2 * 1024 * 1024;
+const MODELS_MAX_COUNT = 500;
+
+/** 兼容 OpenAI（data[].id）、数组字符串与 Ollama（models[].name）三种 /models 形态。 */
+function extractModelIds(value: unknown): string[] {
+  const out = new Set<string>();
+  const push = (item: unknown): void => {
+    if (typeof item === 'string' && item.trim()) out.add(item.trim());
+  };
+  if (value !== null && typeof value === 'object') {
+    const data = (value as { data?: unknown }).data;
+    const models = (value as { models?: unknown }).models;
+    if (Array.isArray(data)) {
+      for (const item of data) {
+        if (typeof item === 'object' && item !== null) push((item as { id?: unknown }).id);
+        else push(item);
+      }
+    }
+    if (Array.isArray(models)) {
+      for (const item of models) {
+        if (typeof item === 'object' && item !== null) {
+          push((item as { name?: unknown }).name ?? (item as { id?: unknown }).id);
+        } else push(item);
+      }
+    }
+  }
+  return [...out].sort().slice(0, MODELS_MAX_COUNT);
+}
 
 interface ProviderRow {
   id: string;
@@ -295,6 +326,85 @@ export class AdminModelsService {
       if (code === 'P2002') throw new ConflictException('provider_exists');
       if (code === 'P2025') throw new NotFoundException('provider_not_found');
       throw err;
+    }
+  }
+
+  /**
+   * 探测厂商 /models：新建时用表单里的 baseUrl + API Key，编辑时用库里已存的密钥。
+   * 请求只发生在服务端（API Key 不落地浏览器），结果归一为模型名数组供前端勾选。
+   */
+  async providerModels(body: unknown, actor: AdminActor): Promise<AdminProviderModelsDto> {
+    const input = (body ?? {}) as Record<string, unknown>;
+    const providerId = typeof input.providerId === 'string' ? input.providerId.trim() : '';
+    let baseUrl: string;
+    let key: string;
+    if (providerId) {
+      const row = await this.prisma.modelProvider.findUnique({
+        where: { id: providerId },
+        select: { baseUrl: true, apiKeyEnc: true },
+      });
+      if (!row) throw new NotFoundException('provider_not_found');
+      try {
+        key = decryptSecret(row.apiKeyEnc, MODEL_ENC_KEY);
+      } catch {
+        this.logger.error(`厂商 ${providerId} 的密钥无法解密`);
+        throw new ServiceUnavailableException('model_provider_unavailable');
+      }
+      baseUrl = await validateProviderBaseUrl(row.baseUrl, this.urlOptions);
+    } else {
+      const rawBaseUrl = typeof input.baseUrl === 'string' ? input.baseUrl.trim() : '';
+      const rawKey = typeof input.apiKey === 'string' ? input.apiKey.trim() : '';
+      if (!rawBaseUrl || !rawKey) throw new BadRequestException('invalid_provider');
+      baseUrl = await validateProviderBaseUrl(rawBaseUrl, this.urlOptions);
+      key = rawKey;
+    }
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), TEST_TIMEOUT_MS);
+    timer.unref?.();
+    try {
+      let res: Response;
+      try {
+        res = await fetch(`${baseUrl}/models`, {
+          headers: { authorization: `Bearer ${key}` },
+          signal: controller.signal,
+          // 厂商地址由管理员配置，但不允许被上游重定向到别的主机。
+          redirect: 'error',
+        });
+      } catch (err) {
+        const aborted = (err as Error).name === 'AbortError';
+        throw new BadGatewayException(aborted ? 'provider_timeout' : 'provider_unreachable');
+      }
+      if (res.status === 401 || res.status === 403) {
+        await res.body?.cancel().catch(() => undefined);
+        throw new BadGatewayException('provider_unauthorized');
+      }
+      if (!res.ok) {
+        await res.body?.cancel().catch(() => undefined);
+        throw new BadGatewayException(`provider_http_${res.status}`);
+      }
+      const text = await res.text().catch(() => '');
+      if (!text || text.length > MODELS_MAX_BYTES) {
+        throw new BadGatewayException('invalid_models_response');
+      }
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        throw new BadGatewayException('invalid_models_response');
+      }
+      const models = extractModelIds(parsed);
+      if (models.length === 0) throw new BadGatewayException('invalid_models_response');
+
+      await this.audit.bestEffort(actor, {
+        action: 'modelProvider.probeModels',
+        targetType: 'modelProvider',
+        targetId: providerId || undefined,
+        summary: { count: models.length },
+      });
+      return { models };
+    } finally {
+      clearTimeout(timer);
     }
   }
 

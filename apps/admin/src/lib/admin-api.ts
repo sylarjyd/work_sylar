@@ -24,6 +24,7 @@ import type {
   AdminPlanDto,
   AdminPlanInput,
   AdminPlanPatch,
+  AdminProviderModelsDto,
   AdminQaCacheItemDto,
   AdminRunDetailDto,
   AdminRunTimelineDto,
@@ -324,6 +325,21 @@ export function updateModelProvider(
   return request(`/api/admin/model-providers/${encodeURIComponent(id)}`, {
     method: 'PATCH',
     body: JSON.stringify(patch),
+  });
+}
+
+/**
+ * 拉取厂商 /models 列表：新建厂商时传 baseUrl + apiKey，编辑已保存厂商时只传 providerId
+ * （密钥留在服务端，不回传浏览器）。
+ */
+export function probeProviderModels(input: {
+  providerId?: string;
+  baseUrl?: string;
+  apiKey?: string;
+}): Promise<AdminProviderModelsDto> {
+  return request('/api/admin/model-providers/models', {
+    method: 'POST',
+    body: JSON.stringify(input),
   });
 }
 

@@ -83,6 +83,12 @@ pnpm assets:viewer                      # 文件预览资源（Worker/WASM，约
 - 运行时 Worker/WASM 资源由 `pnpm assets:viewer` 生成到 `apps/{web,admin}/public/file-viewer`（约 190MB/端，已 gitignore）；Docker 构建阶段会自动生成，无需手工拷贝。运营端附件读取走 `GET /api/admin/attachments/:id/content`（仅管理员，写入审计）。
 - 图表组件与配色在 `@ai-office/web-core/chart`，两端共用一套视觉；模型只能给数据与类型，配置由前端生成。
 
+## 运营端模型接入
+
+- 「新增厂商」内置常用厂商预设（DeepSeek / OpenAI / 阿里云百炼 / Kimi / 智谱 / 硅基流动 / 火山方舟 / 混元 / 千帆 / OpenRouter / Groq / Ollama / vLLM），选中后自动填好名称与 Base URL，也可手动填写自定义厂商。
+- 填好 Base URL 与 API Key 后可点「获取模型列表」：由 BFF 代调厂商 OpenAI 兼容的 `/models`（`POST /api/admin/model-providers/models`，兼容 `data[].id` 与 Ollama 的 `models[].name`），勾选后随「保存」一起创建模型配置；已有模型默认不勾选，价格默认 0，可在列表中逐项调整。
+- API Key 只在服务端使用：新建时随请求体一次性传入，编辑已保存厂商时由服务端解密复用，浏览器不直连厂商。
+
 ## 一键容器部署
 
 需要已安装 Docker（含 Compose）。Windows 双击/命令行执行 `deploy.cmd`，Linux/macOS 执行 `./deploy.sh`：

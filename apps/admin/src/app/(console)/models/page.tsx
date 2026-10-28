@@ -39,11 +39,13 @@ import {
   deleteModelProvider,
   getAdminModels,
   isForbidden,
+  probeProviderModels,
   setDefaultModel,
   testAdminModel,
   updateAdminModel,
   updateModelProvider,
 } from '../../../lib/admin-api';
+import { PROVIDER_PRESETS, presetByKey, presetKeyOfBaseUrl } from '../../../lib/model-providers';
 import { clearToken, isUnauthorized } from '@ai-office/web-core';
 
 /** 与数据库 int 上限保持一致，避免提交后才由服务端报错。 */
@@ -105,6 +107,10 @@ export default function AdminModelsPage() {
   const { message, modal } = App.useApp();
   const [data, setData] = useState<AdminModelsDto | null>(null);
   const [providerForm, setProviderForm] = useState<ProviderForm | null>(null);
+  // 厂商预设选择与 /models 探测结果；探测只发生在服务端，API Key 不经过浏览器直连厂商。
+  const [presetKey, setPresetKey] = useState('');
+  const [probe, setProbe] = useState<{ models: string[]; selected: string[] } | null>(null);
+  const [probing, setProbing] = useState(false);
   const [modelForm, setModelForm] = useState<ModelForm | null>(null);
   const [testResults, setTestResults] = useState<Record<string, AdminModelTestResultDto>>({});
   const [capFilter, setCapFilter] = useState<'all' | ModelCapability>('all');
@@ -179,26 +185,84 @@ export default function AdminModelsPage() {
     inFlight.current = true;
     setBusy(true);
     try {
-      if (providerForm.id) {
-        await updateModelProvider(providerForm.id, {
+      let providerId = providerForm.id ?? '';
+      if (providerId) {
+        await updateModelProvider(providerId, {
           name: providerForm.name.trim(),
           baseUrl: providerForm.baseUrl.trim(),
           ...(providerForm.apiKey.trim() ? { apiKey: providerForm.apiKey.trim() } : {}),
         });
       } else {
-        await createModelProvider({
+        const created = await createModelProvider({
           name: providerForm.name.trim(),
           baseUrl: providerForm.baseUrl.trim(),
           apiKey: providerForm.apiKey.trim(),
         });
+        providerId = created.id;
+      }
+      // 探测结果里勾选的模型跟着厂商一起落库：一次「保存」完成厂商 + 模型配置。
+      const chosen = probe?.selected ?? [];
+      if (providerId && chosen.length > 0) {
+        const existing = new Set((data?.models ?? []).map((m) => m.model));
+        const created: string[] = [];
+        for (const model of chosen) {
+          if (existing.has(model)) continue;
+          await createAdminModel({
+            model,
+            providerId,
+            enabled: true,
+            capabilities: ['chat'],
+            modalities: ['text'],
+            prices: { inputMilliCreditsPer1k: 0, outputMilliCreditsPer1k: 0 },
+          });
+          created.push(model);
+        }
+        if (created.length > 0) {
+          setNotice(`已新增 ${created.length} 个模型，价格默认为 0，请在列表中按需调整。`);
+        }
       }
       setProviderForm(null);
+      setProbe(null);
+      setPresetKey('');
       await refreshAfterWrite();
     } catch (err) {
       handleErr(err);
     } finally {
       inFlight.current = false;
       setBusy(false);
+    }
+  }
+
+  /** 新建厂商时用表单里的 baseUrl + key 探测；编辑时用服务端保存的密钥。 */
+  async function probeModels() {
+    if (!providerForm || probing) return;
+    if (!providerForm.baseUrl.trim()) {
+      void message.error('请先填写 Base URL');
+      return;
+    }
+    if (!providerForm.id && !providerForm.apiKey.trim()) {
+      void message.error('请先填写 API Key');
+      return;
+    }
+    setProbing(true);
+    setError('');
+    try {
+      const out = await probeProviderModels({
+        ...(providerForm.id ? { providerId: providerForm.id } : {}),
+        ...(providerForm.id
+          ? {}
+          : { baseUrl: providerForm.baseUrl.trim(), apiKey: providerForm.apiKey.trim() }),
+      });
+      const existing = new Set((data?.models ?? []).map((m) => m.model));
+      setProbe({
+        models: out.models,
+        // 已配置过的模型默认不勾选，避免重复创建。
+        selected: out.models.filter((model) => !existing.has(model)),
+      });
+    } catch (err) {
+      handleErr(err);
+    } finally {
+      setProbing(false);
     }
   }
 
@@ -577,7 +641,11 @@ export default function AdminModelsPage() {
           <Button
             type="primary"
             disabled={busy}
-            onClick={() => setProviderForm({ name: '', baseUrl: '', apiKey: '' })}
+            onClick={() => {
+              setProbe(null);
+              setPresetKey('');
+              setProviderForm({ name: '', baseUrl: '', apiKey: '' });
+            }}
           >
             新增厂商
           </Button>
@@ -635,9 +703,16 @@ export default function AdminModelsPage() {
                     <Button
                       size="small"
                       disabled={busy}
-                      onClick={() =>
-                        setProviderForm({ id: p.id, name: p.name, baseUrl: p.baseUrl, apiKey: '' })
-                      }
+                      onClick={() => {
+                        setProbe(null);
+                        setPresetKey(presetKeyOfBaseUrl(p.baseUrl) ?? '');
+                        setProviderForm({
+                          id: p.id,
+                          name: p.name,
+                          baseUrl: p.baseUrl,
+                          apiKey: '',
+                        });
+                      }}
                     >
                       编辑
                     </Button>
@@ -683,6 +758,27 @@ export default function AdminModelsPage() {
         {providerForm ? (
           <Space direction="vertical" size={12} style={{ width: '100%' }}>
             <div>
+              <Typography.Text type="secondary">常用厂商（自动填充名称与 Base URL）</Typography.Text>
+              <Select
+                style={{ width: '100%', marginTop: 4 }}
+                value={presetKey || undefined}
+                allowClear
+                disabled={busy}
+                placeholder="选择预设，或直接手动填写"
+                onChange={(key: string | undefined) => {
+                  setPresetKey(key ?? '');
+                  const preset = key ? presetByKey(key) : undefined;
+                  if (preset) {
+                    setProviderForm({ ...providerForm, name: preset.name, baseUrl: preset.baseUrl });
+                  }
+                }}
+                options={PROVIDER_PRESETS.map((preset) => ({
+                  value: preset.key,
+                  label: `${preset.name} · ${preset.baseUrl}`,
+                }))}
+              />
+            </div>
+            <div>
               <Typography.Text type="secondary">厂商名称</Typography.Text>
               <Input
                 style={{ marginTop: 4 }}
@@ -713,6 +809,49 @@ export default function AdminModelsPage() {
                 disabled={busy}
                 onChange={(e) => setProviderForm({ ...providerForm, apiKey: e.target.value })}
               />
+            </div>
+            <div>
+              <Space size={8} wrap>
+                <Button size="small" loading={probing} disabled={busy} onClick={() => void probeModels()}>
+                  获取模型列表
+                </Button>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  调用厂商 /models 接口；勾选的模型会随「保存」一起创建
+                </Typography.Text>
+              </Space>
+              {probe ? (
+                <div style={{ marginTop: 8 }}>
+                  <Select
+                    mode="multiple"
+                    style={{ width: '100%' }}
+                    value={probe.selected}
+                    disabled={busy}
+                    placeholder="选择要添加的模型"
+                    maxTagCount={8}
+                    onChange={(selected: string[]) => setProbe({ ...probe, selected })}
+                    options={probe.models.map((model) => ({ value: model, label: model }))}
+                  />
+                  <Space size={8} wrap style={{ marginTop: 8 }}>
+                    <Button
+                      size="small"
+                      disabled={busy}
+                      onClick={() => setProbe({ ...probe, selected: probe.models })}
+                    >
+                      全选
+                    </Button>
+                    <Button
+                      size="small"
+                      disabled={busy}
+                      onClick={() => setProbe({ ...probe, selected: [] })}
+                    >
+                      清空
+                    </Button>
+                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                      共 {probe.models.length} 个，已选 {probe.selected.length} 个；已配置的模型默认不勾选
+                    </Typography.Text>
+                  </Space>
+                </div>
+              ) : null}
             </div>
           </Space>
         ) : null}

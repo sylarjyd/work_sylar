@@ -926,6 +926,14 @@ export interface AdminModelTestResultDto {
   error?: string;
 }
 
+/**
+ * 厂商 /models 探测结果：OpenAI 兼容接口返回 `{ data: [{ id }] }`，
+ * Ollama 等返回 `{ models: [{ name }] }`，服务端已归一为模型名数组。
+ */
+export interface AdminProviderModelsDto {
+  models: string[];
+}
+
 export type SettingSource = 'db' | 'env' | 'default';
 
 export type SettingType = 'number' | 'string' | 'boolean' | 'secret';

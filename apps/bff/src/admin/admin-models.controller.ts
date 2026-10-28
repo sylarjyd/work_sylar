@@ -18,6 +18,7 @@ import type {
   AdminModelProviderDto,
   AdminModelsDto,
   AdminModelTestResultDto,
+  AdminProviderModelsDto,
 } from '@ai-office/shared';
 import { JwtGuard } from '../auth/jwt.guard';
 import { AdminGuard } from '../auth/admin.guard';
@@ -47,6 +48,15 @@ export class AdminModelsController {
     @Body() body: Record<string, unknown>,
   ): Promise<AdminModelProviderDto> {
     return this.models.createProvider(body ?? {}, actorOf(user, req));
+  }
+
+  @Post('model-providers/models')
+  providerModels(
+    @CurrentUser() user: JwtPayload,
+    @Req() req: FastifyRequest,
+    @Body() body: Record<string, unknown>,
+  ): Promise<AdminProviderModelsDto> {
+    return this.models.providerModels(body ?? {}, actorOf(user, req));
   }
 
   @Patch('model-providers/:id')
