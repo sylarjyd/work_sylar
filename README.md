@@ -88,6 +88,7 @@ pnpm assets:viewer                      # 文件预览资源（Worker/WASM，约
 - 「新增厂商」内置常用厂商预设（DeepSeek / OpenAI / 阿里云百炼 / Kimi / 智谱 / 硅基流动 / 火山方舟 / 混元 / 千帆 / OpenRouter / Groq / Ollama / vLLM），选中后自动填好名称与 Base URL，也可手动填写自定义厂商。
 - 填好 Base URL 与 API Key 后可点「获取模型列表」：由 BFF 代调厂商 OpenAI 兼容的 `/models`（`POST /api/admin/model-providers/models`，兼容 `data[].id` 与 Ollama 的 `models[].name`），勾选后随「保存」一起创建模型配置；已有模型默认不勾选，价格默认 0，可在列表中逐项调整。
 - API Key 只在服务端使用：新建时随请求体一次性传入，编辑已保存厂商时由服务端解密复用，浏览器不直连厂商。
+- 模型列表支持**按厂商 + 能力分类**叠加筛选（含「未绑定厂商」），列表头部显示「筛选出 N / M 个」。
 
 ## 一键容器部署
 

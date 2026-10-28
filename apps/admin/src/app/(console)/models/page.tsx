@@ -46,6 +46,7 @@ import {
   updateModelProvider,
 } from '../../../lib/admin-api';
 import { PROVIDER_PRESETS, presetByKey, presetKeyOfBaseUrl } from '../../../lib/model-providers';
+import { filterAdminModels, UNBOUND_PROVIDER } from '../../../lib/model-filter';
 import { clearToken, isUnauthorized } from '@ai-office/web-core';
 
 /** 与数据库 int 上限保持一致，避免提交后才由服务端报错。 */
@@ -114,6 +115,8 @@ export default function AdminModelsPage() {
   const [modelForm, setModelForm] = useState<ModelForm | null>(null);
   const [testResults, setTestResults] = useState<Record<string, AdminModelTestResultDto>>({});
   const [capFilter, setCapFilter] = useState<'all' | ModelCapability>('all');
+  // 厂商筛选与能力分类叠加生效；'__none__' 表示未绑定厂商的环境变量模型。
+  const [providerFilter, setProviderFilter] = useState('all');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [loading, setLoading] = useState(true);
@@ -469,10 +472,11 @@ export default function AdminModelsPage() {
 
   const providers = data?.providers ?? [];
   const allModels = data?.models ?? [];
-  const models =
-    capFilter === 'all'
-      ? allModels
-      : allModels.filter((m) => m.capabilities.includes(capFilter));
+  const hasUnboundModels = allModels.some((m) => !m.providerId);
+  const models = filterAdminModels(allModels, {
+    providerId: providerFilter,
+    capability: capFilter,
+  });
 
   const columns: TableColumnsType<AdminModelDto> = [
     {
@@ -625,6 +629,18 @@ export default function AdminModelsPage() {
         </div>
         <Space wrap>
           <Select
+            aria-label="按模型厂商筛选"
+            value={providerFilter}
+            disabled={busy}
+            onChange={(v) => setProviderFilter(v)}
+            style={{ width: 180 }}
+            options={[
+              { value: 'all', label: '全部厂商' },
+              ...providers.map((p) => ({ value: p.id, label: p.name })),
+              ...(hasUnboundModels ? [{ value: UNBOUND_PROVIDER, label: '未绑定厂商' }] : []),
+            ]}
+          />
+          <Select
             aria-label="按模型分类筛选"
             value={capFilter}
             disabled={busy}
@@ -732,7 +748,16 @@ export default function AdminModelsPage() {
         )}
       </Card>
 
-      <Card title="模型列表" extra={<Typography.Text type="secondary">共 {models.length} 个</Typography.Text>}>
+      <Card
+        title="模型列表"
+        extra={
+          <Typography.Text type="secondary">
+            {models.length === allModels.length
+              ? `共 ${allModels.length} 个`
+              : `筛选出 ${models.length} / ${allModels.length} 个`}
+          </Typography.Text>
+        }
+      >
         <Table<AdminModelDto>
           rowKey="model"
           size="middle"
@@ -741,7 +766,12 @@ export default function AdminModelsPage() {
           dataSource={models}
           scroll={{ x: 1500 }}
           pagination={false}
-          locale={{ emptyText: '暂无模型' }}
+          locale={{
+            emptyText:
+              providerFilter === 'all' && capFilter === 'all'
+                ? '暂无模型'
+                : '当前筛选条件下没有模型，试试切换厂商或分类',
+          }}
         />
       </Card>
 
