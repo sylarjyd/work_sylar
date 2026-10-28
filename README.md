@@ -72,6 +72,7 @@ pnpm --filter @ai-office/bff db:push    # 同步表结构
 ## 数据图表
 
 - Agent 工具 `chart.render`：模型产出图表规格（折线/面积/柱状/堆叠/饼图/散点），工作台用 ECharts 内联渲染，支持 tooltip、图例与大数据量缩放；图表随 `step` 落库，刷新与续流都能回放。
+- 图表不只是实时流：运行结束后从 `chart` step 恢复成对话里的图表区（`GET /api/sessions/:id/charts`），刷新、切会话、回看都能看到；成果栏也新增「图表」分组，点开可放大查看。
 - `/billing` 用量页：积分消耗与 token 用量图表；运营端概览的折线与堆叠柱图也已换成 ECharts。
 - 图表组件与配色在 `@ai-office/web-core/chart`，两端共用一套视觉；模型只能给数据与类型，配置由前端生成。
 

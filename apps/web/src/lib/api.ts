@@ -17,6 +17,7 @@ import type {
   KbDocDto,
   MessageDto,
   PlanDto,
+  SessionChartDto,
   SessionMode,
   SessionPage,
   SessionSummary,
@@ -94,6 +95,13 @@ export async function listSessionMessages(sessionId: string): Promise<MessageDto
   const res = await authFetch(`/api/sessions/${encodeURIComponent(sessionId)}/messages`);
   if (!res.ok) throw new Error(`messages_failed_${res.status}`);
   return (await res.json()) as MessageDto[];
+}
+
+/** 会话内持久化的图表（来自 chart step）：运行结束后仍能回看，成果栏也用它。 */
+export async function listSessionCharts(sessionId: string): Promise<SessionChartDto[]> {
+  const res = await authFetch(`/api/sessions/${encodeURIComponent(sessionId)}/charts`);
+  if (!res.ok) throw new Error(`charts_failed_${res.status}`);
+  return (await res.json()) as SessionChartDto[];
 }
 
 export async function createSession(

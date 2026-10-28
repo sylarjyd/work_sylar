@@ -96,6 +96,7 @@ function makeService(
   busyTasks: { sessionId: string; status: string }[] = [],
   runs: { id: string; status: string; startedAt: Date | null; sessionId: string }[] = [],
   failActiveRuns = false,
+  chartSteps: { id: string; runId: string; seq: number; payload: unknown; ts: Date }[] = [],
 ) {
   // 每份用例独立可变数据：改名/置顶/删除会写回，不能污染共享的 all。
   const data = rows.map((s) => ({ ...s }));
@@ -232,6 +233,9 @@ function makeService(
           )
           .map((r) => ({ id: r.id, status: r.status, task: { sessionId: r.sessionId } }));
       },
+    },
+    step: {
+      findMany: async () => chartSteps,
     },
   } as unknown as PrismaService;
   const catalog = {
@@ -540,6 +544,68 @@ describe('SessionsService 运行标记', () => {
     expect((await svc.detail('s1', 't1', 'u1')).activeRun).toEqual({
       id: 'r5',
       status: 'running',
+    });
+  });
+});
+
+describe('SessionsService 会话图表', () => {
+  const ts = new Date('2026-10-28T03:00:00Z');
+
+  it('把 chart step 还原成图表摘要，缺标题时用默认文案', async () => {
+    const { svc } = makeService(['m1'], 'm1', [ASSISTANT], all, [], [], false, [
+      {
+        id: 'st1',
+        runId: 'r1',
+        seq: 3,
+        ts,
+        payload: {
+          kind: 'bar',
+          categories: ['一月', '二月'],
+          series: [{ name: '收入', data: [10, 20] }],
+        },
+      },
+    ]);
+    await expect(svc.charts('s1', 't1', 'u1')).resolves.toEqual([
+      {
+        id: 'st1',
+        runId: 'r1',
+        seq: 3,
+        title: '数据图表',
+        createdAt: ts.toISOString(),
+        spec: {
+          kind: 'bar',
+          categories: ['一月', '二月'],
+          series: [{ name: '收入', data: [10, 20] }],
+        },
+      },
+    ]);
+  });
+
+  it('payload 非法的历史步骤直接跳过，不影响其它图表', async () => {
+    const { svc } = makeService(['m1'], 'm1', [ASSISTANT], all, [], [], false, [
+      { id: 'bad', runId: 'r1', seq: 1, ts, payload: { kind: 'radar' } },
+      {
+        id: 'ok',
+        runId: 'r1',
+        seq: 2,
+        ts,
+        payload: {
+          kind: 'pie',
+          title: '渠道占比',
+          categories: ['A', 'B'],
+          series: [{ name: '占比', data: [3, 7] }],
+        },
+      },
+    ]);
+    const out = await svc.charts('s1', 't1', 'u1');
+    expect(out.map((c) => c.id)).toEqual(['ok']);
+    expect(out[0].title).toBe('渠道占比');
+  });
+
+  it('越权或不存在的会话按 404 处理，不泄露图表', async () => {
+    const { svc } = makeService();
+    await expect(svc.charts('missing', 't1', 'u1')).rejects.toMatchObject({
+      status: 404,
     });
   });
 });

@@ -1,4 +1,5 @@
 import type { RunResume, RunStatus } from './protocol';
+import type { ChartSpec } from './chart';
 
 export type ChatRole = 'system' | 'user' | 'assistant' | 'tool';
 
@@ -264,6 +265,20 @@ export interface SessionPage {
   items: SessionSummary[];
   /** 下一页游标；为空表示已到末尾。 */
   nextCursor: string | null;
+}
+
+/**
+ * 会话内持久化的图表：来自 chart step，运行结束后从历史里恢复，
+ * 这样刷新/回看不再只剩文字，成果栏也能列出图表。
+ */
+export interface SessionChartDto {
+  /** step id，前端列表 key。 */
+  id: string;
+  runId: string;
+  seq: number;
+  title: string;
+  spec: ChartSpec;
+  createdAt: string;
 }
 
 export interface MessageDto {

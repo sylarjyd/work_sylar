@@ -19,6 +19,7 @@ import {
   type ClientModelDto,
   type MessageDto,
   type RunStatus,
+  type SessionChartDto,
   type SessionMode,
   type SessionSummary,
   type UpdateSessionRequest,
@@ -61,6 +62,7 @@ import {
   listAssistants,
   listModels,
   listSessionMessages,
+  listSessionCharts,
   listSessions,
   streamRun,
   streamTask,
@@ -428,6 +430,8 @@ export default function Home() {
   // 历史消息：切换/打开会话时回填，新一轮运行只追加到 events，不回写这里。
   const [history, setHistory] = useState<MessageDto[]>([]);
   const [artifacts, setArtifacts] = useState<ArtifactDto[]>([]);
+  // 历史图表：运行结束后从 chart step 恢复，切会话/刷新都重新拉。
+  const [sessionCharts, setSessionCharts] = useState<SessionChartDto[]>([]);
   const [error, setError] = useState('');
   // 运行态按会话存放在纯 TS 表里：切走不中断，切回直接渲染该会话条目。
   const [, bumpTrackerVersion] = useState(0);
@@ -467,6 +471,8 @@ export default function Home() {
   // 所有由本页创建的 object URL 统一登记，卸载时兜底释放，避免长期占用 blob 内存。
   const objectUrlsRef = useRef(new Set<string>());
   const artifactReqRef = useRef(0);
+  // 图表与产物是两条独立请求：共用序号会互相作废，导致后发的一次把前一次结果丢掉。
+  const chartReqRef = useRef(0);
   // 历史消息请求序号与已加载会话：快速切换时丢弃迟到响应，重复点击不重复请求。
   const historyReqRef = useRef(0);
   const loadedHistoryRef = useRef('');
@@ -476,6 +482,8 @@ export default function Home() {
   // 当前会话视图：由 tracker 快照派生，事件/正文/决策都跟着会话走。
   const view = sessionId ? tracker.snapshot(sessionId) : null;
   const events = view?.events ?? NO_EVENTS;
+  // 终态但保留条目时（取消/失败）图表已由事件流渲染，历史画廊不要再画一遍。
+  const hasEventCharts = events.some((ev) => ev.type === 'chart');
   const liveText = view?.liveText ?? '';
   const decisions = view?.decisions ?? NO_DECISIONS;
   const submittedGoal = view?.goal ?? '';
@@ -693,9 +701,33 @@ export default function Home() {
     }
   }
 
+  /** 会话图表：按 run 落库的 chart step，回看时按时间正序展示。 */
+  async function refreshCharts(sid: string) {
+    const req = ++chartReqRef.current;
+    if (!sid) {
+      setSessionCharts([]);
+      return;
+    }
+    try {
+      const list = await listSessionCharts(sid);
+      if (req !== chartReqRef.current) return;
+      // 接口按时间倒序取最近 50 张，这里翻正，保证和对话时间线一致。
+      setSessionCharts([...list].reverse());
+    } catch (err) {
+      if (req !== chartReqRef.current) return;
+      if (isUnauthorized(err)) {
+        router.push('/login');
+        return;
+      }
+      setError(errorText(err));
+    }
+  }
+
   useEffect(() => {
     // 运行中也刷新，用 merge 保住乐观卡片；终态 running 归位后再刷新一次拿到落库版本。
     void refreshArtifacts(sessionId);
+    // 图表只在终态后展示（运行中由事件流实时渲染），避免同一张图出现两次。
+    if (!running) void refreshCharts(sessionId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, running]);
 
@@ -724,6 +756,8 @@ export default function Home() {
     stickToBottomRef.current = true;
     artifactReqRef.current += 1;
     setArtifacts([]);
+    chartReqRef.current += 1;
+    setSessionCharts([]);
     discardPending();
   }
 
@@ -1662,6 +1696,16 @@ export default function Home() {
                   ),
                 )}
                 {liveText && <AssistantBubble text={liveText} live />}
+                {!running && !hasEventCharts && sessionCharts.length > 0 && (
+                  <section className="wb-chart-gallery" aria-label="数据图表">
+                    {sessionCharts.map((c) => (
+                      <figure key={c.id} className="wb-chart-card">
+                        <figcaption className="wb-chart-card-title">{c.title}</figcaption>
+                        <EChart option={buildChartOption(c.spec)} height={240} />
+                      </figure>
+                    ))}
+                  </section>
+                )}
                 {running && (
                   <div className="wb-running">
                     <span className="wb-spinner" />
@@ -1760,6 +1804,7 @@ export default function Home() {
         <ArtifactDrawer
           open={drawerOpen}
           artifacts={artifacts}
+          charts={sessionCharts}
           onClose={() => setDrawerOpen(false)}
           onDownload={(a) =>
             void downloadArtifact(a.id, a.filename).catch((e) => setError(errorText(e)))

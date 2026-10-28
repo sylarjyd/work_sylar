@@ -17,6 +17,7 @@ import type { JwtPayload } from '../auth/jwt';
 import type {
   CreateSessionRequest,
   MessageDto,
+  SessionChartDto,
   SessionPage,
   SessionSummary,
   UpdateSessionRequest,
@@ -75,5 +76,13 @@ export class SessionsController {
     @Param('id') id: string,
   ): Promise<MessageDto[]> {
     return this.sessions.messages(id, user.tenantId, user.sub);
+  }
+
+  @Get(':id/charts')
+  charts(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+  ): Promise<SessionChartDto[]> {
+    return this.sessions.charts(id, user.tenantId, user.sub);
   }
 }

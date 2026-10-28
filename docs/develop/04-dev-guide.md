@@ -388,6 +388,10 @@ runtime ──▶ shared, telemetry
 5. 运营端与工作台统一从 `@ai-office/web-core/chart` 取 `EChart` / `buildChartOption`，不要各写一份。
 
 > 图表数据必须来自用户提供或工具检索到的真实结果；`chart` step 会随其他 step 一起落库与回放。
+>
+> 回看链路：运行结束后 tracker 条目会被清掉，工作台用 `GET /api/sessions/:id/charts`
+> 把最近 50 个 `chart` step 还原成图表区（`SessionsService.charts` 会再过一遍
+> `normalizeChartSpec`，脏 payload 直接跳过）；成果栏的「图表」分组复用同一份数据。
 
 ---
 

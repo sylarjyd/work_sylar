@@ -1,13 +1,16 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import type { ArtifactDto } from '@ai-office/shared';
+import type { ArtifactDto, SessionChartDto } from '@ai-office/shared';
+import { EChart, buildChartOption } from '@ai-office/web-core/chart';
 import { formatBytes } from '../lib/format';
 import { IconChevron, IconDownload, IconFolder, IconX } from './icons';
 
 interface ArtifactDrawerProps {
   open: boolean;
   artifacts: ArtifactDto[];
+  /** 会话内持久化的图表：和文档一起出现在成果栏，点开可放大查看。 */
+  charts?: SessionChartDto[];
   onClose: () => void;
   onDownload: (artifact: ArtifactDto) => void;
 }
@@ -98,10 +101,17 @@ function groupArtifacts(artifacts: ArtifactDto[]): { def: FolderDef; items: Arti
  * 成果栏是对话区右侧的固定一列：展开时挤压正文而不是浮在上面，
  * 因此不需要遮罩、焦点陷阱和 body 滚动锁。
  */
-export function ArtifactDrawer({ open, artifacts, onClose, onDownload }: ArtifactDrawerProps) {
+export function ArtifactDrawer({
+  open,
+  artifacts,
+  charts = [],
+  onClose,
+  onDownload,
+}: ArtifactDrawerProps) {
   const closeRef = useRef<HTMLButtonElement>(null);
   const onCloseRef = useRef(onClose);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const [preview, setPreview] = useState<SessionChartDto | null>(null);
 
   useEffect(() => {
     onCloseRef.current = onClose;
@@ -110,11 +120,15 @@ export function ArtifactDrawer({ open, artifacts, onClose, onDownload }: Artifac
   useEffect(() => {
     if (!open) return;
     function onKeyDown(e: KeyboardEvent) {
-      if (e.key === 'Escape') onCloseRef.current();
+      if (e.key === 'Escape') {
+        // 预览层优先关闭，避免一次 Esc 把整个成果栏也收起来。
+        if (preview) setPreview(null);
+        else onCloseRef.current();
+      }
     }
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [open]);
+  }, [open, preview]);
 
   const folders = groupArtifacts(artifacts);
 
@@ -125,8 +139,8 @@ export function ArtifactDrawer({ open, artifacts, onClose, onDownload }: Artifac
           <div>
             <div className="wb-drawer-title">成果</div>
             <div className="wb-drawer-sub">
-              {artifacts.length > 0
-                ? `${artifacts.length} 个文件 · ${folders.length} 个文件夹`
+              {artifacts.length + charts.length > 0
+                ? `${artifacts.length + charts.length} 个产出 · ${folders.length + (charts.length > 0 ? 1 : 0)} 个文件夹`
                 : '任务产出'}
             </div>
           </div>
@@ -143,10 +157,51 @@ export function ArtifactDrawer({ open, artifacts, onClose, onDownload }: Artifac
         </header>
 
         <div className="wb-drawer-body">
-          {artifacts.length === 0 ? (
-            <div className="wb-drawer-empty">任务产出的文档会出现在这里</div>
+          {artifacts.length === 0 && charts.length === 0 ? (
+            <div className="wb-drawer-empty">任务产出的文档与图表会出现在这里</div>
           ) : (
             <div className="wb-tree">
+              {charts.length > 0 && (
+                <section className="wb-tree-folder">
+                  <button
+                    type="button"
+                    className="wb-tree-folder-head"
+                    aria-expanded={!collapsed.charts}
+                    onClick={() =>
+                      setCollapsed((prev) => ({ ...prev, charts: !prev.charts }))
+                    }
+                  >
+                    <IconChevron
+                      size={14}
+                      className={`wb-tree-caret${collapsed.charts ? ' collapsed' : ''}`}
+                    />
+                    <IconFolder size={15} className="wb-tree-folder-icon" />
+                    <span className="wb-tree-folder-name">图表</span>
+                    <span className="wb-tree-folder-count">{charts.length}</span>
+                  </button>
+                  {!collapsed.charts && (
+                    <div className="wb-tree-files">
+                      {charts.map((c) => (
+                        <button
+                          key={c.id}
+                          type="button"
+                          className="wb-tree-file wb-tree-file-btn"
+                          onClick={() => setPreview(c)}
+                          title={`查看图表：${c.title}`}
+                        >
+                          <div className="wb-file-badge chart">图</div>
+                          <div className="wb-file-body">
+                            <div className="wb-file-name">{c.title}</div>
+                            <div className="wb-file-meta">
+                              {new Date(c.createdAt).toLocaleString('zh-CN')}
+                            </div>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </section>
+              )}
               {folders.map(({ def, items }) => {
                 const isCollapsed = !!collapsed[def.key];
                 return (
@@ -205,6 +260,30 @@ export function ArtifactDrawer({ open, artifacts, onClose, onDownload }: Artifac
           )}
         </div>
       </aside>
+      {preview && (
+        <div
+          className="wb-chart-preview"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`图表：${preview.title}`}
+          onClick={() => setPreview(null)}
+        >
+          <div className="wb-chart-preview-body" onClick={(e) => e.stopPropagation()}>
+            <header className="wb-chart-preview-head">
+              <span className="wb-chart-preview-title">{preview.title}</span>
+              <button
+                type="button"
+                className="wb-icon-btn"
+                onClick={() => setPreview(null)}
+                aria-label="关闭图表预览"
+              >
+                <IconX size={16} />
+              </button>
+            </header>
+            <EChart option={buildChartOption(preview.spec)} height={360} />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

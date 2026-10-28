@@ -10,6 +10,7 @@ import {
   isAssistantPermissionMode,
   isSessionMode,
   normalizeSkills,
+  normalizeChartSpec,
   SESSION_PAGE_SIZE,
   type ActiveRunSummary,
   type AssistantPermissionMode,
@@ -17,6 +18,7 @@ import {
   type AttachmentRef,
   type CreateSessionRequest,
   type MessageDto,
+  type SessionChartDto,
   type SessionMode,
   type SessionPage,
   type SessionSummary,
@@ -266,6 +268,35 @@ export class SessionsService {
       seq: m.seq,
       attachments: m.attachments.map(toAttachmentRef),
     }));
+  }
+
+  /**
+   * 会话内的图表：图表只是 step 的一种，运行结束后 tracker 会清空，
+   * 历史视图要靠这里把 chart step 重新读出来（按时间倒序取最近 50 张）。
+   * payload 仍做一次校验，历史数据里的脏结构直接跳过而不是让接口 500。
+   */
+  async charts(sessionId: string, tenantId: string, userId: string): Promise<SessionChartDto[]> {
+    await this.assertOwned(sessionId, tenantId, userId);
+    const rows = await this.prisma.step.findMany({
+      where: { type: 'chart', run: { task: { sessionId } } },
+      orderBy: { ts: 'desc' },
+      take: 50,
+      select: { id: true, runId: true, seq: true, payload: true, ts: true },
+    });
+    const charts: SessionChartDto[] = [];
+    for (const row of rows) {
+      const spec = normalizeChartSpec(row.payload);
+      if (!spec) continue;
+      charts.push({
+        id: row.id,
+        runId: row.runId,
+        seq: row.seq,
+        title: spec.title ?? '数据图表',
+        spec,
+        createdAt: row.ts.toISOString(),
+      });
+    }
+    return charts;
   }
 
   /**
