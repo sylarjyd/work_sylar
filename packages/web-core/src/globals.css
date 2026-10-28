@@ -1811,6 +1811,15 @@ a {
 
 /* ================================ 管理后台 ================================ */
 
+/* 可点开详情的表格行：cursor 给出可点击暗示，hover 用品牌浅底色。 */
+.admin-clickable-row {
+  cursor: pointer;
+}
+
+.admin-clickable-row:hover > td {
+  background: var(--mint-soft);
+}
+
 .admin-table {
   width: 100%;
   border-collapse: collapse;

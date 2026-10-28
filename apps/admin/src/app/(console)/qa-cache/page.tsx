@@ -7,6 +7,8 @@ import {
   App,
   Button,
   Card,
+  Descriptions,
+  Drawer,
   InputNumber,
   Space,
   Switch,
@@ -41,6 +43,8 @@ export default function AdminQaCachePage() {
   const { modal } = App.useApp();
 
   const [items, setItems] = useState<AdminQaCacheItemDto[]>([]);
+  // 详情用列表行数据即可：问答正文在列表接口里就是全量，不需要额外请求。
+  const [detail, setDetail] = useState<AdminQaCacheItemDto | null>(null);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
@@ -220,7 +224,7 @@ export default function AdminQaCachePage() {
     }
   }
 
-  function remove(item: AdminQaCacheItemDto) {
+  function remove(item: AdminQaCacheItemDto, onDone?: () => void) {
     if (inFlight.current) return;
     modal.confirm({
       title: '确认删除缓存',
@@ -228,7 +232,10 @@ export default function AdminQaCachePage() {
       okText: '删除',
       okType: 'danger',
       cancelText: '取消',
-      onOk: () => runRemove(item),
+      onOk: async () => {
+        await runRemove(item);
+        onDone?.();
+      },
     });
   }
 
@@ -269,11 +276,31 @@ export default function AdminQaCachePage() {
     {
       title: '操作',
       key: 'actions',
-      width: 100,
+      width: 150,
       render: (_: unknown, item) => (
-        <Button size="small" danger disabled={busy || saving} onClick={() => remove(item)}>
-          删除
-        </Button>
+        <Space size={8}>
+          <Button
+            size="small"
+            onClick={(event) => {
+              // 行本身可点开详情；操作按钮不要再冒泡触发一次。
+              event.stopPropagation();
+              setDetail(item);
+            }}
+          >
+            详情
+          </Button>
+          <Button
+            size="small"
+            danger
+            disabled={busy || saving}
+            onClick={(event) => {
+              event.stopPropagation();
+              remove(item);
+            }}
+          >
+            删除
+          </Button>
+        </Space>
       ),
     },
   ];
@@ -364,6 +391,8 @@ export default function AdminQaCachePage() {
           columns={columns}
           dataSource={items}
           scroll={{ x: 1200 }}
+          rowClassName={() => 'admin-clickable-row'}
+          onRow={(record) => ({ onClick: () => setDetail(record) })}
           locale={{ emptyText: '暂无未过期缓存' }}
           pagination={{
             current: page,
@@ -374,6 +403,72 @@ export default function AdminQaCachePage() {
           }}
         />
       </Card>
+
+      <Drawer
+        title="缓存详情"
+        width={560}
+        open={detail !== null}
+        onClose={() => setDetail(null)}
+        extra={
+          detail ? (
+            <Button
+              danger
+              size="small"
+              disabled={busy || saving}
+              onClick={() => remove(detail, () => setDetail(null))}
+            >
+              删除
+            </Button>
+          ) : null
+        }
+      >
+        {detail ? (
+          <>
+            <Descriptions
+              column={1}
+              size="small"
+              bordered
+              items={[
+                {
+                  key: 'hash',
+                  label: '缓存键',
+                  children: (
+                    <Typography.Text code copyable>
+                      {detail.hash}
+                    </Typography.Text>
+                  ),
+                },
+                {
+                  key: 'user',
+                  label: '用户',
+                  children: `${detail.userEmail}（${detail.userId}）`,
+                },
+                {
+                  key: 'session',
+                  label: '会话',
+                  children: `${detail.sessionTitle}（${detail.sessionId}）`,
+                },
+                { key: 'createdAt', label: '创建时间', children: formatTime(detail.createdAt) },
+                { key: 'expiresAt', label: '过期时间', children: formatTime(detail.expiresAt) },
+              ]}
+            />
+            <Typography.Title level={5} style={{ marginTop: 20 }}>
+              问题
+            </Typography.Title>
+            <Typography.Paragraph style={{ whiteSpace: 'pre-wrap' }}>
+              {detail.question}
+            </Typography.Paragraph>
+            <Typography.Title level={5} style={{ marginTop: 20 }}>
+              答案
+            </Typography.Title>
+            <Typography.Paragraph
+              style={{ whiteSpace: 'pre-wrap', maxHeight: 360, overflow: 'auto' }}
+            >
+              {detail.answer}
+            </Typography.Paragraph>
+          </>
+        ) : null}
+      </Drawer>
     </Space>
   );
 }
