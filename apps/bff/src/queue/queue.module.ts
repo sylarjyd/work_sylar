@@ -14,6 +14,7 @@ import { AttachmentsModule } from '../attachments/attachments.module';
 import { BillingModule } from '../billing/billing.module';
 import { PrismaModule } from '../db/prisma.module';
 import { MemoryModule } from '../memory/memory.module';
+import { SkillsModule } from '../skills/skills.module';
 import { ObservabilityModule } from '../observability/observability.module';
 import { SettingsModule } from '../settings/settings.module';
 import { QaCacheService } from '../qa-cache/qa-cache.service';
@@ -120,6 +121,7 @@ export class QueueModule implements OnApplicationShutdown {
         BillingModule,
         SettingsModule,
         MemoryModule,
+        SkillsModule,
       ],
       providers,
       exports: [

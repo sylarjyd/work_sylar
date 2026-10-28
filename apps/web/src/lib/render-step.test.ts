@@ -36,6 +36,11 @@ describe('renderStep', () => {
     expect(renderStep(ev('chart', {}))).toBe('图表：数据图表');
   });
 
+  it('skill 展示已保存的技能名', () => {
+    expect(renderStep(ev('skill', { name: '周报规范' }))).toBe('已保存技能：周报规范');
+    expect(renderStep(ev('skill', {}))).toBe('已保存技能：未命名技能');
+  });
+
   it('confirm_request 返回空串（卡片由工作台渲染）', () => {
     expect(renderStep(ev('confirm_request', { confirmId: 'c1', tool: 'code.exec', args: {} }))).toBe('');
   });

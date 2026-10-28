@@ -329,6 +329,10 @@ function EventRow({
     meta = '数据图表';
     iconCls = 'artifact';
     icon = <IconChart size={15} />;
+  } else if (ev.type === 'skill') {
+    meta = '技能沉淀';
+    iconCls = 'artifact';
+    icon = <IconSpark size={15} />;
   }
 
   async function copy() {

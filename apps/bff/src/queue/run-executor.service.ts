@@ -25,6 +25,7 @@ import { RUN_CONTROL_BUS, RUN_EVENT_BUS } from './queue.tokens';
 import type { RunEventBus } from './run-event-bus';
 import type { RunControlBus } from './run-control-bus';
 import { TasksService } from '../tasks/tasks.service';
+import { SkillsService } from '../skills/skills.service';
 import { AttachmentsService } from '../attachments/attachments.service';
 import { ArtifactService } from '../artifacts/artifacts.service';
 import { BillingService } from '../billing/billing.service';
@@ -226,6 +227,7 @@ export class RunExecutor {
     private readonly settings: SettingsService,
     private readonly qaCache: QaCacheService,
     private readonly memory: MemoryService,
+    private readonly skills: SkillsService,
   ) {}
 
   async execute(job: RunJob): Promise<void> {
@@ -901,6 +903,14 @@ export class RunExecutor {
             }
             if (ev.type === 'artifact') {
               await this.safeRecordArtifact(runId, sessionId, tenantId, ev.payload);
+            }
+            // 技能落库失败不回滚运行：步骤已可见，用户可稍后在技能市场手工补录。
+            if (ev.type === 'skill') {
+              await this.skills
+                .saveFromRun({ tenantId, userId, runId }, ev.payload)
+                .catch((err: unknown) => {
+                  this.logger.warn(`run ${runId} 技能落库失败: ${(err as Error).message}`);
+                });
             }
             // 只有 step 需要实时转发；usage/checkpoint 由执行器内部消费。
             await this.publish(runId, { event: 'step', data: ev });

@@ -16,6 +16,7 @@ import {
   ApiOutlined,
   AppstoreOutlined,
   BookOutlined,
+  BulbOutlined,
   DeleteOutlined,
   EditOutlined,
   LogoutOutlined,
@@ -49,7 +50,7 @@ import { relativeTime } from '../lib/format';
 import { filterSessions, sortSessions } from '../lib/session-filter';
 import { IconSpark } from './icons';
 
-type ActiveNav = 'workbench' | 'assistants' | 'kb' | 'connectors' | 'billing';
+type ActiveNav = 'workbench' | 'assistants' | 'kb' | 'skills' | 'connectors' | 'billing';
 
 // 运营端是独立应用（通常部署在内网），这里只放外链；未配置时对管理员也不显示。
 // 构建期内联：生产镜像需要在构建时传入 NEXT_PUBLIC_ADMIN_URL。
@@ -84,6 +85,7 @@ const NAV: { key: ActiveNav; href: string; label: string; icon: ReactNode }[] = 
   { key: 'workbench', href: '/', label: '工作台', icon: <MessageOutlined /> },
   { key: 'assistants', href: '/assistants', label: '助手', icon: <RobotOutlined /> },
   { key: 'kb', href: '/kb', label: '知识库', icon: <BookOutlined /> },
+  { key: 'skills', href: '/skills', label: '技能市场', icon: <BulbOutlined /> },
   { key: 'connectors', href: '/connectors', label: '连接器', icon: <ApiOutlined /> },
   { key: 'billing', href: '/billing', label: '套餐与用量', icon: <WalletOutlined /> },
 ];

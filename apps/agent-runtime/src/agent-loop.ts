@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import {
   normalizeChartSpec,
+  normalizeSkillInput,
   type AgentEvent,
   type ConversationDelta,
   type RunBilling,
@@ -274,6 +275,11 @@ export async function* runAgent(req: RunRequest, deps: RunDeps): AsyncGenerator<
         if (chart) {
           yield step('chart', chart);
         }
+        // 技能草稿：payload 即 SkillInput，BFF 收到后落库为该用户的个人技能。
+        const skill = ok ? extractSkill(result) : undefined;
+        if (skill) {
+          yield step('skill', skill);
+        }
         // 工具结果回填进对话，供下一轮模型使用（截断防上下文爆炸）。
         const toolMsg: ModelMessage = {
           role: 'tool',
@@ -358,6 +364,13 @@ function extractChart(result: unknown): Record<string, unknown> | undefined {
   if (result === null || typeof result !== 'object' || Array.isArray(result)) return undefined;
   const spec = normalizeChartSpec((result as { chart?: unknown }).chart);
   return spec ? { ...spec } : undefined;
+}
+
+/** 工具返回 `{ skill: SkillInput }` 时取出草稿；不合法就当没有技能，避免脏数据落库。 */
+function extractSkill(result: unknown): Record<string, unknown> | undefined {
+  if (result === null || typeof result !== 'object' || Array.isArray(result)) return undefined;
+  const skill = normalizeSkillInput((result as { skill?: unknown }).skill);
+  return skill ? { ...skill } : undefined;
 }
 
 /**

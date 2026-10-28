@@ -20,6 +20,9 @@ import type {
   SessionChartDto,
   SessionMode,
   SessionPage,
+  SkillDto,
+  SkillInput,
+  SkillListDto,
   SessionSummary,
   UpdateSessionRequest,
   UsageAggregateDto,
@@ -219,6 +222,43 @@ export async function fetchAttachmentBlob(id: string): Promise<Blob> {
   const res = await authFetch(`/api/attachments/${encodeURIComponent(id)}/content`);
   if (!res.ok) throw new Error(`attachment_preview_failed_${res.status}`);
   return res.blob();
+}
+
+// ------------------------------------------------------------------ 技能市场
+export async function listSkills(): Promise<SkillListDto> {
+  const res = await authFetch('/api/skills');
+  if (!res.ok) throw new Error(`skills_failed_${res.status}`);
+  return (await res.json()) as SkillListDto;
+}
+
+export async function createSkill(input: SkillInput): Promise<SkillDto> {
+  const res = await authFetch('/api/skills', { method: 'POST', body: JSON.stringify(input) });
+  if (!res.ok) throw new Error(`skill_create_failed_${res.status}`);
+  return (await res.json()) as SkillDto;
+}
+
+export async function updateSkill(id: string, input: SkillInput): Promise<SkillDto> {
+  const res = await authFetch(`/api/skills/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) throw new Error(`skill_update_failed_${res.status}`);
+  return (await res.json()) as SkillDto;
+}
+
+export async function deleteSkill(id: string): Promise<void> {
+  const res = await authFetch(`/api/skills/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  if (!res.ok) throw new Error(`skill_delete_failed_${res.status}`);
+}
+
+/** 共享为公共技能：之后由运营端维护，创建者不再独占编辑权。 */
+export async function shareSkill(id: string): Promise<SkillDto> {
+  const res = await authFetch(`/api/skills/${encodeURIComponent(id)}/share`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  });
+  if (!res.ok) throw new Error(`skill_share_failed_${res.status}`);
+  return (await res.json()) as SkillDto;
 }
 
 /** 取消运行：排队中的直接撤销，执行中的交由控制总线通知；终态 run 幂等返回当前状态。 */

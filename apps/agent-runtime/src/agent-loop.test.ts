@@ -406,6 +406,57 @@ describe('runAgent', () => {
     expect(events.some((e) => e.type === 'chart')).toBe(false);
   });
 
+  it('工具结果含 skill 时额外产出一条 skill step，结构非法则不产出', async () => {
+    const gatewayOf = (result: unknown): ModelGateway => {
+      let round = 0;
+      return {
+        async chat() {
+          round += 1;
+          if (round === 1) {
+            return {
+              content: '总结',
+              toolCalls: [{ id: 'c1', name: 'skill.save', args: { name: '周报' } }],
+              usage: { input: 0, output: 0 },
+              model: 'mock',
+            };
+          }
+          return { content: '完成', toolCalls: [], usage: { input: 0, output: 0 }, model: 'mock' };
+        },
+      };
+    };
+    const toolWith = (result: unknown): Tool => ({
+      name: 'skill.save',
+      description: 'd',
+      parameters: {},
+      permission: 'safe',
+      async execute() {
+        return result;
+      },
+    });
+
+    const okEvents = await collect(
+      runAgent(req, {
+        gateway: gatewayOf(null),
+        tools: [
+          toolWith({ ok: true, skill: { name: '周报', description: '按模板', content: '步骤一' } }),
+        ],
+      }),
+    );
+    expect(okEvents.map((e) => e.type)).toContain('skill');
+    expect(okEvents.find((e) => e.type === 'skill')?.payload).toMatchObject({
+      name: '周报',
+      content: '步骤一',
+    });
+
+    const badEvents = await collect(
+      runAgent(req, {
+        gateway: gatewayOf(null),
+        tools: [toolWith({ skill: { name: '', content: '' } })],
+      }),
+    );
+    expect(badEvents.some((e) => e.type === 'skill')).toBe(false);
+  });
+
   it('工具失败时即使结果里有 artifact 也不产出 artifact step', async () => {
     let round = 0;
     const gateway: ModelGateway = {

@@ -15,6 +15,7 @@ export type RunStatus = 'queued' | 'running' | 'done' | 'failed' | 'canceled';
  * assistant_delta 是模型正文的增量片段：只用于实时渲染，不落库，
  * 最终仍由一条完整的 think 事件承载整段回答（历史与重连都以它为准）。
  * chart 是图表工具产出的可视化规格（payload 为 ChartSpec），前端内联渲染。
+ * skill 是任务结束后模型总结出的技能草稿（payload 为 SkillInput），BFF 落库为个人技能。
  */
 export type StepType =
   | 'think'
@@ -23,6 +24,7 @@ export type StepType =
   | 'tool_result'
   | 'artifact'
   | 'chart'
+  | 'skill'
   | 'confirm_request'
   | 'notice';
 

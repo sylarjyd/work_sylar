@@ -102,6 +102,37 @@ export class SkillsService {
   }
 
   /**
+   * 任务结束后由模型总结出的技能：落为该用户的个人技能。
+   * 同一 run 重复上报（重试/重放）时更新原记录，避免生成多条同源技能。
+   */
+  async saveFromRun(
+    scope: { tenantId: string; userId: string; runId: string },
+    body: unknown,
+  ): Promise<SkillDto | null> {
+    const input = normalizeSkillInput(body);
+    if (!input) return null;
+    const existing = await this.prisma.skill.findFirst({
+      where: { sourceRunId: scope.runId, ownerUserId: scope.userId },
+      select: { id: true },
+    });
+    if (existing) {
+      const row = await this.prisma.skill.update({ where: { id: existing.id }, data: input });
+      return toDto(row, scope.userId);
+    }
+    const row = await this.prisma.skill.create({
+      data: {
+        tenantId: scope.tenantId,
+        ownerUserId: scope.userId,
+        scope: 'personal',
+        source: 'run',
+        sourceRunId: scope.runId,
+        ...input,
+      },
+    });
+    return toDto(row, scope.userId);
+  }
+
+  /**
    * 运行期解析绑定技能：只接受「启用的公共技能」或「本人个人技能」，
    * 未知/越权 id 直接丢弃，避免一次非法绑定让整轮运行失败。
    */

@@ -127,13 +127,14 @@ apps/bff/
    ├─ billing/                 # 套餐/积分账本/预占结算/限流/补偿扫描
    ├─ models/                  # 模型目录、env providers、运行路由
    ├─ queue/                   # BullMQ 装配、worker/executor、取消控制、断点续跑、恢复扫描
+   ├─ skills/                  # 技能市场：个人/公共可见性、共享、运行期解析注入
    ├─ alerts/                  # 告警规则/评估/事件/HMAC Webhook
    ├─ audit/                   # 管理端审计写入
    ├─ settings/                # 系统参数
    ├─ secrets/secret-box.ts    # AES-256-GCM 加解密
    ├─ metrics/                 # 指标小时桶、领导者锁
    ├─ observability/           # 日志、health、metrics、请求/运行 telemetry
-   ├─ admin/                   # 运营端控制器/服务（用户/租户/会话/任务/模型/套餐/审计/KB/告警/设置/概览）
+   ├─ admin/                   # 运营端控制器/服务（用户/租户/会话/任务/模型/套餐/审计/KB/技能/告警/设置/概览）
    └─ stream/sse-proxy.ts      # writeHead（hijack 后显式写响应头）
 ```
 
@@ -410,6 +411,17 @@ runtime ──▶ shared, telemetry
 
 运行时资源：`pnpm assets:viewer` → `apps/{web,admin}/public/file-viewer`（已 gitignore）。升级
 `@file-viewer/*` 版本后必须重跑，Worker/WASM 与 JS 版本不一致时预览会失败。
+
+### 5.7 技能市场
+
+技能是「提示词片段」，不是工具权限：
+
+1. `Skill.scope`：`personal`（仅 `tenantId + ownerUserId` 可见）/ `public`（跨租户可见）；用户共享后 `scope=public` 并写 `sharedAt`，之后由运营端维护。
+2. `Assistant.skillIds[]` 绑定技能；保存时校验只能是「启用的公共技能」或「本人个人技能」，非法 id 整单 400。
+3. 发起任务时 `SkillsService.resolveForRun` 解析为 `{id,name,content}[]` 写进 `Task.input` 快照，执行器用 `skillsToPrompt` 拼在助手提示词之后；排队期间技能被改不影响本次运行。
+4. 对话沉淀：runtime 工具 `skill.save` 只做校验并回传草稿，agent-loop 额外产出 `skill` step；BFF 收到该 step 后按 `sourceRunId` 幂等落为个人技能。
+
+> 公共技能对所有租户开放，正文会进系统提示词——运营端下架（`enabled=false`）后新运行立即不再注入，历史运行不受影响。
 
 ---
 

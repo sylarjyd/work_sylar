@@ -6,10 +6,11 @@ import { createFileTools } from './file-write';
 import { createCodeExecTool } from './code-exec';
 import { createKbRetrieveTool } from './kb-retrieve';
 import { createChartTool } from './chart';
+import { createSkillTool } from './skill';
 import { createEmbeddingGateway } from '../embedding/create-embedding-gateway';
 import { createStorage, type Storage } from '../storage/s3';
 
-/** 内置工具集：web.search / web.fetch + doc.* + file.write + code.exec + kb.retrieve + chart.render。 */
+/** 内置工具集：web.* + doc.* + file.write + code.exec + kb.retrieve + chart.render + skill.save。 */
 export function createTools(
   env: NodeJS.ProcessEnv = process.env,
   storage: Storage = createStorage(env),
@@ -26,5 +27,6 @@ export function createTools(
       embed: createEmbeddingGateway(env),
     }),
     createChartTool(),
+    createSkillTool(),
   ];
 }

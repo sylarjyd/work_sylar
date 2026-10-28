@@ -29,6 +29,7 @@ import {
   type AssistantPermissionMode,
   type ClientModelDto,
   type KbBaseDto,
+  type SkillDto,
 } from '@ai-office/shared';
 import { AppShell } from '../../components/app-shell';
 import {
@@ -39,6 +40,7 @@ import {
   listAssistants,
   listKbBases,
   listModels,
+  listSkills,
   updateAssistant,
 } from '../../lib/api';
 import { errorText } from '@ai-office/web-core';
@@ -50,6 +52,8 @@ interface FormState {
   permissionMode: AssistantPermissionMode;
   model: string;
   skills: string[];
+  /** 绑定的技能市场技能（公共或自己的个人技能）。 */
+  skillIds: string[];
   kbIds: string[];
 }
 
@@ -60,6 +64,7 @@ const EMPTY: FormState = {
   permissionMode: 'standard',
   model: '',
   skills: ASSISTANT_SKILLS.map((s) => s.key),
+  skillIds: [],
   kbIds: [],
 };
 
@@ -69,6 +74,8 @@ export default function AssistantsPage() {
   const [assistants, setAssistants] = useState<AssistantDto[]>([]);
   const [models, setModels] = useState<ClientModelDto[]>([]);
   const [bases, setBases] = useState<KbBaseDto[]>([]);
+  // 可绑定的技能：公共技能 + 自己的个人技能（接口已按可见性过滤）。
+  const [skillCatalog, setSkillCatalog] = useState<SkillDto[]>([]);
   const [form, setForm] = useState<FormState>(EMPTY);
   const [editing, setEditing] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -90,14 +97,16 @@ export default function AssistantsPage() {
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const [rows, modelData, kbBases] = await Promise.all([
+      const [rows, modelData, kbBases, skills] = await Promise.all([
         listAssistants(),
         listModels(),
         listKbBases(),
+        listSkills(),
       ]);
       setAssistants(rows);
       setModels(modelData.models);
       setBases(kbBases);
+      setSkillCatalog(skills.items);
     } catch (err) {
       handleErr(err);
     } finally {
@@ -128,6 +137,8 @@ export default function AssistantsPage() {
       permissionMode: a.permissionMode,
       model: a.model ?? '',
       skills: a.skills,
+      // 已下架/已删除的技能不保留绑定，避免保存时被服务端整单拒绝。
+      skillIds: a.skillIds.filter((id) => skillCatalog.some((s) => s.id === id)),
       // 服务端可能返回已删除知识库的残留 id：只保留当前仍存在的库，避免无意义绑定。
       kbIds: a.kbIds.filter((id) => bases.some((b) => b.id === id)),
     });
@@ -149,6 +160,7 @@ export default function AssistantsPage() {
       permissionMode: form.permissionMode,
       model: form.model || null,
       skills: form.skills,
+      skillIds: form.skillIds,
       kbIds: form.kbIds,
     };
     const verb = editing ? '保存修改' : '创建助手';
@@ -378,6 +390,33 @@ export default function AssistantsPage() {
                       知识库暂无内容，可稍后在「知识库」页创建并上传文档。
                     </Typography.Text>
                   ) : null}
+                </div>
+              </Col>
+
+              <Col span={24}>
+                <div className="admin-field">
+                  <Typography.Text>绑定技能</Typography.Text>
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    技能内容会拼进系统提示词；不改变工具权限，工具仍由上面的技能开关决定。
+                  </Typography.Text>
+                  <Select
+                    mode="multiple"
+                    style={{ width: '100%' }}
+                    allowClear
+                    disabled={busy || skillCatalog.length === 0}
+                    value={form.skillIds}
+                    placeholder={
+                      skillCatalog.length === 0
+                        ? '技能市场为空，可先到「技能市场」页创建'
+                        : '选择要绑定的技能'
+                    }
+                    onChange={(value: string[]) => setForm({ ...form, skillIds: value })}
+                    options={skillCatalog.map((s) => ({
+                      value: s.id,
+                      label: s.scope === 'public' ? `${s.name}（公共）` : s.name,
+                    }))}
+                    optionFilterProp="label"
+                  />
                 </div>
               </Col>
 

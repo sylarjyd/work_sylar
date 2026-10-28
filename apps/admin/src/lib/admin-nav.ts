@@ -41,6 +41,11 @@ export const ADMIN_NAV: AdminNavEntry[] = [
     items: [{ href: '/kb', label: '知识库管理' }],
   },
   {
+    key: 'skills',
+    label: '技能市场',
+    items: [{ href: '/skills', label: '技能管理' }],
+  },
+  {
     key: 'models',
     label: '模型与配置',
     items: [

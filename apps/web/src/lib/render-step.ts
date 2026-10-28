@@ -32,6 +32,10 @@ export function renderStep(ev: AgentEvent): string {
       const title = typeof ev.payload.title === 'string' && ev.payload.title ? ev.payload.title : '数据图表';
       return `图表：${title}`;
     }
+    case 'skill': {
+      const name = typeof ev.payload.name === 'string' && ev.payload.name ? ev.payload.name : '未命名技能';
+      return `已保存技能：${name}`;
+    }
     case 'confirm_request':
       // 卡片由工作台单独渲染；文本渲染器保持纯文本职责，返回空串。
       return '';

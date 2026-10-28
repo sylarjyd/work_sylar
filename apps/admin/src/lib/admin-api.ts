@@ -47,6 +47,8 @@ import type {
   ModelModality,
   PageDto,
   RetryRunResultDto,
+  SkillDto,
+  SkillInput,
 } from '@ai-office/shared';
 import { authFetch, errorText } from '@ai-office/web-core';
 
@@ -427,6 +429,35 @@ export function deleteAdminKbDoc(
     `/api/admin/kb/bases/${encodeURIComponent(baseId)}/docs/${encodeURIComponent(docId)}`,
     { method: 'DELETE', body: JSON.stringify(body) },
   );
+}
+
+// ------------------------------------------------------------------ 技能市场
+export function listAdminSkills(
+  params: { page?: number; pageSize?: number; scope?: 'public' | 'personal'; q?: string } = {},
+): Promise<PageDto<SkillDto>> {
+  return request(`/api/admin/skills${query(params)}`);
+}
+
+export function createAdminSkill(input: SkillInput): Promise<SkillDto> {
+  return request('/api/admin/skills', { method: 'POST', body: JSON.stringify(input) });
+}
+
+export function updateAdminSkill(id: string, input: SkillInput): Promise<SkillDto> {
+  return request(`/api/admin/skills/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  });
+}
+
+export function setAdminSkillEnabled(id: string, enabled: boolean): Promise<SkillDto> {
+  return request(`/api/admin/skills/${encodeURIComponent(id)}/enabled`, {
+    method: 'POST',
+    body: JSON.stringify({ enabled }),
+  });
+}
+
+export function deleteAdminSkill(id: string): Promise<void> {
+  return request(`/api/admin/skills/${encodeURIComponent(id)}`, { method: 'DELETE' });
 }
 
 // ------------------------------------------------------------------ 参数 / 审计
