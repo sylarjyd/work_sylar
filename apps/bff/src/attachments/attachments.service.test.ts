@@ -223,4 +223,19 @@ describe('AttachmentsService', () => {
       expect(out[2].attachments?.[0].data).toBe(Buffer.from('ok').toString('base64'));
     });
   });
+
+  describe('运营端读取', () => {
+    it('不按 tenant/user 过滤，按 id 返回原始字节与类型', async () => {
+      const dto = await svc.create('t1', 'u1', textInput('report.txt', 'content'));
+
+      const out = await svc.getContentForAdmin(dto.id);
+
+      expect(out).toMatchObject({ filename: 'report.txt', mime: 'text/plain' });
+      expect(out.buffer.toString()).toBe('content');
+    });
+
+    it('附件不存在时按 404 处理', async () => {
+      await expect(svc.getContentForAdmin('missing')).rejects.toBeInstanceOf(NotFoundException);
+    });
+  });
 });

@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "turbo run dev --parallel",
     "build": "turbo run build",
-    "test": "turbo run test"
+    "test": "turbo run test",
+    "assets:viewer": "pnpm --filter @ai-office/web-core exec file-viewer-copy-assets ../../apps/web/public/file-viewer && pnpm --filter @ai-office/web-core exec file-viewer-copy-assets ../../apps/admin/public/file-viewer"
   },
   "devDependencies": {
     "turbo": "^2.3.3",

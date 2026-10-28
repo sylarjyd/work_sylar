@@ -9,6 +9,7 @@
     ".": "./src/index.ts",
     "./antd": "./src/antd.tsx",
     "./chart": "./src/chart.tsx",
+    "./file-preview": "./src/file-preview.tsx",
     "./globals.css": "./src/globals.css"
   },
   "sideEffects": [
@@ -19,6 +20,7 @@
   },
   "dependencies": {
     "@ai-office/shared": "workspace:*",
+    "@file-viewer/react-full": "^3.3.0",
     "echarts": "^5.6.0"
   },
   "peerDependencies": {

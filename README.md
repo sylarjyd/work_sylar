@@ -18,6 +18,7 @@ pnpm build      # 全量构建
 cp .env.example .env      # 填入 DEEPSEEK_API_KEY（缺省时 Agent 走确定性 Mock，链路仍可验证）
 pnpm --filter @ai-office/bff db:up      # 起 Postgres / MinIO / Redis（docker compose）
 pnpm --filter @ai-office/bff db:push    # 同步表结构
+pnpm assets:viewer                      # 文件预览资源（Worker/WASM，约 190MB ×2，已 gitignore）
 ```
 
 > 本地数据库镜像已改为 **pgvector**（`pgvector/pgvector:pg16`），因此 `CREATE EXTENSION vector` 可用，知识库向量检索开箱即用。
@@ -74,6 +75,12 @@ pnpm --filter @ai-office/bff db:push    # 同步表结构
 - Agent 工具 `chart.render`：模型产出图表规格（折线/面积/柱状/堆叠/饼图/散点），工作台用 ECharts 内联渲染，支持 tooltip、图例与大数据量缩放；图表随 `step` 落库，刷新与续流都能回放。
 - 图表不只是实时流：运行结束后从 `chart` step 恢复成对话里的图表区（`GET /api/sessions/:id/charts`），刷新、切会话、回看都能看到；成果栏也新增「图表」分组，点开可放大查看。
 - `/billing` 用量页：积分消耗与 token 用量图表；运营端概览的折线与堆叠柱图也已换成 ECharts。
+
+## 附件与成果在线预览
+
+- 集成 **Flyfish File Viewer**（`@file-viewer/react-full`）：工作台成果栏与聊天附件、运营端会话消息里的附件都能在弹窗内直接预览 docx / xlsx / pptx / pdf / 图片 / 音视频等格式；预览失败或格式不支持时保留「下载」兜底。
+- 预览通过 **Blob** 中转：BFF 的文件接口要求 `Authorization`，查看器只接收内存文件，不会把带鉴权的直链暴露给 iframe。
+- 运行时 Worker/WASM 资源由 `pnpm assets:viewer` 生成到 `apps/{web,admin}/public/file-viewer`（约 190MB/端，已 gitignore）；Docker 构建阶段会自动生成，无需手工拷贝。运营端附件读取走 `GET /api/admin/attachments/:id/content`（仅管理员，写入审计）。
 - 图表组件与配色在 `@ai-office/web-core/chart`，两端共用一套视觉；模型只能给数据与类型，配置由前端生成。
 
 ## 一键容器部署

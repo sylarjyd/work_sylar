@@ -4,13 +4,16 @@ import { useEffect, useRef, useState } from 'react';
 import type { ArtifactDto, SessionChartDto } from '@ai-office/shared';
 import { EChart, buildChartOption } from '@ai-office/web-core/chart';
 import { formatBytes } from '../lib/format';
-import { IconChevron, IconDownload, IconFolder, IconX } from './icons';
+import { IconChevron, IconDownload, IconEye, IconFolder, IconX } from './icons';
 
 interface ArtifactDrawerProps {
   open: boolean;
   artifacts: ArtifactDto[];
   /** 会话内持久化的图表：和文档一起出现在成果栏，点开可放大查看。 */
   charts?: SessionChartDto[];
+  /** 正在取字节的文件 id：按钮进入 loading/禁用态，避免连点重复下载。 */
+  previewingId?: string;
+  onPreview?: (artifact: ArtifactDto) => void;
   onClose: () => void;
   onDownload: (artifact: ArtifactDto) => void;
 }
@@ -105,6 +108,8 @@ export function ArtifactDrawer({
   open,
   artifacts,
   charts = [],
+  previewingId = '',
+  onPreview,
   onClose,
   onDownload,
 }: ArtifactDrawerProps) {
@@ -237,15 +242,29 @@ export function ArtifactDrawer({
                               </div>
                             </div>
                             {a.id ? (
-                              <button
-                                type="button"
-                                className="wb-file-dl"
-                                onClick={() => onDownload(a)}
-                                aria-label={`下载 ${a.filename}`}
-                                title="下载"
-                              >
-                                <IconDownload size={14} />
-                              </button>
+                              <>
+                                {onPreview ? (
+                                  <button
+                                    type="button"
+                                    className="wb-file-dl"
+                                    onClick={() => onPreview(a)}
+                                    disabled={previewingId === a.id}
+                                    aria-label={`预览 ${a.filename}`}
+                                    title="预览"
+                                  >
+                                    <IconEye size={14} />
+                                  </button>
+                                ) : null}
+                                <button
+                                  type="button"
+                                  className="wb-file-dl"
+                                  onClick={() => onDownload(a)}
+                                  aria-label={`下载 ${a.filename}`}
+                                  title="下载"
+                                >
+                                  <IconDownload size={14} />
+                                </button>
+                              </>
                             ) : (
                               <span className="wb-file-pending">落库中</span>
                             )}

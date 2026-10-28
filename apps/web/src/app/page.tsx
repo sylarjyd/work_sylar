@@ -16,6 +16,7 @@ import {
   type AssistantDto,
   type AttachmentDto,
   type AttachmentKind,
+  type AttachmentRef,
   type ClientModelDto,
   type MessageDto,
   type RunStatus,
@@ -41,6 +42,7 @@ import {
   IconX,
 } from '../components/icons';
 import { errorText } from '@ai-office/web-core';
+import { FilePreviewDialog, type PreviewTarget } from '@ai-office/web-core/file-preview';
 import { EChart, buildChartOption } from '@ai-office/web-core/chart';
 import {
   consumeRunStream,
@@ -57,6 +59,8 @@ import {
   downloadArtifact,
   getSession,
   getToken,
+  fetchArtifactBlob,
+  fetchAttachmentBlob,
   isUnauthorized,
   listArtifacts,
   listAssistants,
@@ -432,6 +436,11 @@ export default function Home() {
   const [artifacts, setArtifacts] = useState<ArtifactDto[]>([]);
   // 历史图表：运行结束后从 chart step 恢复，切会话/刷新都重新拉。
   const [sessionCharts, setSessionCharts] = useState<SessionChartDto[]>([]);
+  // 在线预览：Blob 由带鉴权的请求取回，查看器只吃内存文件，不接触 JWT。
+  const [preview, setPreview] = useState<{ target: PreviewTarget; download?: () => void } | null>(
+    null,
+  );
+  const [previewingId, setPreviewingId] = useState('');
   const [error, setError] = useState('');
   // 运行态按会话存放在纯 TS 表里：切走不中断，切回直接渲染该会话条目。
   const [, bumpTrackerVersion] = useState(0);
@@ -723,8 +732,55 @@ export default function Home() {
     }
   }
 
+  function saveBlob(blob: Blob, filename: string): void {
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
+
+  /** 成果在线预览：docx/xlsx/pptx/pdf/图片都能在弹窗里看，失败还能下载兜底。 */
+  async function previewArtifact(a: ArtifactDto) {
+    if (!a.id || previewingId) return;
+    setPreviewingId(a.id);
+    try {
+      const blob = await fetchArtifactBlob(a.id);
+      setPreview({
+        target: { blob, name: a.filename },
+        download: () => saveBlob(blob, a.filename),
+      });
+    } catch (err) {
+      if (isUnauthorized(err)) router.push('/login');
+      else setError(errorText(err));
+    } finally {
+      setPreviewingId('');
+    }
+  }
+
+  /** 附件在线预览：聊天里上传的图片/文档/音视频。 */
+  async function previewAttachment(a: AttachmentRef) {
+    if (previewingId) return;
+    setPreviewingId(a.id);
+    try {
+      const blob = await fetchAttachmentBlob(a.id);
+      setPreview({
+        target: { blob, name: a.filename },
+        download: () => saveBlob(blob, a.filename),
+      });
+    } catch (err) {
+      if (isUnauthorized(err)) router.push('/login');
+      else setError(errorText(err));
+    } finally {
+      setPreviewingId('');
+    }
+  }
+
   useEffect(() => {
-    // 运行中也刷新，用 merge 保住乐观卡片；终态 running 归位后再刷新一次拿到落库版本。
+    // 运行中也刷新产物（merge 保乐观卡片），终态后再拉一次落库版本。
     void refreshArtifacts(sessionId);
     // 图表只在终态后展示（运行中由事件流实时渲染），避免同一张图出现两次。
     if (!running) void refreshCharts(sessionId);
@@ -1634,13 +1690,20 @@ export default function Home() {
                           {m.attachments.length > 0 && (
                             <div className="wb-user-attachments">
                               {m.attachments.map((a) => (
-                                <span key={a.id} className="wb-user-attachment" title={a.filename}>
+                                <button
+                                  type="button"
+                                  key={a.id}
+                                  className="wb-user-attachment"
+                                  title={`预览 ${a.filename}`}
+                                  disabled={previewingId === a.id}
+                                  onClick={() => void previewAttachment(a)}
+                                >
                                   <IconFile size={14} />
                                   <span className="wb-user-attachment-name">{a.filename}</span>
                                   <span className="wb-user-attachment-meta">
                                     {attachmentKindLabel(a.kind)}
                                   </span>
-                                </span>
+                                </button>
                               ))}
                             </div>
                           )}
@@ -1805,10 +1868,19 @@ export default function Home() {
           open={drawerOpen}
           artifacts={artifacts}
           charts={sessionCharts}
+          previewingId={previewingId}
+          onPreview={(a) => void previewArtifact(a)}
           onClose={() => setDrawerOpen(false)}
           onDownload={(a) =>
             void downloadArtifact(a.id, a.filename).catch((e) => setError(errorText(e)))
           }
+        />
+
+        <FilePreviewDialog
+          open={preview !== null}
+          target={preview?.target ?? null}
+          onClose={() => setPreview(null)}
+          onFallback={preview?.download}
         />
       </div>
     </AppShell>

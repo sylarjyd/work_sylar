@@ -44,6 +44,7 @@ RUN pnpm --filter @ai-office/shared build \
     && pnpm --filter @ai-office/bff db:generate \
     && pnpm --filter @ai-office/bff build \
     && pnpm --filter @ai-office/agent-runtime build \
+    && pnpm --filter @ai-office/web-core exec file-viewer-copy-assets ../../apps/web/public/file-viewer \
     && pnpm --filter @ai-office/web build
 
 # ---------------------------------------------------------------- 运营端编译产物
@@ -55,6 +56,7 @@ ARG ADMIN_BFF_URL=http://localhost:4000
 ARG WORKSPACE_URL=
 COPY . .
 RUN pnpm --filter @ai-office/shared build \
+    && pnpm --filter @ai-office/web-core exec file-viewer-copy-assets ../../apps/admin/public/file-viewer \
     && NEXT_PUBLIC_BFF_URL=${ADMIN_BFF_URL} \
        NEXT_PUBLIC_WORKSPACE_URL=${WORKSPACE_URL} \
        pnpm --filter @ai-office/admin build
@@ -103,6 +105,8 @@ CMD ["node", "dist/server.js"]
 FROM runtime-base AS web
 COPY --from=build --chown=node:node /repo/apps/web/node_modules ./apps/web/node_modules
 COPY --from=build --chown=node:node /repo/apps/web/.next ./apps/web/.next
+# 文件预览的 Worker/WASM 资源由 next start 直接从 public 提供。
+COPY --from=build --chown=node:node /repo/apps/web/public ./apps/web/public
 COPY --from=build --chown=node:node /repo/apps/web/package.json ./apps/web/package.json
 COPY --from=build --chown=node:node /repo/apps/web/next.config.mjs ./apps/web/next.config.mjs
 WORKDIR /repo/apps/web
@@ -113,6 +117,7 @@ CMD ["./node_modules/.bin/next", "start", "-p", "3000"]
 FROM runtime-base AS admin
 COPY --from=build-admin --chown=node:node /repo/apps/admin/node_modules ./apps/admin/node_modules
 COPY --from=build-admin --chown=node:node /repo/apps/admin/.next ./apps/admin/.next
+COPY --from=build-admin --chown=node:node /repo/apps/admin/public ./apps/admin/public
 COPY --from=build-admin --chown=node:node /repo/apps/admin/package.json ./apps/admin/package.json
 COPY --from=build-admin --chown=node:node /repo/apps/admin/next.config.mjs ./apps/admin/next.config.mjs
 WORKDIR /repo/apps/admin

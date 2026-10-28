@@ -3854,6 +3854,96 @@ a {
   color: var(--ink);
 }
 
+/* 文件预览（Flyfish File Viewer）：全屏遮罩，画布吃满剩余高度。 */
+.fpv-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(20, 23, 26, 0.55);
+}
+
+.fpv-panel {
+  display: flex;
+  flex-direction: column;
+  width: min(1180px, 100%);
+  height: min(860px, 100%);
+  overflow: hidden;
+  background: #fff;
+  border-radius: 14px;
+  box-shadow: 0 24px 64px rgba(20, 23, 26, 0.32);
+}
+
+.fpv-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.fpv-name {
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fpv-actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 8px;
+}
+
+.fpv-btn {
+  padding: 4px 12px;
+  font-size: 13px;
+  color: var(--ink-2);
+  cursor: pointer;
+  background: var(--bg-deep);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+}
+
+.fpv-btn:hover {
+  color: var(--ink);
+  border-color: var(--mint-strong);
+}
+
+.fpv-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+.fpv-body > * {
+  width: 100%;
+  height: 100%;
+}
+
+.fpv-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  font-size: 14px;
+  color: var(--ink-3);
+}
+
+/* 附件 chip 变成可点击按钮后要去掉浏览器默认外观。 */
+button.wb-user-attachment {
+  font: inherit;
+  cursor: pointer;
+  background: inherit;
+  border: 0;
+}
+
 .wb-event-toggle {
   display: inline-flex;
   gap: 6px;

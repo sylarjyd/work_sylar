@@ -152,6 +152,7 @@ packages/web-core/
    ├─ antd.tsx                 # Ant Design 主题/别名（运营平台共用）
    ├─ chart.tsx                # EChart 组件（按需动态加载 echarts）+ ChartOption 类型
    ├─ chart-option.ts          # 纯函数：ChartSpec → ECharts option
+   ├─ file-preview.tsx         # Flyfish 文件预览弹窗（按需动态加载查看器，吃 Blob）
    ├─ globals.css              # 两端唯一的全局样式来源
    └─ *.test.ts
 ```
@@ -249,7 +250,11 @@ pnpm install                                   # 安装依赖（pnpm 10 需放�
 cp .env.example .env                           # 填 DEEPSEEK_API_KEY（缺省走 Mock）
 pnpm --filter @ai-office/bff db:up             # docker compose 起 Postgres + MinIO + Redis
 pnpm --filter @ai-office/bff db:push           # 同步表结构到数据库
+pnpm assets:viewer                             # 文件预览 Worker/WASM（约 190MB ×2，已 gitignore）
 ```
+
+> 不跑 `assets:viewer` 时页面功能正常，只是附件/成果预览会停在「预览组件加载中」或直接失败；
+> Docker 构建阶段会自动生成这份资源，无需在镜像里手工执行。
 
 ### 3.2 常用命令
 
@@ -263,6 +268,7 @@ pnpm --filter @ai-office/bff db:push           # 同步表结构到数据库
 | `pnpm --filter @ai-office/bff typecheck` | 仅 bff 类型检查 |
 | `pnpm --filter @ai-office/agent-runtime typecheck` | 仅 runtime 类型检查 |
 | `pnpm --filter @ai-office/bff db:up` / `db:push` / `db:generate` | 基础设施与 Prisma |
+| `pnpm assets:viewer` | 生成文件预览运行时资源（web/admin 各一份） |
 
 > **改 `.env` 后必须重启 bff 与 runtime**：两者仅在启动时加载一次根 `.env`（`process.loadEnvFile`）。
 
@@ -392,6 +398,18 @@ runtime ──▶ shared, telemetry
 > 回看链路：运行结束后 tracker 条目会被清掉，工作台用 `GET /api/sessions/:id/charts`
 > 把最近 50 个 `chart` step 还原成图表区（`SessionsService.charts` 会再过一遍
 > `normalizeChartSpec`，脏 payload 直接跳过）；成果栏的「图表」分组复用同一份数据。
+
+### 5.6 文件预览（Flyfish File Viewer）
+
+预览统一走 `@ai-office/web-core/file-preview` 的 `FilePreviewDialog`：
+
+1. 按需 `import('@file-viewer/react-full')`，查看器（含 Worker/WASM 引用）不进首屏；
+2. 文件字节由带鉴权的接口取成 Blob（web：`/api/attachments/:id/content`、`/api/artifacts/:id/download`；admin：`/api/admin/attachments/:id/content`），不要把 JWT 拼进 URL 交给 iframe；
+3. 弹窗保留「下载」兜底，查看器加载失败也能拿到原文件；
+4. 新增入口（新的附件/成果列表）只调 `FilePreviewDialog`，不要再引第二个查看器。
+
+运行时资源：`pnpm assets:viewer` → `apps/{web,admin}/public/file-viewer`（已 gitignore）。升级
+`@file-viewer/*` 版本后必须重跑，Worker/WASM 与 JS 版本不一致时预览会失败。
 
 ---
 

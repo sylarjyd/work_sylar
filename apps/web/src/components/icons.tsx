@@ -46,6 +46,15 @@ export function IconChart(props: IconProps) {
   );
 }
 
+export function IconEye(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M2.5 12S6 6.5 12 6.5 21.5 12 21.5 12 18 17.5 12 17.5 2.5 12 2.5 12z" />
+      <circle cx="12" cy="12" r="2.6" />
+    </Svg>
+  );
+}
+
 export function IconChat(props: IconProps) {
   return (
     <Svg {...props}>

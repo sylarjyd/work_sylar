@@ -155,6 +155,22 @@ export class AttachmentsService {
   }
 
   /**
+   * 运营端预览：管理员需要跨租户查看用户提交的附件，这里不做 tenant/user 过滤。
+   * 仅由 AdminGuard 保护的路由调用；审计由调用方写入。
+   */
+  async getContentForAdmin(
+    id: string,
+  ): Promise<{ buffer: Buffer; mime: string; filename: string; storageKey: string }> {
+    const row = await this.prisma.attachment.findFirst({
+      where: { id },
+      select: { storageKey: true, mime: true, filename: true },
+    });
+    if (!row) throw new NotFoundException('attachment_not_found');
+    const buffer = await this.storage.getObjectBuffer(row.storageKey);
+    return { buffer, mime: row.mime, filename: row.filename, storageKey: row.storageKey };
+  }
+
+  /**
    * 把已绑定消息的附件按预算补上 base64 内容。
    * 预算从最新消息倒序分配；最新消息必须完整可用，历史附件超出预算时仅保留元数据，
    * runtime 会以「附件未随本次运行发送」的文本提示模型，不会静默丢上下文。

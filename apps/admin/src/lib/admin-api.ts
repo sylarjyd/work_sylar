@@ -252,6 +252,17 @@ export function archiveAdminSession(id: string): Promise<AdminSessionItemDto> {
   });
 }
 
+/**
+ * 运营端附件预览：按 id 取原始字节交给文件查看器。
+ * 走 Blob 而不是直链，是因为接口要求 Authorization 头，且附件按 id 全局可读必须留在管理员会话内。
+ */
+export async function fetchAdminAttachmentBlob(id: string): Promise<Blob> {
+  const res = await authFetch(`/api/admin/attachments/${encodeURIComponent(id)}/content`);
+  if (res.status === 403) throw new Error('forbidden');
+  if (!res.ok) throw new Error(`admin_failed_${res.status}`);
+  return res.blob();
+}
+
 // ------------------------------------------------------------------ 任务 / 运行
 export function listAdminTasks(
   params: { tenantId?: string; sessionId?: string; userId?: string; status?: string; page?: number; pageSize?: number },

@@ -22,3 +22,6 @@ docs
 .env
 .env.*
 .env.docker
+# 文件预览资源在镜像内生成，避免每次构建上传 ~190MB/端 的静态资源。
+apps/web/public/file-viewer
+apps/admin/public/file-viewer

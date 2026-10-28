@@ -18,3 +18,6 @@ dist/
 /.run/
 /.tmp-test/
 *.vitest-report.json
+# Flyfish File Viewer 运行时资源（约 190MB/端），由 assets:viewer 生成，不入库。
+/apps/web/public/file-viewer/
+/apps/admin/public/file-viewer/

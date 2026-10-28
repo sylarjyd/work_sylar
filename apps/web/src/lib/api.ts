@@ -207,6 +207,20 @@ export async function listArtifacts(sessionId: string): Promise<ArtifactDto[]> {
   return (await res.json()) as ArtifactDto[];
 }
 
+/** 预览用：把产物下载接口读成 Blob，再交给文件查看器（JWT 不暴露给 iframe URL）。 */
+export async function fetchArtifactBlob(id: string): Promise<Blob> {
+  const res = await authFetch(`/api/artifacts/${encodeURIComponent(id)}/download`);
+  if (!res.ok) throw new Error(`artifact_preview_failed_${res.status}`);
+  return res.blob();
+}
+
+/** 预览用：读取附件原始字节（图片 / PDF / Office / 音视频）。 */
+export async function fetchAttachmentBlob(id: string): Promise<Blob> {
+  const res = await authFetch(`/api/attachments/${encodeURIComponent(id)}/content`);
+  if (!res.ok) throw new Error(`attachment_preview_failed_${res.status}`);
+  return res.blob();
+}
+
 /** 取消运行：排队中的直接撤销，执行中的交由控制总线通知；终态 run 幂等返回当前状态。 */
 export async function cancelRun(runId: string): Promise<{ status: string }> {
   // authFetch 固定带 JSON content-type，空体 POST 会被 Fastify 以 400 拒绝，必须补空对象。

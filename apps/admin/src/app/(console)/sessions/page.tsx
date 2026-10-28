@@ -21,12 +21,14 @@ import type { AdminMessageDto, AdminSessionDetailDto, AdminSessionItemDto } from
 import {
   adminErrorText,
   archiveAdminSession,
+  fetchAdminAttachmentBlob,
   getAdminSession,
   isForbidden,
   listAdminMessages,
   listAdminSessions,
 } from '../../../lib/admin-api';
 import { clearToken, isUnauthorized } from '@ai-office/web-core';
+import { FilePreviewDialog, type PreviewTarget } from '@ai-office/web-core/file-preview';
 
 const PAGE_SIZE = 20;
 const MESSAGE_PAGE_SIZE = 50;
@@ -60,6 +62,9 @@ export default function AdminSessionsPage() {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [loading, setLoading] = useState(true);
+  // 附件在线预览：Blob 由管理员会话取回，查看器不接触 JWT。
+  const [preview, setPreview] = useState<PreviewTarget | null>(null);
+  const [previewingId, setPreviewingId] = useState('');
 
   const handleErr = useCallback(
     (err: unknown): boolean => {
@@ -254,6 +259,19 @@ export default function AdminSessionsPage() {
     },
   ];
 
+  async function openAttachment(id: string, filename: string) {
+    if (previewingId) return;
+    setPreviewingId(id);
+    try {
+      const blob = await fetchAdminAttachmentBlob(id);
+      setPreview({ blob, name: filename });
+    } catch (err) {
+      handleErr(err);
+    } finally {
+      setPreviewingId('');
+    }
+  }
+
   const messageColumns: TableColumnsType<AdminMessageDto> = [
     { title: 'seq', dataIndex: 'seq', width: 70, align: 'right' },
     { title: '角色', dataIndex: 'role', width: 100 },
@@ -263,6 +281,28 @@ export default function AdminSessionsPage() {
       render: (v: string) => (
         <Typography.Text style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{v}</Typography.Text>
       ),
+    },
+    {
+      title: '附件',
+      key: 'attachments',
+      width: 220,
+      render: (_: unknown, m) =>
+        m.attachments.length === 0 ? (
+          <Typography.Text type="secondary">-</Typography.Text>
+        ) : (
+          <Space direction="vertical" size={4}>
+            {m.attachments.map((a) => (
+              <Button
+                key={a.id}
+                size="small"
+                loading={previewingId === a.id}
+                onClick={() => void openAttachment(a.id, a.filename)}
+              >
+                {a.filename}
+              </Button>
+            ))}
+          </Space>
+        ),
     },
     {
       title: '时间',
@@ -396,6 +436,12 @@ export default function AdminSessionsPage() {
           </Space>
         ) : null}
       </Drawer>
+
+      <FilePreviewDialog
+        open={preview !== null}
+        target={preview}
+        onClose={() => setPreview(null)}
+      />
     </Space>
   );
 }
