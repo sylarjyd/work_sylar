@@ -84,8 +84,8 @@ function actionErrorText(err: unknown, fallback: string): string {
 const NAV: { key: ActiveNav; href: string; label: string; icon: ReactNode }[] = [
   { key: 'workbench', href: '/', label: '工作台', icon: <MessageOutlined /> },
   { key: 'assistants', href: '/assistants', label: '专家助手', icon: <RobotOutlined /> },
-  { key: 'kb', href: '/kb', label: '知识库', icon: <BookOutlined /> },
   { key: 'skills', href: '/skills', label: '技能市场', icon: <BulbOutlined /> },
+  { key: 'kb', href: '/kb', label: '知识库', icon: <BookOutlined /> },
   { key: 'connectors', href: '/connectors', label: '连接器', icon: <ApiOutlined /> },
   { key: 'billing', href: '/billing', label: '套餐订阅', icon: <WalletOutlined /> },
 ];
