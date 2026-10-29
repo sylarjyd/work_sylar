@@ -2590,11 +2590,10 @@ a {
   min-height: 0;
 }
 
-/* 极矮视口下让导航自身滚动，避免把底部账号区顶出可视区。 */
+/* 导航固定按内容高度占位：菜单项永远完整可见，剩余空间交给「最近会话」内部滚动。 */
 .wb-nav-menu {
-  flex: 0 1 auto;
-  min-height: 0;
-  overflow-y: auto;
+  flex: 0 0 auto;
+  overflow: visible;
 }
 
 .wb-side-head,
