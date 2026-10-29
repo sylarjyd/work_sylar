@@ -4125,8 +4125,8 @@ button.wb-user-attachment {
 
 /* 任务分类 tab：贴在输入框上方，选中态用薄荷色下划线呼应品牌色。 */
 .wb-mode-tabs {
-  margin: 0 0 8px;
-  padding: 0 4px;
+  margin: 0 0 14px;
+  padding: 0 6px;
 }
 
 .wb-mode-tabs .ant-tabs-nav {
@@ -4346,15 +4346,24 @@ button.wb-user-attachment {
 
 /* 输入区靠柔和投影分层，不画描边；聚焦时只加深投影，避免出现一圈深色线条。 */
 .wb-composer {
-  padding: 12px 14px 10px;
+  padding: 14px 16px 12px;
   background: #fff;
-  border-radius: 24px;
-  box-shadow: 0 14px 30px -10px rgba(0, 0, 0, 0.09), 0 2px 6px -3px rgba(0, 0, 0, 0.06);
-  transition: box-shadow 0.15s;
+  border: 1px solid var(--wb-line);
+  border-radius: 18px;
+  box-shadow: 0 10px 24px -14px rgba(0, 0, 0, 0.18), 0 1px 2px rgba(0, 0, 0, 0.04);
+  transition: border-color 0.15s, box-shadow 0.15s;
 }
 
 .wb-composer:focus-within {
-  box-shadow: 0 18px 38px -12px rgba(0, 0, 0, 0.13), 0 2px 6px -3px rgba(0, 0, 0, 0.08);
+  border-color: rgba(0, 176, 123, 0.55);
+  box-shadow: 0 0 0 3px rgba(0, 176, 123, 0.1), 0 12px 28px -16px rgba(0, 0, 0, 0.2);
+}
+
+/* 拖拽悬停：整卡高亮，提示松手即可上传。 */
+.wb-composer-wrap.dragging .wb-composer {
+  border-color: #00b07b;
+  border-style: dashed;
+  background: #f4fbf8;
 }
 
 .wb-composer-model {
@@ -4397,11 +4406,11 @@ button.wb-user-attachment {
 
 .wb-composer textarea {
   width: 100%;
-  min-height: 64px;
-  max-height: 200px;
-  padding: 2px;
+  min-height: 72px;
+  max-height: 220px;
+  padding: 4px 2px;
   font-size: 15px;
-  line-height: 1.6;
+  line-height: 1.65;
   color: var(--wb-ink);
   resize: none;
   background: transparent;
@@ -4417,7 +4426,9 @@ button.wb-user-attachment {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-top: 6px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--wb-line);
 }
 
 .wb-composer-hint {
@@ -4436,7 +4447,7 @@ button.wb-user-attachment {
   width: 34px;
   height: 34px;
   color: #fff;
-  background: #1a1a1a;
+  background: #00a874;
   border: 0;
   border-radius: 50%;
   cursor: pointer;
@@ -4444,7 +4455,7 @@ button.wb-user-attachment {
 }
 
 .wb-send:hover:not(:disabled) {
-  background: #333;
+  background: #009668;
 }
 
 .wb-send:active:not(:disabled) {
