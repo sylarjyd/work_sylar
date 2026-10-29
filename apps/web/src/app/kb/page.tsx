@@ -230,7 +230,7 @@ export default function KbPage() {
     if (inFlight.current) return;
     modal.confirm({
       title: '删除知识库',
-      content: `确认删除「${base.name}」及其 ${base.docCount} 篇文档？此操作不可恢复，相关助手将不再检索该库。`,
+      content: `确认删除「${base.name}」及其 ${base.docCount} 篇文档？此操作不可恢复，相关专家助手将不再检索该库。`,
       okText: '删除',
       okType: 'danger',
       cancelText: '取消',
@@ -378,7 +378,7 @@ export default function KbPage() {
             <div>
               <h1 className="page-title">知识库</h1>
               <p className="page-sub">
-                按主题建立多个知识库；助手绑定知识库后，回答时会自动检索并引用来源。
+                按主题建立多个知识库；专家助手绑定知识库后，回答时会自动检索并引用来源。
               </p>
             </div>
             <div className="page-head-actions">

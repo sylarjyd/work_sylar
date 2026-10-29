@@ -1438,10 +1438,10 @@ export default function Home() {
               value={selectedAssistantId}
               onChange={(e) => handleAssistantChange(e.target.value)}
               disabled={running}
-              aria-label="选择助手"
-              title="选择本次任务使用的助手"
+              aria-label="选择专家助手"
+              title="选择本次任务使用的专家助手"
             >
-              <option value="">默认助手</option>
+              <option value="">默认专家助手</option>
               {assistants.map((a) => (
                 <option key={a.id} value={a.id}>
                   {a.name}
@@ -1595,7 +1595,7 @@ export default function Home() {
         <span className="wb-topbar-title">
           {current?.title ?? '新任务'}
           {current?.assistantName && (
-            <span className="wb-assistant-badge">助手：{current.assistantName}</span>
+            <span className="wb-assistant-badge">专家助手：{current.assistantName}</span>
           )}
         </span>
         <div className="wb-topbar-actions">

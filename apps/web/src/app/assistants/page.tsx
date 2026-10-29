@@ -150,7 +150,7 @@ export default function AssistantsPage() {
     setError('');
     const name = form.name.trim();
     if (!name) {
-      setError('助手名称不能为空');
+      setError('专家助手名称不能为空');
       return;
     }
     const payload: AssistantInput = {
@@ -163,7 +163,7 @@ export default function AssistantsPage() {
       skillIds: form.skillIds,
       kbIds: form.kbIds,
     };
-    const verb = editing ? '保存修改' : '创建助手';
+    const verb = editing ? '保存修改' : '创建专家助手';
     modal.confirm({
       title: verb,
       content: `确认${verb}「${name}」？`,
@@ -195,8 +195,8 @@ export default function AssistantsPage() {
   function remove(a: AssistantDto) {
     if (inFlight.current) return;
     modal.confirm({
-      title: '删除助手',
-      content: `确认删除助手「${a.name}」？已创建的历史任务会退化为默认助手。`,
+      title: '删除专家助手',
+      content: `确认删除专家助手「${a.name}」？已创建的历史任务会退化为默认专家助手。`,
       okText: '删除',
       okType: 'danger',
       cancelText: '取消',
@@ -239,14 +239,14 @@ export default function AssistantsPage() {
         <div className="page">
           <header className="page-head">
             <div>
-              <h1 className="page-title">我的助手</h1>
+              <h1 className="page-title">我的专家助手</h1>
               <p className="page-sub">
-                创建专属助手：设定系统提示词、技能、权限模式、默认模型与可检索的知识库范围。
+                创建专属专家助手：设定系统提示词、技能、权限模式、默认模型与可检索的知识库范围。
               </p>
             </div>
             <div className="page-head-actions">
               <Button type="primary" icon={<PlusOutlined />} disabled={busy} onClick={resetForm}>
-                新建助手
+                新建专家助手
               </Button>
             </div>
           </header>
@@ -264,7 +264,7 @@ export default function AssistantsPage() {
 
           <Card
             size="small"
-            title={editing ? `编辑 ${form.name}` : '新建助手'}
+            title={editing ? `编辑 ${form.name}` : '新建专家助手'}
             style={{ marginBottom: 16 }}
           >
             <Row gutter={[16, 0]}>
@@ -275,7 +275,7 @@ export default function AssistantsPage() {
                     value={form.name}
                     maxLength={40}
                     disabled={busy}
-                    placeholder="如：合同审阅助手"
+                    placeholder="如：合同审阅专家"
                     onChange={(e) => setForm({ ...form, name: e.target.value })}
                   />
                 </div>
@@ -287,7 +287,7 @@ export default function AssistantsPage() {
                     value={form.description}
                     maxLength={200}
                     disabled={busy}
-                    placeholder="一句话说明这个助手擅长什么"
+                    placeholder="一句话说明这个专家助手擅长什么"
                     onChange={(e) => setForm({ ...form, description: e.target.value })}
                   />
                 </div>
@@ -429,7 +429,7 @@ export default function AssistantsPage() {
                     showCount
                     value={form.systemPrompt}
                     disabled={busy}
-                    placeholder="描述助手的角色、目标、工作方式与输出要求。例如：你是资深合同审阅助手，逐条指出风险条款并给出修改建议…"
+                    placeholder="描述专家助手的角色、目标、工作方式与输出要求。例如：你是资深合同审阅助手，逐条指出风险条款并给出修改建议…"
                     onChange={(e) => setForm({ ...form, systemPrompt: e.target.value })}
                   />
                 </div>
@@ -438,7 +438,7 @@ export default function AssistantsPage() {
               <Col span={24}>
                 <Space>
                   <Button type="primary" loading={busy} onClick={save}>
-                    {editing ? '保存' : '创建助手'}
+                    {editing ? '保存' : '创建专家助手'}
                   </Button>
                   {editing ? (
                     <Button disabled={busy} onClick={resetForm}>
@@ -452,7 +452,7 @@ export default function AssistantsPage() {
 
           <Card
             size="small"
-            title="全部助手"
+            title="全部专家助手"
             extra={
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                 共 {assistants.length} 个
@@ -465,15 +465,15 @@ export default function AssistantsPage() {
                 image={Empty.PRESENTED_IMAGE_SIMPLE}
                 description={
                   <Space direction="vertical" size={2}>
-                    <Typography.Text>还没有自定义助手</Typography.Text>
+                    <Typography.Text>还没有自定义专家助手</Typography.Text>
                     <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                      新建助手后，可在工作台新建任务时选择它。
+                      新建专家助手后，可在工作台新建任务时选择它。
                     </Typography.Text>
                   </Space>
                 }
               >
                 <Button type="primary" icon={<PlusOutlined />} onClick={resetForm}>
-                  新建助手
+                  新建专家助手
                 </Button>
               </Empty>
             ) : (

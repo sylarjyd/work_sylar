@@ -238,7 +238,7 @@ export default function SkillsPage() {
     if (inFlight.current) return;
     modal.confirm({
       title: '共享为公共技能',
-      content: `共享后「${item.name}」将出现在技能市场，所有用户可见并可在助手中绑定；之后由运营端维护，你将不能再编辑它。`,
+      content: `共享后「${item.name}」将出现在技能市场，所有用户可见并可在专家助手中绑定；之后由运营端维护，你将不能再编辑它。`,
       okText: '共享',
       cancelText: '取消',
       onOk: async () => {
@@ -262,7 +262,7 @@ export default function SkillsPage() {
     if (inFlight.current) return;
     modal.confirm({
       title: '确认删除技能',
-      content: `确认删除「${item.name}」？已绑定该技能的助手将不再注入其内容。`,
+      content: `确认删除「${item.name}」？已绑定该技能的专家助手将不再注入其内容。`,
       okText: '删除',
       okType: 'danger',
       cancelText: '取消',
@@ -298,7 +298,7 @@ export default function SkillsPage() {
                 技能市场
               </Typography.Title>
               <Typography.Text type="secondary">
-                把一套做法沉淀成技能：SKILL.md 写清适用场景与步骤，还可以附带脚本、模板等文件。绑定到助手后会在执行任务时自动注入。
+                把一套做法沉淀成技能：SKILL.md 写清适用场景与步骤，还可以附带脚本、模板等文件。绑定到专家助手后会在执行任务时自动注入。
               </Typography.Text>
             </div>
             <Space wrap>
