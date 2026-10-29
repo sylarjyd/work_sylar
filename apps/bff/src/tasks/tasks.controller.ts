@@ -178,10 +178,12 @@ export class TasksController {
       traceId,
       // 分类随每次运行固化：排队期间会话配置不再变化，但快照仍要自包含。
       mode: session.mode,
-      // 会话级连接器随运行固化：空数组表示使用账号下全部已启用连接器。
-      ...((session.connectorIds ?? []).length > 0
+      // 连接器优先级：会话明确选择 > 助手绑定 > 不限制（账号下全部已启用）。
+      ...(session.connectorIds.length > 0
         ? { connectorIds: session.connectorIds }
-        : {}),
+        : (assistant?.connectorIds ?? []).length > 0
+          ? { connectorIds: assistant!.connectorIds }
+          : {}),
       assistant: runAssistant,
       messages: [],
     };

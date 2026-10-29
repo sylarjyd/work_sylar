@@ -87,6 +87,7 @@ CREATE TABLE "Assistant" (
     "model" TEXT,
     "skills" TEXT[] DEFAULT ARRAY[]::TEXT[],
     "skillIds" TEXT[] DEFAULT ARRAY[]::TEXT[],
+    "connectorIds" TEXT[] DEFAULT ARRAY[]::TEXT[],
     "kbIds" TEXT[] DEFAULT ARRAY[]::TEXT[],
     "kbDocIds" TEXT[] DEFAULT ARRAY[]::TEXT[],
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -792,6 +793,7 @@ COMMENT ON COLUMN "Assistant"."permissionMode" IS '权限模式：standard（标
 COMMENT ON COLUMN "Assistant"."model" IS '默认模型名；为空时使用运营端默认模型';
 COMMENT ON COLUMN "Assistant"."skills" IS '启用的技能键列表';
 COMMENT ON COLUMN "Assistant"."skillIds" IS '绑定的技能市场技能 ID 列表；运行期拼接对应技能正文';
+COMMENT ON COLUMN "Assistant"."connectorIds" IS '绑定的连接器 ID 列表；运行期只挂这些 MCP 连接器，为空表示不限制';
 COMMENT ON COLUMN "Assistant"."kbIds" IS '绑定的知识库 ID 列表';
 COMMENT ON COLUMN "Assistant"."kbDocIds" IS '已废弃：旧文档级绑定，迁移到 kbIds 后置空';
 COMMENT ON COLUMN "Assistant"."createdAt" IS '创建时间';

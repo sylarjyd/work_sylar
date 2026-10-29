@@ -37,6 +37,8 @@ export interface SessionAssistantRef {
   skills: AssistantSkillKey[];
   /** 绑定的技能市场技能 ID；运行前解析成正文并在入队时固化。 */
   skillIds: string[];
+  /** 助手绑定的连接器；会话未单独选择时以此为准。 */
+  connectorIds: string[];
   kbIds: string[];
 }
 
@@ -63,6 +65,7 @@ interface AssistantRow {
   model?: string | null;
   skills: string[];
   skillIds?: string[];
+  connectorIds?: string[];
   kbIds: string[];
 }
 
@@ -196,6 +199,7 @@ export class SessionsService {
           model: true,
           skills: true,
           skillIds: true,
+          connectorIds: true,
           kbIds: true,
         },
       });
@@ -284,6 +288,7 @@ export class SessionsService {
             permissionMode: true,
             skills: true,
             skillIds: true,
+            connectorIds: true,
             kbIds: true,
           },
         },
@@ -408,6 +413,7 @@ function toAssistantRef(row: AssistantRow): SessionAssistantRef {
       : 'standard',
     skills: normalizeSkills(row.skills),
     skillIds: row.skillIds ?? [],
+    connectorIds: row.connectorIds ?? [],
     kbIds: row.kbIds ?? [],
   };
 }

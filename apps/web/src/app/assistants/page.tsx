@@ -29,6 +29,7 @@ import {
   type AssistantInput,
   type AssistantPermissionMode,
   type ClientModelDto,
+  type ConnectorDto,
   type KbBaseDto,
   type SkillDto,
 } from '@ai-office/shared';
@@ -41,6 +42,7 @@ import {
   listAssistants,
   listKbBases,
   listModels,
+  listConnectors,
   listSkills,
   updateAssistant,
 } from '../../lib/api';
@@ -55,6 +57,8 @@ interface FormState {
   skills: string[];
   /** 绑定的技能市场技能（公共或自己的个人技能）。 */
   skillIds: string[];
+  /** 绑定的连接器；运行期只挂这些 MCP 连接器。 */
+  connectorIds: string[];
   kbIds: string[];
 }
 
@@ -66,6 +70,7 @@ const EMPTY: FormState = {
   model: '',
   skills: ASSISTANT_SKILLS.map((s) => s.key),
   skillIds: [],
+  connectorIds: [],
   kbIds: [],
 };
 
@@ -77,6 +82,8 @@ export default function AssistantsPage() {
   const [bases, setBases] = useState<KbBaseDto[]>([]);
   // 可绑定的技能：公共技能 + 自己的个人技能（接口已按可见性过滤）。
   const [skillCatalog, setSkillCatalog] = useState<SkillDto[]>([]);
+  // 可绑定的连接器：账号下已启用的 MCP 连接器。
+  const [connectorCatalog, setConnectorCatalog] = useState<ConnectorDto[]>([]);
   const [form, setForm] = useState<FormState>(EMPTY);
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
@@ -99,16 +106,18 @@ export default function AssistantsPage() {
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const [rows, modelData, kbBases, skills] = await Promise.all([
+      const [rows, modelData, kbBases, skills, connectors] = await Promise.all([
         listAssistants(),
         listModels(),
         listKbBases(),
         listSkills(),
+        listConnectors(),
       ]);
       setAssistants(rows);
       setModels(modelData.models);
       setBases(kbBases);
       setSkillCatalog(skills.items);
+      setConnectorCatalog(connectors);
     } catch (err) {
       handleErr(err);
     } finally {
@@ -151,6 +160,10 @@ export default function AssistantsPage() {
       skills: a.skills,
       // 已下架/已删除的技能不保留绑定，避免保存时被服务端整单拒绝。
       skillIds: a.skillIds.filter((id) => skillCatalog.some((s) => s.id === id)),
+      // 已删除的连接器同理，避免保存时被服务端拒绝。
+      connectorIds: (a.connectorIds ?? []).filter((id) =>
+        connectorCatalog.some((c) => c.id === id),
+      ),
       // 服务端可能返回已删除知识库的残留 id：只保留当前仍存在的库，避免无意义绑定。
       kbIds: a.kbIds.filter((id) => bases.some((b) => b.id === id)),
     });
@@ -173,6 +186,7 @@ export default function AssistantsPage() {
       model: form.model || null,
       skills: form.skills,
       skillIds: form.skillIds,
+      connectorIds: form.connectorIds,
       kbIds: form.kbIds,
     };
     const verb = editing ? '保存修改' : '创建专家助手';
@@ -416,7 +430,7 @@ export default function AssistantsPage() {
                 </div>
               </Col>
 
-              <Col span={24}>
+              <Col xs={24} md={12}>
                 <div className="admin-field">
                   <Typography.Text>绑定技能</Typography.Text>
                   <Typography.Text type="secondary" style={{ fontSize: 12 }}>
@@ -437,6 +451,33 @@ export default function AssistantsPage() {
                     options={skillCatalog.map((s) => ({
                       value: s.id,
                       label: s.scope === 'public' ? `${s.name}（公共）` : s.name,
+                    }))}
+                    optionFilterProp="label"
+                  />
+                </div>
+              </Col>
+
+              <Col xs={24} md={12}>
+                <div className="admin-field">
+                  <Typography.Text>连接器</Typography.Text>
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    只启用所选 MCP 连接器；不选时沿用会话/账号下已启用的连接器。
+                  </Typography.Text>
+                  <Select
+                    mode="multiple"
+                    style={{ width: '100%' }}
+                    allowClear
+                    disabled={busy}
+                    value={form.connectorIds}
+                    placeholder={
+                      connectorCatalog.length === 0
+                        ? '还没有启用的连接器，可先到「连接器」页添加'
+                        : '选择要启用的连接器'
+                    }
+                    onChange={(value: string[]) => setForm({ ...form, connectorIds: value })}
+                    options={connectorCatalog.map((c) => ({
+                      value: c.id,
+                      label: c.name,
                     }))}
                     optionFilterProp="label"
                   />

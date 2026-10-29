@@ -82,6 +82,8 @@ model Assistant {
   skills         String[] @default([])
   /// 技能市场里绑定的技能 id：个人技能或公共技能，运行期拼接进系统提示词。
   skillIds       String[] @default([])
+  /// 助手绑定的连接器 id：运行期只挂这些 MCP 连接器；为空表示不限制（沿用会话/账号默认）。
+  connectorIds   String[] @default([])
   kbIds          String[] @default([])
   /// @deprecated 旧文档级绑定：由 backfill-kb.mjs 转换到 kbIds 并清空，下一版删除该列。
   kbDocIds       String[] @default([])

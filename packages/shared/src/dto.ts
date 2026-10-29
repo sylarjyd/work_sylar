@@ -519,6 +519,8 @@ export interface AssistantDto {
   skills: AssistantSkillKey[];
   /** 绑定的技能市场技能 ID（公共技能或自己的个人技能）。 */
   skillIds: string[];
+  /** 绑定的连接器 ID；空数组表示不限制（沿用会话/账号默认）。 */
+  connectorIds: string[];
   /** 绑定知识库 ID；空数组表示检索全部知识库。 */
   kbIds: string[];
   createdAt: string;
@@ -533,6 +535,7 @@ export interface AssistantInput {
   model?: string | null;
   skills?: string[];
   skillIds?: string[];
+  connectorIds?: string[];
   kbIds?: string[];
 }
 

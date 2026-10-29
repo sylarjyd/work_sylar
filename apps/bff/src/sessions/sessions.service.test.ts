@@ -444,6 +444,7 @@ describe('SessionsService 选模', () => {
         permissionMode: 'readonly',
         skills: ['web', 'kb'],
         skillIds: ['k1'],
+        connectorIds: [],
         kbIds: ['b1'],
       },
     });

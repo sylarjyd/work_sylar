@@ -21,6 +21,7 @@ const MAX_DESCRIPTION = 200;
 const MAX_SYSTEM_PROMPT = 8000;
 const MAX_KB_BASES = 100;
 const MAX_SKILL_BINDINGS = 20;
+const MAX_CONNECTOR_BINDINGS = 20;
 
 interface AssistantRow {
   id: string;
@@ -32,6 +33,7 @@ interface AssistantRow {
   model: string | null;
   skills: string[];
   skillIds: string[];
+  connectorIds?: string[];
   kbIds: string[];
   createdAt: Date;
   updatedAt: Date;
@@ -63,6 +65,7 @@ export class AssistantsService {
     const model = parseModel(input?.model === undefined ? null : input.model);
     const skills = parseSkills(input?.skills ?? []);
     const skillIds = await this.parseSkillIds(input?.skillIds ?? [], tenantId, userId);
+    const connectorIds = await this.parseConnectorIds(input?.connectorIds ?? [], tenantId);
     const kbIds = await this.parseKbIds(input?.kbIds ?? [], tenantId, userId);
 
     try {
@@ -77,6 +80,7 @@ export class AssistantsService {
           model,
           skills,
           skillIds,
+          connectorIds,
           kbIds,
         },
       });
@@ -101,6 +105,7 @@ export class AssistantsService {
       model?: string | null;
       skills?: AssistantSkillKey[];
       skillIds?: string[];
+      connectorIds?: string[];
       kbIds?: string[];
     } = {};
     if (patch && Object.hasOwn(patch, 'name')) data.name = parseName(patch.name);
@@ -117,6 +122,9 @@ export class AssistantsService {
     if (patch && Object.hasOwn(patch, 'skills')) data.skills = parseSkills(patch.skills ?? []);
     if (patch && Object.hasOwn(patch, 'skillIds')) {
       data.skillIds = await this.parseSkillIds(patch.skillIds ?? [], tenantId, userId);
+    }
+    if (patch && Object.hasOwn(patch, 'connectorIds')) {
+      data.connectorIds = await this.parseConnectorIds(patch.connectorIds ?? [], tenantId);
     }
     if (patch && Object.hasOwn(patch, 'kbIds')) {
       data.kbIds = await this.parseKbIds(patch.kbIds ?? [], tenantId, userId);
@@ -194,6 +202,25 @@ export class AssistantsService {
     if (count !== ids.length) throw new BadRequestException('invalid_skill_ids');
     return ids;
   }
+
+  /** 连接器必须属于本租户；跨租户 id 一律拒绝，不泄露存在性。 */
+  private async parseConnectorIds(raw: unknown, tenantId: string): Promise<string[]> {
+    if (!Array.isArray(raw) || raw.length > MAX_CONNECTOR_BINDINGS) {
+      throw new BadRequestException('invalid_connector_ids');
+    }
+    const ids: string[] = [];
+    for (const item of raw) {
+      if (typeof item !== 'string' || item.trim() === '') {
+        throw new BadRequestException('invalid_connector_ids');
+      }
+      const id = item.trim();
+      if (!ids.includes(id)) ids.push(id);
+    }
+    if (ids.length === 0) return [];
+    const count = await this.prisma.connector.count({ where: { id: { in: ids }, tenantId } });
+    if (count !== ids.length) throw new BadRequestException('invalid_connector_ids');
+    return ids;
+  }
 }
 
 function parseName(raw: unknown): string {
@@ -264,6 +291,7 @@ function toDto(row: AssistantRow): AssistantDto {
     model: row.model ?? null,
     skills: normalizeSkills(row.skills),
     skillIds: row.skillIds ?? [],
+    connectorIds: row.connectorIds ?? [],
     kbIds: row.kbIds ?? [],
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
