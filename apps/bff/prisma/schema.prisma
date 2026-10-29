@@ -49,6 +49,10 @@ model Session {
   assistantId String?
   // 任务分类：chat 对话 | task 任务 | code 编码；会话创建后固定，运行期影响提示词取向。
   mode      String   @default("chat")
+  /// 本次会话额外启用的技能（与助手绑定技能合并）；仅存已校验可见的技能 id。
+  skillIds  String[] @default([])
+  /// 本次会话启用的连接器；为空表示使用账号下全部已启用连接器。
+  connectorIds String[] @default([])
   createdAt DateTime @default(now())
   tenant    Tenant    @relation(fields: [tenantId], references: [id])
   user      User      @relation(fields: [userId], references: [id])

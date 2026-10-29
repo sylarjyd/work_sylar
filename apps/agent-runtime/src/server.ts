@@ -269,7 +269,11 @@ export function createRuntimeServer(deps: RuntimeDeps = {}): Server {
                       ? [createSkillReadTool(runReq.skills)]
                       : [];
                   const runTools = extraTools
-                    ? [...enabledBase, ...skillTools, ...(await extraTools(runReq.tenantId))]
+                    ? [
+                        ...enabledBase,
+                        ...skillTools,
+                        ...(await extraTools(runReq.tenantId, runReq.connectorIds)),
+                      ]
                     : [...enabledBase, ...skillTools];
                   const config = resolveRunConfig(runReq.config, process.env);
                   // 本次运行优先使用 BFF 下发的厂商路由；缺省沿用启动网关。
@@ -784,16 +788,21 @@ export function filterTools(tools: Tool[], enabled?: string[]): Tool[] {
 }
 
 /** 默认追加工具：拉启用连接器 → 构建 MCP 工具；BFF 不可达时降级为空。 */
-function defaultExtraTools(host: McpHost): (tenantId: string) => Promise<Tool[]> {
-  return async (tenantId: string): Promise<Tool[]> => {
+function defaultExtraTools(
+  host: McpHost,
+): (tenantId: string, connectorIds?: string[]) => Promise<Tool[]> {
+  return async (tenantId: string, connectorIds?: string[]): Promise<Tool[]> => {
     try {
-      const connectors = await fetchConnectors(
+      const all = await fetchConnectors(
         {
           baseUrl: process.env.BFF_INTERNAL_URL ?? 'http://localhost:4000',
           internalToken: process.env.INTERNAL_TOKEN,
         },
         tenantId,
       );
+      // 会话选了连接器就只挂这些，否则用账号下全部已启用连接器。
+      const wanted = connectorIds && connectorIds.length > 0 ? new Set(connectorIds) : null;
+      const connectors = wanted ? all.filter((c) => wanted.has(c.id)) : all;
       // 只回收本租户的进程：池按 (tenantId, name) 隔离，避免一个租户的 run
       // 关闭其他租户正在使用的 MCP 子进程。
       await host.retain(tenantId, new Set(connectors.filter((c) => c.enabled).map((c) => c.name)));

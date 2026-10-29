@@ -813,6 +813,7 @@ export class RunExecutor {
           // 续跑指令由断点还原；runtime 会从该 round/seq 继续并把断点用量并入结算。
           ...(resume ? { resume } : {}),
           ...(snapshot.mode ? { mode: snapshot.mode } : {}),
+          ...(snapshot.connectorIds ? { connectorIds: snapshot.connectorIds } : {}),
           ...(systemPrompt ? { systemPrompt } : {}),
           ...(snapshot.assistant
             ? {

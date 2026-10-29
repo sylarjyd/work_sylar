@@ -435,6 +435,8 @@ describe('SessionsService 选模', () => {
       assistantId: 'a1',
       assistantName: '合同助手',
       mode: 'task',
+      skillIds: [],
+      connectorIds: [],
       assistant: {
         id: 'a1',
         name: '合同助手',

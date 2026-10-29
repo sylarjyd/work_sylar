@@ -113,11 +113,21 @@ export async function createSession(
   model?: string,
   assistantId?: string,
   mode?: SessionMode,
+  skillIds?: string[],
+  connectorIds?: string[],
 ): Promise<SessionSummary> {
-  const body: { model?: string; assistantId?: string; mode?: SessionMode } = {};
+  const body: {
+    model?: string;
+    assistantId?: string;
+    mode?: SessionMode;
+    skillIds?: string[];
+    connectorIds?: string[];
+  } = {};
   if (model) body.model = model;
   if (assistantId) body.assistantId = assistantId;
   if (mode) body.mode = mode;
+  if (skillIds && skillIds.length > 0) body.skillIds = skillIds;
+  if (connectorIds && connectorIds.length > 0) body.connectorIds = connectorIds;
   const res = await authFetch('/api/sessions', {
     method: 'POST',
     body: JSON.stringify(body),

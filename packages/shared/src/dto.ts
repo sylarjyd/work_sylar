@@ -178,6 +178,8 @@ export interface RunRequest {
   kbIds?: string[];
   /** 技能市场里绑定的技能（名称 + 正文）；由 BFF 解析后下发，runtime 拼进系统提示词。 */
   skills?: RunSkill[];
+  /** 本次运行启用的 MCP 连接器；缺省表示使用租户下全部已启用连接器。 */
+  connectorIds?: string[];
   /** 断点续跑：由 BFF 从 RunCheckpoint 读出后下发。 */
   resume?: RunResume;
   /** 任务分类：办公/开发模式在没有任何产出物时由 runtime 兜底落一份结果文件。 */
@@ -237,6 +239,10 @@ export interface CreateSessionRequest {
   assistantId?: string;
   /** 任务分类；缺省按对话处理。会话创建后固定，运行期按分类引导助手行为。 */
   mode?: SessionMode;
+  /** 本次会话额外启用的技能（与助手绑定技能合并），只允许可见的技能。 */
+  skillIds?: string[];
+  /** 本次会话启用的连接器；为空表示使用账号下全部已启用连接器。 */
+  connectorIds?: string[];
 }
 
 export interface UpdateSessionRequest {

@@ -67,6 +67,8 @@ CREATE TABLE "Session" (
     "model" TEXT,
     "assistantId" TEXT,
     "mode" TEXT NOT NULL DEFAULT 'chat',
+    "skillIds" TEXT[] DEFAULT ARRAY[]::TEXT[],
+    "connectorIds" TEXT[] DEFAULT ARRAY[]::TEXT[],
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "Session_pkey" PRIMARY KEY ("id")
@@ -775,6 +777,8 @@ COMMENT ON COLUMN "Session"."pinned" IS '是否置顶：列表排序优先，不
 COMMENT ON COLUMN "Session"."model" IS '会话选定的模型名；历史会话为空，首次运行后回填';
 COMMENT ON COLUMN "Session"."assistantId" IS '会话选定的自定义助手 ID；助手被删除后置空';
 COMMENT ON COLUMN "Session"."mode" IS '任务分类：chat（对话）/ task（任务）/ code（编码）';
+COMMENT ON COLUMN "Session"."skillIds" IS '本次会话额外启用的技能 ID（与助手绑定技能合并）';
+COMMENT ON COLUMN "Session"."connectorIds" IS '本次会话启用的连接器 ID；为空表示全部已启用连接器';
 COMMENT ON COLUMN "Session"."createdAt" IS '创建时间';
 COMMENT ON TABLE "Assistant" IS '助手表：个人助手仅创建者可见，public 为内置公共助手（跨租户只读）';
 COMMENT ON COLUMN "Assistant"."id" IS '助手 ID';

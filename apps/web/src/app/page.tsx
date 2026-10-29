@@ -18,11 +18,13 @@ import {
   type AttachmentKind,
   type AttachmentRef,
   type ClientModelDto,
+  type ConnectorDto,
   type MessageDto,
   type RunStatus,
   type SessionChartDto,
   type SessionMode,
   type SessionSummary,
+  type SkillDto,
   type UpdateSessionRequest,
 } from '@ai-office/shared';
 import { AppShell } from '../components/app-shell';
@@ -64,10 +66,12 @@ import {
   isUnauthorized,
   listArtifacts,
   listAssistants,
+  listConnectors,
   listModels,
   listSessionMessages,
   listSessionCharts,
   listSessions,
+  listSkills,
   streamRun,
   streamTask,
   updateSession,
@@ -467,6 +471,11 @@ export default function Home() {
   // 自定义助手：仅新建任务（草稿态）可选择，会话创建后助手固定。
   const [assistants, setAssistants] = useState<AssistantDto[]>([]);
   const [selectedAssistantId, setSelectedAssistantId] = useState('');
+  // 本次任务可选的技能与连接器（+ 菜单里勾选，建会话时固化）。
+  const [skillOptions, setSkillOptions] = useState<SkillDto[]>([]);
+  const [connectorOptions, setConnectorOptions] = useState<ConnectorDto[]>([]);
+  const [selectedSkillIds, setSelectedSkillIds] = useState<string[]>([]);
+  const [selectedConnectorIds, setSelectedConnectorIds] = useState<string[]>([]);
   // 任务分类：随会话创建固定，运行期由 BFF 追加对应取向的提示词。
   const [selectedMode, setSelectedMode] = useState<SessionMode>('chat');
   // 首页推荐问题的当前分类；空值表示取该任务类型的第一个分类。
@@ -581,6 +590,13 @@ export default function Home() {
       // 助手加载失败不应阻断主流程：默认助手仍可用。
       setError(errorText(err));
     }
+    // 技能/连接器只用于 + 菜单，失败时静默降级为空列表。
+    void listSkills()
+      .then((data) => setSkillOptions(data.items))
+      .catch(() => undefined);
+    void listConnectors()
+      .then((rows) => setConnectorOptions(rows))
+      .catch(() => undefined);
   }
 
   async function refreshModels() {
@@ -1111,12 +1127,17 @@ export default function Home() {
           selectedModel || undefined,
           selectedAssistantId || undefined,
           selectedMode,
+          selectedSkillIds,
+          selectedConnectorIds,
         );
         setSessions((prev) => [created, ...prev]);
         if (created.model) setSelectedModel(created.model);
         setSelectedMode(created.mode);
         setSessionId(created.id);
         sid = created.id;
+        // 选择已随会话固化，清空草稿态选择，避免下个任务误带上。
+        setSelectedSkillIds([]);
+        setSelectedConnectorIds([]);
       }
       if (streamingRef.current.has(sid)) return;
       streamingRef.current.add(sid);
@@ -1523,20 +1544,50 @@ export default function Home() {
                     })),
                   ],
                 },
-                { key: 'skills', label: '技能' },
-                { key: 'connectors', label: '连接器' },
+                {
+                  key: 'skills',
+                  label: '技能',
+                  disabled: Boolean(sessionId) || skillOptions.length === 0,
+                  children:
+                    skillOptions.length > 0
+                      ? skillOptions.map((s) => ({
+                          key: `skill:${s.id}`,
+                          label: `${selectedSkillIds.includes(s.id) ? '✓ ' : ''}${s.name}${
+                            s.scope === 'public' ? '（公共）' : ''
+                          }`,
+                        }))
+                      : [{ key: 'skill:none', label: '暂无可用技能' }],
+                },
+                {
+                  key: 'connectors',
+                  label: '连接器',
+                  disabled: Boolean(sessionId) || connectorOptions.length === 0,
+                  children:
+                    connectorOptions.length > 0
+                      ? connectorOptions.map((c) => ({
+                          key: `connector:${c.id}`,
+                          label: `${selectedConnectorIds.includes(c.id) ? '✓ ' : ''}${c.name}`,
+                        }))
+                      : [{ key: 'connector:none', label: '暂无已启用连接器' }],
+                },
               ] as MenuProps['items'],
               onClick: ({ key }) => {
                 if (key === 'file') {
                   fileInputRef.current?.click();
-                } else if (key === 'skills') {
-                  router.push('/skills');
-                } else if (key === 'connectors') {
-                  router.push('/connectors');
                 } else if (key === 'assistant:') {
                   handleAssistantChange('');
                 } else if (key.startsWith('assistant:')) {
                   handleAssistantChange(key.slice('assistant:'.length));
+                } else if (key.startsWith('skill:')) {
+                  const id = key.slice('skill:'.length);
+                  setSelectedSkillIds((prev) =>
+                    prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
+                  );
+                } else if (key.startsWith('connector:')) {
+                  const id = key.slice('connector:'.length);
+                  setSelectedConnectorIds((prev) =>
+                    prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
+                  );
                 }
               },
             }}
@@ -1562,6 +1613,36 @@ export default function Home() {
                 aria-label="取消绑定专家"
                 title="取消绑定，使用默认"
                 onClick={() => handleAssistantChange('')}
+              >
+                <IconX size={10} />
+              </button>
+            </span>
+          ) : null}
+          {selectedSkillIds.length > 0 ? (
+            <span className="wb-assistant-badge" title="本次任务额外启用的技能">
+              技能 {selectedSkillIds.length}
+              <button
+                type="button"
+                className="wb-attachment-remove"
+                style={{ marginLeft: 4 }}
+                disabled={running}
+                aria-label="取消选择的技能"
+                onClick={() => setSelectedSkillIds([])}
+              >
+                <IconX size={10} />
+              </button>
+            </span>
+          ) : null}
+          {selectedConnectorIds.length > 0 ? (
+            <span className="wb-assistant-badge" title="本次任务启用的连接器">
+              连接器 {selectedConnectorIds.length}
+              <button
+                type="button"
+                className="wb-attachment-remove"
+                style={{ marginLeft: 4 }}
+                disabled={running}
+                aria-label="取消选择的连接器"
+                onClick={() => setSelectedConnectorIds([])}
               >
                 <IconX size={10} />
               </button>

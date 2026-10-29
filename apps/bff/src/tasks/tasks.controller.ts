@@ -85,9 +85,15 @@ export class TasksController {
     const session = await this.tasks.assertOwned(sessionId, user.tenantId, user.sub);
     const assistant = session.assistant;
     // 技能正文在入队时固化：排队期间技能被改/下架不影响本次运行。
-    const boundSkills = assistant
-      ? await this.skills.resolveForRun(assistant.skillIds, user.tenantId, user.sub)
-      : [];
+    // 会话级技能与助手绑定技能合并，用户不改助手也能给单次任务加技能。
+    const requestedSkillIds = [
+      ...new Set([...(assistant?.skillIds ?? []), ...(session.skillIds ?? [])]),
+    ];
+    const boundSkills = await this.skills.resolveForRun(
+      requestedSkillIds,
+      user.tenantId,
+      user.sub,
+    );
     // 助手绑定时 skills 才生效：空数组表示禁用全部内置技能；未绑定助手时不限制工具。
     const runAssistant = assistant
       ? {
@@ -172,6 +178,10 @@ export class TasksController {
       traceId,
       // 分类随每次运行固化：排队期间会话配置不再变化，但快照仍要自包含。
       mode: session.mode,
+      // 会话级连接器随运行固化：空数组表示使用账号下全部已启用连接器。
+      ...((session.connectorIds ?? []).length > 0
+        ? { connectorIds: session.connectorIds }
+        : {}),
       assistant: runAssistant,
       messages: [],
     };

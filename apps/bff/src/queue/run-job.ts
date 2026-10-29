@@ -33,6 +33,8 @@ export interface RunSnapshot {
   traceId: string | null;
   /** 任务分类；存量快照没有该字段，按无附加提示处理。 */
   mode?: SessionMode;
+  /** 本次运行启用的连接器；缺省表示租户下全部已启用连接器。 */
+  connectorIds?: string[];
   assistant: {
     systemPrompt?: string;
     enabledTools?: string[];

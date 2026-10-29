@@ -47,6 +47,10 @@ export interface SessionRef {
   assistantName: string | null;
   /** 任务分类；存量会话缺省按对话处理。 */
   mode: SessionMode;
+  /** 会话级额外技能（与助手绑定技能合并）。 */
+  skillIds: string[];
+  /** 会话级连接器；空表示全部已启用连接器。 */
+  connectorIds: string[];
   assistant: SessionAssistantRef | null;
 }
 
@@ -211,10 +215,47 @@ export class SessionsService {
     }
     // 非法分类按对话处理：分类只影响提示词取向，不值得让建会话失败。
     const mode: SessionMode = isSessionMode(req.mode) ? req.mode : 'chat';
+
+    // 会话级技能/连接器：只存校验通过的 id，越权或不存在的整单拒绝。
+    const skillIds = [...new Set(Array.isArray(req.skillIds) ? req.skillIds : [])]
+      .filter((value): value is string => typeof value === 'string' && value !== '');
+    if (skillIds.length > 0) {
+      const rows = await this.prisma.skill.findMany({
+        where: { id: { in: skillIds } },
+        select: { id: true, scope: true, enabled: true, tenantId: true, ownerUserId: true },
+      });
+      const visible = rows.filter(
+        (row) =>
+          (row.scope === 'public' && row.enabled) ||
+          (row.scope === 'personal' && row.tenantId === tenantId && row.ownerUserId === userId),
+      );
+      if (visible.length !== skillIds.length) throw new BadRequestException('invalid_skill_ids');
+    }
+    const connectorIds = [...new Set(Array.isArray(req.connectorIds) ? req.connectorIds : [])]
+      .filter((value): value is string => typeof value === 'string' && value !== '');
+    if (connectorIds.length > 0) {
+      const rows = await this.prisma.connector.findMany({
+        where: { id: { in: connectorIds }, tenantId },
+        select: { id: true },
+      });
+      if (rows.length !== connectorIds.length) {
+        throw new BadRequestException('invalid_connector_ids');
+      }
+    }
+
     let s;
     try {
       s = await this.prisma.session.create({
-        data: { tenantId, userId, title: req.title ?? '新会话', model, assistantId, mode },
+        data: {
+          tenantId,
+          userId,
+          title: req.title ?? '新会话',
+          model,
+          assistantId,
+          mode,
+          skillIds,
+          connectorIds,
+        },
         include: { assistant: { select: { name: true } } },
       });
     } catch (err) {
@@ -255,6 +296,8 @@ export class SessionsService {
       assistantId: s.assistantId ?? null,
       assistantName: s.assistant?.name ?? null,
       mode: isSessionMode(s.mode) ? s.mode : 'chat',
+      skillIds: s.skillIds ?? [],
+      connectorIds: s.connectorIds ?? [],
       assistant: s.assistant ? toAssistantRef(s.assistant) : null,
     };
   }
