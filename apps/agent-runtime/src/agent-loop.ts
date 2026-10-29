@@ -196,11 +196,113 @@ export async function* runAgent(req: RunRequest, deps: RunDeps): AsyncGenerator<
       messages.push(assistantMsg);
       roundDeltas.push(assistantMsg);
       allDeltas.push(assistantMsg);
-      for (const call of resp.toolCalls) {
+      // 同一轮里的安全工具可以并行：联网检索/抓取彼此独立，串行会把耗时直接相加。
+      // confirm 级工具仍走串行分支，保证确认卡片在下发前不会被并发打乱。
+      type ToolOutcome = {
+        ok: boolean;
+        status: ToolObservation['status'];
+        result: unknown;
+        extra: Record<string, unknown>;
+      };
+      const resolveTool = (call: ToolCall) => {
+        const tool = deps.tools.find((t) => t.name === call.name);
+        return {
+          tool,
+          permission: tool
+            ? effectivePermission(tool.permission, req.permissionMode)
+            : ('blocked' as const),
+        };
+      };
+
+      function* emitResult(
+        call: ToolCall,
+        outcome: ToolOutcome,
+      ): Generator<AgentEvent, void, void> {
+        yield step('tool_result', {
+          tool: call.name,
+          ok: outcome.ok,
+          preview: preview(outcome.result),
+          ...outcome.extra,
+          ...displayOf(outcome.result),
+        });
+        // 工具产出物：除 tool_result 外再补一条 artifact step，供 BFF 落库、web 成果区即时渲染。
+        const artifact = outcome.ok ? extractArtifact(outcome.result) : undefined;
+        if (artifact) {
+          yield step('artifact', artifact);
+        }
+        // 图表与产物并列：payload 即 ChartSpec，前端按规格用 ECharts 渲染。
+        const chart = outcome.ok ? extractChart(outcome.result) : undefined;
+        if (chart) {
+          yield step('chart', chart);
+        }
+        // 技能草稿：payload 即 SkillInput，BFF 收到后落库为该用户的个人技能。
+        const skill = outcome.ok ? extractSkill(outcome.result) : undefined;
+        if (skill) {
+          yield step('skill', skill);
+        }
+        // 工具结果回填进对话，供下一轮模型使用（截断防上下文爆炸）。
+        const toolMsg: ModelMessage = {
+          role: 'tool',
+          content: (JSON.stringify(outcome.result) ?? 'null').slice(0, 4000),
+          toolCallId: call.id,
+        };
+        messages.push(toolMsg);
+        roundDeltas.push(toolMsg);
+        allDeltas.push(toolMsg);
+      }
+
+      const outcomes = new Map<number, ToolOutcome>();
+      const parallelJobs: Array<{ index: number; call: ToolCall; tool: Tool }> = [];
+      for (let index = 0; index < resp.toolCalls.length; index += 1) {
         // 取消可能发生在模型返回之后：不再执行工具，也不产出 tool_call/tool_result。
         if (deps.signal?.aborted) return;
+        const call = resp.toolCalls[index]!;
+        const { tool, permission } = resolveTool(call);
+        if (tool && permission === 'safe') {
+          yield step('tool_call', { tool: call.name, args: call.args });
+          parallelJobs.push({ index, call, tool });
+        }
+      }
+
+      await mapLimit(parallelJobs, PARALLEL_TOOL_LIMIT, async ({ index, call, tool }) => {
+        const toolStarted = Date.now();
+        const toolSpan = startSpan('tool.execute', {
+          'gen_ai.tool.name': call.name,
+          'run.id': req.runId,
+        });
+        let ok = true;
+        let status: ToolObservation['status'] = 'ok';
+        let result: unknown;
+        try {
+          result = await tool.execute(call.args, ctx);
+        } catch (err) {
+          ok = false;
+          status = 'error';
+          result = { error: String(err) };
+        }
+        if (status === 'ok' && isFailureResult(result)) status = 'error';
+        endSpan(toolSpan, status === 'ok');
+        deps.onToolCall?.({
+          tool: call.name,
+          status,
+          durationMs: Date.now() - toolStarted,
+          codeExecTimeout: call.name === 'code.exec' && isTimeoutResult(result),
+        });
+        outcomes.set(index, { ok, status, result, extra: {} });
+      });
+
+      for (let index = 0; index < resp.toolCalls.length; index += 1) {
+        if (deps.signal?.aborted) return;
+        const call = resp.toolCalls[index]!;
+        const parallel = outcomes.get(index);
+        if (parallel) {
+          yield* emitResult(call, parallel);
+          continue;
+        }
+
+        // 非安全工具保持原顺序：blocked 直接拒绝，confirm 先下发确认卡片再等待。
         yield step('tool_call', { tool: call.name, args: call.args });
-        const tool = deps.tools.find((t) => t.name === call.name);
+        const { tool, permission } = resolveTool(call);
         let ok = true;
         let status: ToolObservation['status'] = 'ok';
         let result: unknown;
@@ -212,7 +314,6 @@ export async function* runAgent(req: RunRequest, deps: RunDeps): AsyncGenerator<
         });
         try {
           if (!tool) throw new Error(`unknown_tool:${call.name}`);
-          const permission = effectivePermission(tool.permission, req.permissionMode);
           if (permission === 'blocked') {
             ok = false;
             status = 'blocked';
@@ -247,48 +348,15 @@ export async function* runAgent(req: RunRequest, deps: RunDeps): AsyncGenerator<
           status = 'error';
           result = { error: String(err) };
         }
-        // 工具返回 {ok:false}（如 MCP 调用失败）即使没有抛错也算失败；
-        // 不改 tool_result.ok 的既有语义（它表示“是否抛错/被拒”），只影响埋点。
         if (status === 'ok' && isFailureResult(result)) status = 'error';
-        const durationMs = Date.now() - toolStarted;
         endSpan(toolSpan, status === 'ok');
         deps.onToolCall?.({
           tool: call.name,
           status,
-          durationMs,
+          durationMs: Date.now() - toolStarted,
           codeExecTimeout: call.name === 'code.exec' && isTimeoutResult(result),
         });
-        yield step('tool_result', {
-          tool: call.name,
-          ok,
-          preview: preview(result),
-          ...extra,
-          ...displayOf(result),
-        });
-        // 工具产出物：除 tool_result 外再补一条 artifact step，供 BFF 落库、web 成果区即时渲染。
-        const artifact = ok ? extractArtifact(result) : undefined;
-        if (artifact) {
-          yield step('artifact', artifact);
-        }
-        // 图表与产物并列：payload 即 ChartSpec，前端按规格用 ECharts 渲染。
-        const chart = ok ? extractChart(result) : undefined;
-        if (chart) {
-          yield step('chart', chart);
-        }
-        // 技能草稿：payload 即 SkillInput，BFF 收到后落库为该用户的个人技能。
-        const skill = ok ? extractSkill(result) : undefined;
-        if (skill) {
-          yield step('skill', skill);
-        }
-        // 工具结果回填进对话，供下一轮模型使用（截断防上下文爆炸）。
-        const toolMsg: ModelMessage = {
-          role: 'tool',
-          content: (JSON.stringify(result) ?? 'null').slice(0, 4000),
-          toolCallId: call.id,
-        };
-        messages.push(toolMsg);
-        roundDeltas.push(toolMsg);
-        allDeltas.push(toolMsg);
+        yield* emitResult(call, { ok, status, result, extra });
       }
 
       // 只有完整走完工具轮才落 checkpoint：seq 是下一个未用序号，
@@ -422,4 +490,24 @@ class StreamChannel<T> implements AsyncIterable<T> {
       },
     };
   }
+}
+
+/** 同一轮并行工具数：联网类工具 IO 密集，4 路足以覆盖且不会打爆对端。 */
+const PARALLEL_TOOL_LIMIT = 4;
+
+async function mapLimit<T>(
+  items: readonly T[],
+  limit: number,
+  worker: (item: T) => Promise<void>,
+): Promise<void> {
+  let cursor = 0;
+  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    for (;;) {
+      const index = cursor;
+      cursor += 1;
+      if (index >= items.length) return;
+      await worker(items[index]!);
+    }
+  });
+  await Promise.all(runners);
 }
