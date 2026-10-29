@@ -194,7 +194,7 @@ export default function BillingPage() {
         <div className="page">
           <header className="page-head">
             <div>
-              <h1 className="page-title">套餐与用量</h1>
+              <h1 className="page-title">套餐订阅</h1>
               <p className="page-sub">积分按模型 token 折算，每月到期作废、不结转。</p>
             </div>
             {summary ? (
