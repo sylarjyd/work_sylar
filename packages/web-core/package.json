@@ -11,6 +11,7 @@
     "./chart": "./src/chart.tsx",
     "./file-preview": "./src/file-preview.tsx",
     "./skill-detail": "./src/skill-detail.tsx",
+    "./skill-editor": "./src/skill-editor.tsx",
     "./globals.css": "./src/globals.css"
   },
   "sideEffects": [

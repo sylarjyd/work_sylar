@@ -9,13 +9,19 @@ import {
   Param,
   Patch,
   Post,
+  Put,
   Query,
   Req,
   Res,
   UseGuards,
 } from '@nestjs/common';
 import type { FastifyReply, FastifyRequest } from 'fastify';
-import { SKILL_LIMITS, type SkillDto, type SkillListDto } from '@ai-office/shared';
+import {
+  SKILL_LIMITS,
+  type SkillDto,
+  type SkillListDto,
+  type SkillPackageContentsDto,
+} from '@ai-office/shared';
 import { JwtGuard } from '../auth/jwt.guard';
 import { CurrentUser } from '../auth/current-user';
 import type { JwtPayload } from '../auth/jwt';
@@ -37,6 +43,31 @@ export class SkillsController {
   @Post()
   create(@CurrentUser() user: JwtPayload, @Body() body: unknown): Promise<SkillDto> {
     return this.skills.create(user.tenantId, user.sub, body);
+  }
+
+  /** 编辑器新建：一次性提交 frontmatter 字段与包内文本文件。 */
+  @Post('package')
+  createPackage(@CurrentUser() user: JwtPayload, @Body() body: unknown): Promise<SkillDto> {
+    return this.skills.savePackage({ tenantId: user.tenantId, userId: user.sub }, body);
+  }
+
+  /** 编辑器读取包内文本文件（二进制只在清单里出现）。 */
+  @Get(':id/package')
+  packageContents(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+  ): Promise<SkillPackageContentsDto> {
+    return this.skills.packageContents(id, user.tenantId, user.sub);
+  }
+
+  /** 编辑器保存：未提交的旧文件保留，必要时删掉旧包。 */
+  @Put(':id/package')
+  savePackage(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ): Promise<SkillDto> {
+    return this.skills.savePackage({ tenantId: user.tenantId, userId: user.sub, id }, body);
   }
 
   /** 上传 Agent Skills 技能包（zip，根目录或单层目录下含 SKILL.md）。 */

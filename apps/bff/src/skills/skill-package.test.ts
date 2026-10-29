@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { zipSync, strToU8 } from 'fflate';
 import {
+  buildSkillZip,
   parseSkillPackage,
   readSkillPackageFile,
+  readSkillPackageTexts,
   SkillPackageError,
 } from './skill-package';
 
@@ -108,5 +110,36 @@ describe('parseSkillPackage', () => {
     const err = new SkillPackageError('invalid_zip');
     expect(err.code).toBe('invalid_zip');
     expect(err).toBeInstanceOf(Error);
+  });
+
+  it('编辑器保存重建 zip：覆盖文本、保留未提交文件、删除显式移除项', () => {
+    const base = Buffer.from(
+      zipSync({
+        'SKILL.md': strToU8('---\nname: old\ndescription: 旧\n---\n旧正文'),
+        'references/keep.md': strToU8('保留'),
+        'references/drop.md': strToU8('删除'),
+        'assets/logo.png': new Uint8Array([0xff, 0xd8]),
+      }),
+    );
+    const built = buildSkillZip(
+      { name: 'new-skill', slug: 'new-skill', description: '新', content: '新正文' },
+      [
+        { path: 'references/keep.md', content: '保留（改）' },
+        { path: 'notes/new.md', content: '# 新文件' },
+      ],
+      ['references/drop.md'],
+      base,
+    );
+    expect(parseSkillPackage(built.zip).meta).toMatchObject({ slug: 'new-skill', content: '新正文' });
+    // 未提交的二进制保留，显式删除的文本消失。
+    expect(built.manifest.map((file) => file.path).sort()).toEqual([
+      'assets/logo.png',
+      'notes/new.md',
+      'references/keep.md',
+    ]);
+    expect(readSkillPackageFile(built.zip, 'references/drop.md')).toBeNull();
+    expect(readSkillPackageTexts(built.zip).binary.map((file) => file.path)).toEqual([
+      'assets/logo.png',
+    ]);
   });
 });

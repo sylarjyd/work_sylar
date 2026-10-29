@@ -1,11 +1,13 @@
-import { unzipSync } from 'fflate';
+import { unzipSync, zipSync, strToU8 } from 'fflate';
 import { parse as parseYaml } from 'yaml';
 import {
   SKILL_LIMITS,
   SKILL_SLUG_PATTERN,
   normalizeSkillInput,
+  type SkillFileContent,
   type SkillFileEntry,
   type SkillInput,
+  type SkillPackageContentsDto,
 } from '@ai-office/shared';
 
 /** 技能包解析失败的稳定错误码：控制器据此映射为 400，前端据此给可读提示。 */
@@ -154,4 +156,94 @@ export function readSkillPackageFile(buffer: Buffer, path: string): Uint8Array |
     (key) => key.split('/').length === target.split('/').length + 1 && key.endsWith(`/${target}`),
   );
   return nestedKey ? unzipped[nestedKey] : null;
+}
+
+/** 按 frontmatter 规范拼出 SKILL.md：字段顺序固定，便于 diff。 */
+export function renderSkillMd(meta: SkillInput): string {
+  const lines = ['---', `name: ${meta.slug ?? meta.name}`];
+  if (meta.description) lines.push(`description: ${meta.description}`);
+  if (meta.version) lines.push(`version: ${meta.version}`);
+  if (meta.license) lines.push(`license: ${meta.license}`);
+  if (meta.allowedTools && meta.allowedTools.length > 0) {
+    lines.push(`allowed-tools: ${meta.allowedTools.join(' ')}`);
+  }
+  lines.push('---', '', meta.content.trim(), '');
+  return lines.join('\n');
+}
+
+/** 去掉「压缩文件夹」带出来的唯一一层根目录，避免编辑后包内路径多一层前缀。 */
+function stripPackageRoot(entries: Record<string, Uint8Array>): Record<string, Uint8Array> {
+  const keys = Object.keys(entries).filter((key) => !key.endsWith('/'));
+  const roots = new Set(keys.map((key) => key.split('/')[0]));
+  const singleRoot = roots.size === 1 ? [...roots][0]! : '';
+  const hasRootSkillMd = singleRoot !== '' && keys.some((key) => key === `${singleRoot}/SKILL.md`);
+  if (!hasRootSkillMd) return entries;
+  const out: Record<string, Uint8Array> = {};
+  for (const [key, bytes] of Object.entries(entries)) {
+    const stripped = key.slice(singleRoot.length + 1);
+    if (stripped) out[stripped] = bytes;
+  }
+  return out;
+}
+
+/**
+ * 编辑器保存：以旧包为底（二进制文件原样保留），删掉被移除/覆盖的文本文件，
+ * 重新生成根目录 SKILL.md，再打包回 zip。
+ */
+export function buildSkillZip(
+  meta: SkillInput,
+  files: readonly SkillFileContent[],
+  deleted: readonly string[],
+  base?: Buffer | null,
+): { zip: Buffer; manifest: SkillFileEntry[] } {
+  let entries: Record<string, Uint8Array> = {};
+  if (base && base.byteLength > 0) {
+    try {
+      entries = stripPackageRoot(unzipSync(new Uint8Array(base)));
+    } catch {
+      throw new SkillPackageError('invalid_zip');
+    }
+  }
+  const drop = new Set<string>([...deleted, ...files.map((file) => file.path)]);
+  for (const key of Object.keys(entries)) {
+    const lower = key.toLowerCase();
+    if (lower === 'skill.md' || lower.endsWith('/skill.md')) delete entries[key];
+    else if (drop.has(key)) delete entries[key];
+  }
+  entries['SKILL.md'] = strToU8(renderSkillMd(meta));
+  for (const file of files) entries[file.path] = strToU8(file.content);
+
+  const zip = Buffer.from(zipSync(entries, { level: 6 }));
+  const manifest = Object.entries(entries)
+    .filter(([path]) => path !== 'SKILL.md')
+    .map(([path, bytes]) => ({ path, size: bytes.byteLength }))
+    .sort((a, b) => a.path.localeCompare(b.path));
+  return { zip, manifest };
+}
+
+/** 读取技能包供编辑器使用：UTF-8 文本进编辑器，其余只列清单。 */
+export function readSkillPackageTexts(buffer: Buffer): SkillPackageContentsDto {
+  let raw: Record<string, Uint8Array>;
+  try {
+    raw = stripPackageRoot(unzipSync(new Uint8Array(buffer)));
+  } catch {
+    throw new SkillPackageError('invalid_zip');
+  }
+  const files: SkillFileContent[] = [];
+  const binary: SkillFileEntry[] = [];
+  for (const [path, bytes] of Object.entries(raw)) {
+    if (path.endsWith('/') || path === 'SKILL.md') continue;
+    if (bytes.byteLength > SKILL_LIMITS.fileBytes) {
+      binary.push({ path, size: bytes.byteLength });
+      continue;
+    }
+    try {
+      files.push({ path, content: DECODER.decode(bytes) });
+    } catch {
+      binary.push({ path, size: bytes.byteLength });
+    }
+  }
+  files.sort((a, b) => a.path.localeCompare(b.path));
+  binary.sort((a, b) => a.path.localeCompare(b.path));
+  return { files, binary };
 }

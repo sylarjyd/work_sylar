@@ -49,6 +49,7 @@ import type {
   RetryRunResultDto,
   SkillDto,
   SkillInput,
+  SkillPackageContentsDto,
 } from '@ai-office/shared';
 import { authFetch, BFF_URL, errorText, getToken } from '@ai-office/web-core';
 
@@ -458,6 +459,26 @@ export function setAdminSkillEnabled(id: string, enabled: boolean): Promise<Skil
 
 export function deleteAdminSkill(id: string): Promise<void> {
   return request(`/api/admin/skills/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
+/** 编辑器：读取公共技能包内文本文件。 */
+export function getAdminSkillPackage(id: string): Promise<SkillPackageContentsDto> {
+  return request(`/api/admin/skills/${encodeURIComponent(id)}/package`);
+}
+
+/** 编辑器：保存公共技能与包内文件（新建或更新）。 */
+export function saveAdminSkillPackage(
+  payload: {
+    meta: SkillInput;
+    files: Array<{ path: string; content: string }>;
+    deleted: string[];
+  },
+  id?: string,
+): Promise<SkillDto> {
+  return request(
+    id ? `/api/admin/skills/${encodeURIComponent(id)}/package` : '/api/admin/skills/package',
+    { method: id ? 'PUT' : 'POST', body: JSON.stringify(payload) },
+  );
 }
 
 /** 上传公共技能包：multipart 不能走 request（会强制 JSON content-type）。 */

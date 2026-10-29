@@ -23,6 +23,7 @@ import type {
   SkillDto,
   SkillInput,
   SkillListDto,
+  SkillPackageContentsDto,
   SessionSummary,
   UpdateSessionRequest,
   UsageAggregateDto,
@@ -303,6 +304,33 @@ export async function downloadSkillFile(id: string, path: string, filename: stri
   link.click();
   link.remove();
   setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+/** 编辑器：读取包内文本文件。 */
+export async function getSkillPackage(id: string): Promise<SkillPackageContentsDto> {
+  const res = await authFetch(`/api/skills/${encodeURIComponent(id)}/package`);
+  if (!res.ok) throw new Error(`skill_package_failed_${res.status}`);
+  return (await res.json()) as SkillPackageContentsDto;
+}
+
+/** 编辑器：保存技能与包内文件（新建或更新）。 */
+export async function saveSkillPackage(
+  payload: {
+    meta: SkillInput;
+    files: Array<{ path: string; content: string }>;
+    deleted: string[];
+  },
+  id?: string,
+): Promise<SkillDto> {
+  const res = await authFetch(
+    id ? `/api/skills/${encodeURIComponent(id)}/package` : '/api/skills/package',
+    {
+      method: id ? 'PUT' : 'POST',
+      body: JSON.stringify(payload),
+    },
+  );
+  if (!res.ok) throw new Error(`skill_save_failed_${res.status}`);
+  return (await res.json()) as SkillDto;
 }
 
 /** 取消运行：排队中的直接撤销，执行中的交由控制总线通知；终态 run 幂等返回当前状态。 */

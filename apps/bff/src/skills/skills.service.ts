@@ -6,16 +6,24 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import {
+  normalizeSkillFiles,
   normalizeSkillInput,
   type RunSkill,
   type SkillDto,
   type SkillFileEntry,
   type SkillListDto,
+  type SkillPackageContentsDto,
 } from '@ai-office/shared';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../db/prisma.service';
 import { ATTACHMENT_STORAGE, type AttachmentStorage } from '../attachments/attachments.storage';
-import { parseSkillPackage, readSkillPackageFile, SkillPackageError } from './skill-package';
+import {
+  buildSkillZip,
+  parseSkillPackage,
+  readSkillPackageFile,
+  readSkillPackageTexts,
+  SkillPackageError,
+} from './skill-package';
 
 interface SkillRow {
   id: string;
@@ -160,6 +168,94 @@ export class SkillsService {
     } catch (err) {
       // 元数据落库失败时清掉对象，避免留下不可见的孤儿包。
       await this.storage.deleteObject(packageKey).catch(() => undefined);
+      throw err;
+    }
+  }
+
+  /** 编辑器读取技能包：文本文件返回内容，二进制只回清单。 */
+  async packageContents(
+    id: string,
+    tenantId: string,
+    userId: string,
+  ): Promise<SkillPackageContentsDto> {
+    const row = await this.loadOwned(id, tenantId, userId);
+    if (!row.packageKey) return { files: [], binary: [] };
+    const zip = await this.storage.getObjectBuffer(row.packageKey);
+    return readSkillPackageTexts(zip);
+  }
+
+  /**
+   * 编辑器保存：新建（无 id）或更新（有 id）技能与包内文件。
+   * 未提交的旧文件默认保留（编辑器只处理文本，二进制不能被文本区覆盖）。
+   */
+  async savePackage(
+    scope: { tenantId: string; userId: string; id?: string },
+    body: unknown,
+  ): Promise<SkillDto> {
+    const record = (body ?? {}) as Record<string, unknown>;
+    const meta = normalizeSkillInput(record);
+    if (!meta) throw new BadRequestException('invalid_skill');
+    const files = normalizeSkillFiles(record.files ?? []);
+    if (!files) throw new BadRequestException('invalid_skill_files');
+    const deleted = Array.isArray(record.deleted)
+      ? record.deleted.filter((value): value is string => typeof value === 'string')
+      : [];
+
+    const existing = scope.id ? await this.loadOwned(scope.id, scope.tenantId, scope.userId) : null;
+    const base = existing?.packageKey
+      ? await this.storage.getObjectBuffer(existing.packageKey)
+      : null;
+
+    let built: ReturnType<typeof buildSkillZip>;
+    try {
+      built = buildSkillZip(meta, files, deleted, base);
+    } catch (err) {
+      if (err instanceof SkillPackageError) throw new BadRequestException(err.code);
+      throw new BadRequestException('invalid_skill_package');
+    }
+
+    const hasFiles = built.manifest.length > 0;
+    const packageKey = hasFiles
+      ? existing?.packageKey ??
+        `skills/${scope.tenantId}/${scope.userId}/${randomUUID()}/${meta.slug ?? 'skill'}.zip`
+      : null;
+    if (packageKey) await this.storage.putObject(packageKey, built.zip, 'application/zip');
+
+    const data = {
+      name: meta.name,
+      slug: meta.slug ?? meta.name,
+      description: meta.description ?? '',
+      content: meta.content,
+      version: meta.version ?? null,
+      license: meta.license ?? null,
+      allowedTools: meta.allowedTools ?? [],
+      packageKey,
+      packageSize: hasFiles ? built.zip.byteLength : null,
+      files: (hasFiles ? built.manifest : []) as unknown as Prisma.InputJsonValue,
+    };
+
+    try {
+      if (existing) {
+        const row = await this.prisma.skill.update({ where: { id: existing.id }, data });
+        if (!hasFiles && existing.packageKey) {
+          await this.storage.deleteObject(existing.packageKey).catch(() => undefined);
+        }
+        return toDto(row, scope.userId);
+      }
+      const row = await this.prisma.skill.create({
+        data: {
+          tenantId: scope.tenantId,
+          ownerUserId: scope.userId,
+          scope: 'personal',
+          source: 'manual',
+          ...data,
+        },
+      });
+      return toDto(row, scope.userId);
+    } catch (err) {
+      if (packageKey && !existing) {
+        await this.storage.deleteObject(packageKey).catch(() => undefined);
+      }
       throw err;
     }
   }

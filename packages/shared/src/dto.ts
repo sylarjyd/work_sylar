@@ -613,6 +613,65 @@ export interface SkillListDto {
   items: SkillDto[];
 }
 
+/** 技能包内的文本文件：编辑器直接按路径读写。 */
+export interface SkillFileContent {
+  path: string;
+  content: string;
+}
+
+/** 技能包编辑器读取结果：文本文件可编辑，二进制只能看清单。 */
+export interface SkillPackageContentsDto {
+  files: SkillFileContent[];
+  /** 二进制或非 UTF-8 文件：只保留路径与大小，编辑时原样保留。 */
+  binary: SkillFileEntry[];
+}
+
+/** 编辑器限制：单文件与整包文本都有上限，避免把 zip 撑爆。 */
+export const SKILL_EDITOR_LIMITS = {
+  fileBytes: 200 * 1024,
+  totalBytes: 4 * 1024 * 1024,
+  files: 200,
+} as const;
+
+/** UTF-8 字节数（shared 不依赖 Node/DOM，手算避免引入运行时 shim）。 */
+function utf8Bytes(text: string): number {
+  let bytes = 0;
+  for (const ch of text) {
+    const code = ch.codePointAt(0) ?? 0;
+    bytes += code <= 0x7f ? 1 : code <= 0x7ff ? 2 : code <= 0xffff ? 3 : 4;
+  }
+  return bytes;
+}
+
+/** 校验编辑器提交的文件：路径必须相对且无穿越，内容按字节限长。 */
+export function normalizeSkillFiles(raw: unknown): SkillFileContent[] | null {
+  if (!Array.isArray(raw)) return null;
+  if (raw.length > SKILL_EDITOR_LIMITS.files) return null;
+  const seen = new Set<string>();
+  const out: SkillFileContent[] = [];
+  let total = 0;
+  for (const item of raw) {
+    if (item === null || typeof item !== 'object' || Array.isArray(item)) return null;
+    const row = item as Record<string, unknown>;
+    const path = typeof row.path === 'string' ? row.path.trim() : '';
+    const content = typeof row.content === 'string' ? row.content : '';
+    if (!path || path.length > 240) return null;
+    if (path.startsWith('/') || path.includes('\\') || path.split('/').some((part) => part === '' || part === '.' || part === '..')) {
+      return null;
+    }
+    // SKILL.md 由 frontmatter + 正文生成，不允许当普通文件提交。
+    if (path.toLowerCase() === 'skill.md') return null;
+    if (seen.has(path)) return null;
+    seen.add(path);
+    const bytes = utf8Bytes(content);
+    if (bytes > SKILL_EDITOR_LIMITS.fileBytes) return null;
+    total += bytes;
+    out.push({ path, content });
+  }
+  if (total > SKILL_EDITOR_LIMITS.totalBytes) return null;
+  return out;
+}
+
 /** 校验并裁剪技能输入：名称/正文必填且有上限，简介超长截断而不是整条拒绝。 */
 export function normalizeSkillInput(raw: unknown): SkillInput | null {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null;

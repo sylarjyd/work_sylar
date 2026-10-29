@@ -20,23 +20,26 @@ import type { TableColumnsType } from 'antd';
 import type { SkillDto, SkillInput } from '@ai-office/shared';
 import {
   adminErrorText,
-  createAdminSkill,
   deleteAdminSkill,
   downloadAdminSkillFile,
+  getAdminSkillPackage,
   isForbidden,
   listAdminSkills,
+  saveAdminSkillPackage,
   setAdminSkillEnabled,
-  updateAdminSkill,
   uploadAdminSkillPackage,
 } from '../../../lib/admin-api';
 import { clearToken, isUnauthorized } from '@ai-office/web-core';
 import { SkillDetailDialog } from '@ai-office/web-core/skill-detail';
+import { SkillEditor, type SkillEditorValue } from '@ai-office/web-core/skill-editor';
 
 const PAGE_SIZE = 20;
 
-interface SkillForm extends SkillInput {
-  id?: string;
-}
+const EMPTY_VALUE: SkillEditorValue = {
+  meta: { name: '', slug: '', description: '', content: '' },
+  files: [],
+  binary: [],
+};
 
 function formatTime(value: string): string {
   return new Date(value).toLocaleString('zh-CN', { hour12: false });
@@ -51,8 +54,13 @@ export default function AdminSkillsPage() {
   const [page, setPage] = useState(1);
   const [scope, setScope] = useState<'all' | 'public' | 'personal'>('all');
   const [q, setQ] = useState('');
-  const [form, setForm] = useState<SkillForm | null>(null);
   const [detailFor, setDetailFor] = useState<SkillDto | null>(null);
+  const [editor, setEditor] = useState<{
+    mode: 'create' | 'edit';
+    id?: string;
+    value: SkillEditorValue;
+  } | null>(null);
+  const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -109,31 +117,57 @@ export default function AdminSkillsPage() {
     void load();
   }, [load]);
 
-  async function save() {
-    if (!form || inFlight.current) return;
-    if (!form.name.trim() || !form.content.trim()) {
-      void message.error('技能名称与内容不能为空');
+  async function openEditor(item?: SkillDto) {
+    if (inFlight.current) return;
+    if (!item) {
+      setEditor({ mode: 'create', value: EMPTY_VALUE });
       return;
     }
     inFlight.current = true;
-    setBusy(true);
     setError('');
     try {
-      const input: SkillInput = {
-        name: form.name.trim(),
-        description: form.description?.trim() ?? '',
-        content: form.content.trim(),
-      };
-      if (form.id) await updateAdminSkill(form.id, input);
-      else await createAdminSkill(input);
-      setForm(null);
+      const contents = await getAdminSkillPackage(item.id);
+      setEditor({
+        mode: 'edit',
+        id: item.id,
+        value: {
+          meta: {
+            name: item.name,
+            slug: item.slug,
+            description: item.description,
+            content: item.content,
+            version: item.version ?? '',
+            license: item.license ?? '',
+            allowedTools: item.allowedTools,
+          },
+          files: contents.files,
+          binary: contents.binary,
+        },
+      });
+    } catch (err) {
+      handleErr(err);
+    } finally {
+      inFlight.current = false;
+    }
+  }
+
+  async function saveEditor(payload: {
+    meta: SkillInput;
+    files: Array<{ path: string; content: string }>;
+    deleted: string[];
+  }): Promise<void> {
+    if (!editor) return;
+    setSaving(true);
+    setError('');
+    try {
+      await saveAdminSkillPackage(payload, editor.mode === 'edit' ? editor.id : undefined);
+      setEditor(null);
       await loadRef.current();
       void message.success('已保存');
     } catch (err) {
       handleErr(err);
     } finally {
-      inFlight.current = false;
-      setBusy(false);
+      setSaving(false);
     }
   }
 
@@ -308,14 +342,7 @@ export default function AdminSkillsPage() {
             <Button
               size="small"
               disabled={busy}
-              onClick={() =>
-                setForm({
-                  id: item.id,
-                  name: item.name,
-                  description: item.description,
-                  content: item.content,
-                })
-              }
+              onClick={() => void openEditor(item)}
             >
               编辑
             </Button>
@@ -378,7 +405,7 @@ export default function AdminSkillsPage() {
             <Button
               type="primary"
               disabled={busy}
-              onClick={() => setForm({ name: '', description: '', content: '' })}
+              onClick={() => void openEditor()}
             >
               新建公共技能
             </Button>
@@ -422,60 +449,14 @@ export default function AdminSkillsPage() {
         />
       </Card>
 
-      <Modal
-        title={form?.id ? '编辑公共技能' : '新建公共技能'}
-        open={form !== null}
-        okText="保存"
-        cancelText="取消"
-        confirmLoading={busy}
-        onOk={() => void save()}
-        onCancel={() => {
-          if (!busy) setForm(null);
-        }}
-        width={640}
-      >
-        {form ? (
-          <Space direction="vertical" size={12} style={{ width: '100%' }}>
-            <div>
-              <Typography.Text type="secondary">技能名称</Typography.Text>
-              <Input
-                style={{ marginTop: 4 }}
-                maxLength={40}
-                value={form.name}
-                disabled={busy}
-                placeholder="如：周报撰写规范"
-                onChange={(e) => setForm({ ...form, name: e.target.value })}
-              />
-            </div>
-            <div>
-              <Typography.Text type="secondary">一句话简介</Typography.Text>
-              <Input
-                style={{ marginTop: 4 }}
-                maxLength={1024}
-                value={form.description ?? ''}
-                disabled={busy}
-                placeholder="技能市场列表里展示"
-                onChange={(e) => setForm({ ...form, description: e.target.value })}
-              />
-            </div>
-            <div>
-              <Typography.Text type="secondary">
-                技能正文（SKILL.md frontmatter 之后的内容，会拼进系统提示词）
-              </Typography.Text>
-              <Input.TextArea
-                style={{ marginTop: 4 }}
-                rows={10}
-                maxLength={20000}
-                showCount
-                value={form.content}
-                disabled={busy}
-                placeholder={'适用场景：……\n步骤：1) … 2) …\n注意：……'}
-                onChange={(e) => setForm({ ...form, content: e.target.value })}
-              />
-            </div>
-          </Space>
-        ) : null}
-      </Modal>
+      <SkillEditor
+        open={editor !== null}
+        mode={editor?.mode ?? 'create'}
+        initial={editor?.value ?? EMPTY_VALUE}
+        saving={saving}
+        onCancel={() => setEditor(null)}
+        onSubmit={(payload) => void saveEditor(payload)}
+      />
 
       <SkillDetailDialog
         open={detailFor !== null}
@@ -490,14 +471,10 @@ export default function AdminSkillsPage() {
           detailFor?.scope === 'public' ? (
             <Button
               onClick={() => {
-                if (!detailFor) return;
+                const target = detailFor;
+                if (!target) return;
                 setDetailFor(null);
-                setForm({
-                  id: detailFor.id,
-                  name: detailFor.name,
-                  description: detailFor.description,
-                  content: detailFor.content,
-                });
+                void openEditor(target);
               }}
             >
               编辑

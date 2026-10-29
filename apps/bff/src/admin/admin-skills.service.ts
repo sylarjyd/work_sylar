@@ -6,16 +6,24 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import {
+  normalizeSkillFiles,
   normalizeSkillInput,
   type PageDto,
   type SkillDto,
+  type SkillPackageContentsDto,
 } from '@ai-office/shared';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../db/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import type { AdminActor } from '../audit/audit.types';
 import { ATTACHMENT_STORAGE, type AttachmentStorage } from '../attachments/attachments.storage';
-import { parseSkillPackage, readSkillPackageFile, SkillPackageError } from '../skills/skill-package';
+import {
+  buildSkillZip,
+  parseSkillPackage,
+  readSkillPackageFile,
+  readSkillPackageTexts,
+  SkillPackageError,
+} from '../skills/skill-package';
 import { parsePage } from './admin.util';
 
 interface SkillRow {
@@ -110,6 +118,89 @@ export class AdminSkillsService {
       summary: { name: row.name },
     });
     return toAdminDto(row, null);
+  }
+
+  /** 编辑器读取公共技能包内的文本文件。 */
+  async packageContents(id: string): Promise<SkillPackageContentsDto> {
+    const row = await this.loadPublic(id);
+    if (!row.packageKey) return { files: [], binary: [] };
+    const zip = await this.storage.getObjectBuffer(row.packageKey);
+    return readSkillPackageTexts(zip);
+  }
+
+  /** 编辑器保存公共技能（新建或更新），未提交的旧文件保留。 */
+  async savePackage(body: unknown, actor: AdminActor, id?: string): Promise<SkillDto> {
+    const record = (body ?? {}) as Record<string, unknown>;
+    const meta = normalizeSkillInput(record);
+    if (!meta) throw new BadRequestException('invalid_skill');
+    const files = normalizeSkillFiles(record.files ?? []);
+    if (!files) throw new BadRequestException('invalid_skill_files');
+    const deleted = Array.isArray(record.deleted)
+      ? record.deleted.filter((value): value is string => typeof value === 'string')
+      : [];
+
+    const existing = id ? await this.loadPublic(id) : null;
+    const base = existing?.packageKey
+      ? await this.storage.getObjectBuffer(existing.packageKey)
+      : null;
+
+    let built: ReturnType<typeof buildSkillZip>;
+    try {
+      built = buildSkillZip(meta, files, deleted, base);
+    } catch (err) {
+      if (err instanceof SkillPackageError) throw new BadRequestException(err.code);
+      throw new BadRequestException('invalid_skill_package');
+    }
+
+    const hasFiles = built.manifest.length > 0;
+    const packageKey = hasFiles
+      ? existing?.packageKey ?? `skills/public/${randomUUID()}/${meta.slug ?? 'skill'}.zip`
+      : null;
+    if (packageKey) await this.storage.putObject(packageKey, built.zip, 'application/zip');
+
+    const data = {
+      name: meta.name,
+      slug: meta.slug ?? meta.name,
+      description: meta.description ?? '',
+      content: meta.content,
+      version: meta.version ?? null,
+      license: meta.license ?? null,
+      allowedTools: meta.allowedTools ?? [],
+      packageKey,
+      packageSize: hasFiles ? built.zip.byteLength : null,
+      files: (hasFiles ? built.manifest : []) as unknown as Prisma.InputJsonValue,
+    };
+
+    try {
+      if (existing) {
+        const row = await this.prisma.skill.update({ where: { id: existing.id }, data });
+        if (!hasFiles && existing.packageKey) {
+          await this.storage.deleteObject(existing.packageKey).catch(() => undefined);
+        }
+        await this.audit.bestEffort(actor, {
+          action: 'skill.update',
+          targetType: 'skill',
+          targetId: existing.id,
+          summary: { name: row.name, files: built.manifest.length },
+        });
+        return toAdminDto(row, null);
+      }
+      const row = await this.prisma.skill.create({
+        data: { scope: 'public', source: 'manual', enabled: true, ...data },
+      });
+      await this.audit.bestEffort(actor, {
+        action: 'skill.create',
+        targetType: 'skill',
+        targetId: row.id,
+        summary: { name: row.name, files: built.manifest.length },
+      });
+      return toAdminDto(row, null);
+    } catch (err) {
+      if (packageKey && !existing) {
+        await this.storage.deleteObject(packageKey).catch(() => undefined);
+      }
+      throw err;
+    }
   }
 
   /** 运营端上传公共技能包：解析 SKILL.md，zip 存对象存储。 */

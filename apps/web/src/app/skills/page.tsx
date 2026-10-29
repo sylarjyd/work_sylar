@@ -9,8 +9,6 @@ import {
   Card,
   Col,
   Empty,
-  Input,
-  Modal,
   Row,
   Segmented,
   Space,
@@ -18,33 +16,34 @@ import {
   Typography,
 } from 'antd';
 import { BulbOutlined, PlusOutlined, UploadOutlined } from '@ant-design/icons';
-import type { SkillDto, SkillInput } from '@ai-office/shared';
+import type { SkillDto } from '@ai-office/shared';
 import { AppShell } from '../../components/app-shell';
 import {
-  createSkill,
   deleteSkill,
   downloadSkillFile,
+  getSkillPackage,
   getToken,
   isUnauthorized,
   listSkills,
+  saveSkillPackage,
   shareSkill,
-  updateSkill,
   uploadSkillPackage,
 } from '../../lib/api';
 import { errorText } from '@ai-office/web-core';
 import { SkillDetailDialog } from '@ai-office/web-core/skill-detail';
-
-const EMPTY_FORM: SkillInput = { name: '', description: '', content: '' };
+import { SkillEditor, type SkillEditorValue } from '@ai-office/web-core/skill-editor';
 
 type Filter = 'all' | 'mine' | 'public';
-
-interface SkillForm extends SkillInput {
-  id?: string;
-}
 
 function formatTime(value: string): string {
   return new Date(value).toLocaleString('zh-CN', { hour12: false });
 }
+
+const EMPTY_VALUE: SkillEditorValue = {
+  meta: { name: '', slug: '', description: '', content: '' },
+  files: [],
+  binary: [],
+};
 
 /** 技能市场（用户侧）：公共技能人人可见；个人技能仅自己可见，可共享为公共。 */
 export default function SkillsPage() {
@@ -52,8 +51,11 @@ export default function SkillsPage() {
   const { message, modal } = App.useApp();
   const [items, setItems] = useState<SkillDto[]>([]);
   const [filter, setFilter] = useState<Filter>('all');
-  const [form, setForm] = useState<SkillForm | null>(null);
   const [detailFor, setDetailFor] = useState<SkillDto | null>(null);
+  const [editor, setEditor] = useState<{ mode: 'create' | 'edit'; id?: string; value: SkillEditorValue } | null>(
+    null,
+  );
+  const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -102,6 +104,66 @@ export default function SkillsPage() {
     void load();
   }, [load, router]);
 
+  function openCreate(): void {
+    setEditor({ mode: 'create', value: EMPTY_VALUE });
+  }
+
+  async function openEdit(item: SkillDto): Promise<void> {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setError('');
+    try {
+      const contents = await getSkillPackage(item.id);
+      setEditor({
+        mode: 'edit',
+        id: item.id,
+        value: {
+          meta: {
+            name: item.name,
+            slug: item.slug,
+            description: item.description,
+            content: item.content,
+            version: item.version ?? '',
+            license: item.license ?? '',
+            allowedTools: item.allowedTools,
+          },
+          files: contents.files,
+          binary: contents.binary,
+        },
+      });
+    } catch (err) {
+      handleErr(err);
+    } finally {
+      inFlight.current = false;
+    }
+  }
+
+  async function saveEditor(payload: {
+    meta: Parameters<typeof saveSkillPackage>[0]['meta'];
+    files: Array<{ path: string; content: string }>;
+    deleted: string[];
+  }): Promise<void> {
+    if (!editor) return;
+    setSaving(true);
+    setError('');
+    try {
+      await saveSkillPackage(payload, editor.mode === 'edit' ? editor.id : undefined);
+      setEditor(null);
+      await loadRef.current();
+      void message.success('已保存');
+    } catch (err) {
+      const code = err instanceof Error ? err.message : '';
+      const map: Record<string, string> = {
+        skill_save_failed_400: '保存失败：请检查技能标识、文件路径与大小限制',
+        skill_save_failed_413: '内容过大',
+      };
+      if (map[code]) setError(map[code]);
+      else handleErr(err);
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function upload(file: File) {
     if (uploading) return;
     if (!/\.zip$/i.test(file.name)) {
@@ -115,7 +177,6 @@ export default function SkillsPage() {
       await loadRef.current();
       void message.success('技能包已上传');
     } catch (err) {
-      // 解析类错误码直接翻译，避免用户只看到 skill_upload_failed_400。
       const code = err instanceof Error ? err.message : '';
       const map: Record<string, string> = {
         skill_md_missing: 'zip 里没有 SKILL.md',
@@ -133,34 +194,6 @@ export default function SkillsPage() {
     } finally {
       setUploading(false);
       if (uploadRef.current) uploadRef.current.value = '';
-    }
-  }
-
-  async function save() {
-    if (!form || inFlight.current) return;
-    if (!form.name.trim() || !form.content.trim()) {
-      void message.error('技能名称与内容不能为空');
-      return;
-    }
-    inFlight.current = true;
-    setBusy(true);
-    setError('');
-    try {
-      const input: SkillInput = {
-        name: form.name.trim(),
-        description: form.description?.trim() ?? '',
-        content: form.content.trim(),
-      };
-      if (form.id) await updateSkill(form.id, input);
-      else await createSkill(input);
-      setForm(null);
-      await loadRef.current();
-      void message.success('已保存');
-    } catch (err) {
-      handleErr(err);
-    } finally {
-      inFlight.current = false;
-      setBusy(false);
     }
   }
 
@@ -228,7 +261,7 @@ export default function SkillsPage() {
                 技能市场
               </Typography.Title>
               <Typography.Text type="secondary">
-                把一套做法沉淀成技能，绑定到助手后会在执行任务时自动注入提示词。个人技能只有你能看到，共享后成为公共技能。
+                把一套做法沉淀成技能：SKILL.md 写清适用场景与步骤，还可以附带脚本、模板等文件。绑定到助手后会在执行任务时自动注入。
               </Typography.Text>
             </div>
             <Space wrap>
@@ -241,12 +274,7 @@ export default function SkillsPage() {
                   { value: 'public', label: '公共' },
                 ]}
               />
-              <Button
-                type="primary"
-                icon={<PlusOutlined />}
-                disabled={busy}
-                onClick={() => setForm({ ...EMPTY_FORM })}
-              >
+              <Button type="primary" icon={<PlusOutlined />} disabled={busy} onClick={openCreate}>
                 新建技能
               </Button>
               <Button
@@ -277,11 +305,9 @@ export default function SkillsPage() {
           ) : visible.length === 0 ? (
             <Empty
               image={Empty.PRESENTED_IMAGE_SIMPLE}
-              description={
-                filter === 'mine' ? '还没有个人技能，点右上角新建' : '暂无技能'
-              }
+              description={filter === 'mine' ? '还没有个人技能，点右上角新建' : '暂无技能'}
             >
-              <Button type="primary" icon={<PlusOutlined />} onClick={() => setForm({ ...EMPTY_FORM })}>
+              <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
                 新建技能
               </Button>
             </Empty>
@@ -296,11 +322,7 @@ export default function SkillsPage() {
                       <Space size={8}>
                         <BulbOutlined />
                         <Typography.Text strong>{item.name}</Typography.Text>
-                        {item.scope === 'public' ? (
-                          <Tag color="green">公共</Tag>
-                        ) : (
-                          <Tag>个人</Tag>
-                        )}
+                        {item.scope === 'public' ? <Tag color="green">公共</Tag> : <Tag>个人</Tag>}
                         {item.source === 'run' ? <Tag color="blue">任务总结</Tag> : null}
                         {item.source === 'upload' ? <Tag color="purple">技能包</Tag> : null}
                       </Space>
@@ -310,24 +332,11 @@ export default function SkillsPage() {
                         <Button size="small" onClick={() => setDetailFor(item)}>
                           详情
                         </Button>
-                        {item.owned && item.scope === 'personal' && item.files.length === 0 ? (
-                          <Button
-                            size="small"
-                            disabled={busy}
-                            onClick={() =>
-                              setForm({
-                                id: item.id,
-                                name: item.name,
-                                description: item.description,
-                                content: item.content,
-                              })
-                            }
-                          >
-                            编辑
-                          </Button>
-                        ) : null}
                         {item.owned && item.scope === 'personal' ? (
                           <>
+                            <Button size="small" disabled={busy} onClick={() => void openEdit(item)}>
+                              编辑
+                            </Button>
                             <Button size="small" disabled={busy} onClick={() => share(item)}>
                               共享
                             </Button>
@@ -356,7 +365,8 @@ export default function SkillsPage() {
                       {item.content}
                     </Typography.Paragraph>
                     <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                      更新于 {formatTime(item.updatedAt)}
+                      {item.files.length > 0 ? `${item.files.length} 个文件 · ` : ''}更新于{' '}
+                      {formatTime(item.updatedAt)}
                     </Typography.Text>
                   </Card>
                 </Col>
@@ -366,73 +376,14 @@ export default function SkillsPage() {
         </div>
       </div>
 
-      <Modal
-        title={form?.id ? '编辑技能' : '新建技能'}
-        open={form !== null}
-        okText="保存"
-        cancelText="取消"
-        confirmLoading={busy}
-        width={640}
-        onOk={() => void save()}
-        onCancel={() => {
-          if (!busy) setForm(null);
-        }}
-      >
-        {form ? (
-          <Space direction="vertical" size={12} style={{ width: '100%' }}>
-            <div>
-              <Typography.Text type="secondary">
-                技能标识（SKILL.md 的 name：英文小写/数字/连字符）
-              </Typography.Text>
-              <Input
-                style={{ marginTop: 4 }}
-                maxLength={64}
-                value={form.slug ?? ''}
-                disabled={busy}
-                placeholder="如：weekly-report，留空则按名称自动生成"
-                onChange={(e) => setForm({ ...form, slug: e.target.value })}
-              />
-            </div>
-            <div>
-              <Typography.Text type="secondary">技能名称</Typography.Text>
-              <Input
-                style={{ marginTop: 4 }}
-                maxLength={40}
-                value={form.name}
-                disabled={busy}
-                placeholder="如：竞品调研流程"
-                onChange={(e) => setForm({ ...form, name: e.target.value })}
-              />
-            </div>
-            <div>
-              <Typography.Text type="secondary">一句话简介</Typography.Text>
-              <Input
-                style={{ marginTop: 4 }}
-                maxLength={1024}
-                value={form.description ?? ''}
-                disabled={busy}
-                placeholder="技能市场列表里展示"
-                onChange={(e) => setForm({ ...form, description: e.target.value })}
-              />
-            </div>
-            <div>
-              <Typography.Text type="secondary">
-                技能正文（SKILL.md frontmatter 之后的内容，会拼进系统提示词）
-              </Typography.Text>
-              <Input.TextArea
-                style={{ marginTop: 4 }}
-                rows={10}
-                maxLength={20000}
-                showCount
-                value={form.content}
-                disabled={busy}
-                placeholder={'适用场景：……\n步骤：1) … 2) …\n注意：……'}
-                onChange={(e) => setForm({ ...form, content: e.target.value })}
-              />
-            </div>
-          </Space>
-        ) : null}
-      </Modal>
+      <SkillEditor
+        open={editor !== null}
+        mode={editor?.mode ?? 'create'}
+        initial={editor?.value ?? EMPTY_VALUE}
+        saving={saving}
+        onCancel={() => setEditor(null)}
+        onSubmit={(payload) => void saveEditor(payload)}
+      />
 
       <SkillDetailDialog
         open={detailFor !== null}

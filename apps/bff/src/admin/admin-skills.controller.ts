@@ -9,13 +9,19 @@ import {
   Param,
   Patch,
   Post,
+  Put,
   Query,
   Req,
   Res,
   UseGuards,
 } from '@nestjs/common';
 import type { FastifyReply, FastifyRequest } from 'fastify';
-import { SKILL_LIMITS, type PageDto, type SkillDto } from '@ai-office/shared';
+import {
+  SKILL_LIMITS,
+  type PageDto,
+  type SkillDto,
+  type SkillPackageContentsDto,
+} from '@ai-office/shared';
 import { JwtGuard } from '../auth/jwt.guard';
 import { AdminGuard } from '../auth/admin.guard';
 import { CurrentUser } from '../auth/current-user';
@@ -47,6 +53,31 @@ export class AdminSkillsController {
     @Body() body: unknown,
   ): Promise<SkillDto> {
     return this.skills.create(body, actorOf(user, req));
+  }
+
+  /** 编辑器新建公共技能：一次性提交 frontmatter 字段与包内文本文件。 */
+  @Post('package')
+  createPackage(
+    @CurrentUser() user: JwtPayload,
+    @Req() req: FastifyRequest,
+    @Body() body: unknown,
+  ): Promise<SkillDto> {
+    return this.skills.savePackage(body, actorOf(user, req));
+  }
+
+  @Get(':id/package')
+  packageContents(@Param('id') id: string): Promise<SkillPackageContentsDto> {
+    return this.skills.packageContents(id);
+  }
+
+  @Put(':id/package')
+  savePackage(
+    @CurrentUser() user: JwtPayload,
+    @Req() req: FastifyRequest,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ): Promise<SkillDto> {
+    return this.skills.savePackage(body, actorOf(user, req), id);
   }
 
   @Patch(':id')
