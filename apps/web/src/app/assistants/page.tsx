@@ -11,7 +11,6 @@ import {
   Col,
   Empty,
   Input,
-  List,
   Modal,
   Popover,
   Row,
@@ -288,6 +287,69 @@ export default function AssistantsPage() {
     return names.length <= 3 ? names.join('、') : `${names.slice(0, 3).join('、')} 等 ${names.length} 个`;
   };
 
+  // 内置（公共）与我的分开排列，避免混在一个列表里分不清归属。
+  const builtinAssistants = assistants.filter((a) => a.scope === 'public');
+  const myAssistants = assistants.filter((a) => a.scope !== 'public');
+
+  function renderAssistantCard(a: AssistantDto) {
+    const readonly = a.scope === 'public';
+    return (
+      <Card
+        key={a.id}
+        size="small"
+        style={{ height: '100%' }}
+        title={
+          <Space size={6}>
+            <RobotOutlined style={{ color: '#00b07b' }} />
+            <Typography.Text strong ellipsis={{ tooltip: a.name }} style={{ maxWidth: 180 }}>
+              {a.name}
+            </Typography.Text>
+            {readonly ? <Tag color="green">内置</Tag> : null}
+            {editing === a.id ? <Tag color="processing">编辑中</Tag> : null}
+          </Space>
+        }
+        extra={
+          readonly ? (
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              只读
+            </Typography.Text>
+          ) : (
+            <Space size={0}>
+              <Button size="small" type="text" disabled={busy} onClick={() => startEdit(a)}>
+                编辑
+              </Button>
+              <Button
+                size="small"
+                type="text"
+                danger
+                disabled={busy}
+                icon={<DeleteOutlined />}
+                aria-label={`删除 ${a.name}`}
+                onClick={() => remove(a)}
+              />
+            </Space>
+          )
+        }
+      >
+        <Typography.Paragraph
+          type="secondary"
+          style={{ marginBottom: 10, minHeight: 40 }}
+          ellipsis={{ rows: 2 }}
+        >
+          {a.description || '暂无简介'}
+        </Typography.Paragraph>
+        <Space size={4} wrap>
+          <Tag>{skillLabels(a.skills)}</Tag>
+          <Tag>{ASSISTANT_PERMISSION_MODE_LABELS[a.permissionMode].split('：')[0]}</Tag>
+          <Tag>{a.model || '系统默认模型'}</Tag>
+          <Tag color={a.kbIds.length === 0 ? undefined : 'success'}>{kbSummary(a.kbIds)}</Tag>
+          {a.skillIds.length > 0 ? <Tag color="purple">技能 {a.skillIds.length}</Tag> : null}
+          {a.connectorIds.length > 0 ? <Tag color="blue">连接器 {a.connectorIds.length}</Tag> : null}
+        </Space>
+      </Card>
+    );
+  }
+
   return (
     <AppShell active="assistants">
       <div className="page-scroll">
@@ -541,15 +603,39 @@ export default function AssistantsPage() {
 
           <Card
             size="small"
-            title="全部专家助手"
+            title="内置专家助手"
             extra={
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                共 {assistants.length} 个
+                共 {builtinAssistants.length} 个
+              </Typography.Text>
+            }
+            style={{ marginBottom: 16 }}
+            loading={loading && assistants.length === 0}
+          >
+            {builtinAssistants.length === 0 && !loading ? (
+              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无内置专家助手" />
+            ) : (
+              <Row gutter={[12, 12]}>
+                {builtinAssistants.map((a) => (
+                  <Col key={a.id} xs={24} md={12} xl={8}>
+                    {renderAssistantCard(a)}
+                  </Col>
+                ))}
+              </Row>
+            )}
+          </Card>
+
+          <Card
+            size="small"
+            title="我的专家助手"
+            extra={
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                共 {myAssistants.length} 个
               </Typography.Text>
             }
             loading={loading && assistants.length === 0}
           >
-            {assistants.length === 0 && !loading ? (
+            {myAssistants.length === 0 && !loading ? (
               <Empty
                 image={Empty.PRESENTED_IMAGE_SIMPLE}
                 description={
@@ -566,73 +652,13 @@ export default function AssistantsPage() {
                 </Button>
               </Empty>
             ) : (
-              <List
-                dataSource={assistants}
-                rowKey="id"
-                split
-                renderItem={(a) => (
-                  <List.Item
-                    actions={
-                      a.scope === 'public'
-                        ? [
-                            <Typography.Text key="readonly" type="secondary" style={{ fontSize: 12 }}>
-                              公共内置，只读
-                            </Typography.Text>,
-                          ]
-                        : [
-                            <Button
-                              key="edit"
-                              size="small"
-                              disabled={busy}
-                              onClick={() => startEdit(a)}
-                            >
-                              编辑
-                            </Button>,
-                            <Button
-                              key="delete"
-                              size="small"
-                              type="text"
-                              danger
-                              icon={<DeleteOutlined />}
-                              disabled={busy}
-                              aria-label={`删除 ${a.name}`}
-                              onClick={() => remove(a)}
-                            >
-                              删除
-                            </Button>,
-                          ]
-                    }
-                  >
-                    <List.Item.Meta
-                      avatar={<RobotOutlined style={{ fontSize: 20, color: '#00b07b' }} />}
-                      title={
-                        <Space size={8} wrap>
-                          <Typography.Text strong>{a.name}</Typography.Text>
-                          {a.scope === 'public' ? <Tag color="green">公共内置</Tag> : null}
-                          {editing === a.id ? <Tag color="processing">编辑中</Tag> : null}
-                        </Space>
-                      }
-                      description={
-                        <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                          <Space size={4} wrap>
-                            <Tag>{skillLabels(a.skills)}</Tag>
-                            <Tag>{ASSISTANT_PERMISSION_MODE_LABELS[a.permissionMode].split('：')[0]}</Tag>
-                            <Tag>{a.model || '默认模型'}</Tag>
-                            <Tag color={a.kbIds.length === 0 ? undefined : 'success'}>
-                              {kbSummary(a.kbIds)}
-                            </Tag>
-                          </Space>
-                          {a.description ? (
-                            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                              {a.description}
-                            </Typography.Text>
-                          ) : null}
-                        </Space>
-                      }
-                    />
-                  </List.Item>
-                )}
-              />
+              <Row gutter={[12, 12]}>
+                {myAssistants.map((a) => (
+                  <Col key={a.id} xs={24} md={12} xl={8}>
+                    {renderAssistantCard(a)}
+                  </Col>
+                ))}
+              </Row>
             )}
           </Card>
         </div>
