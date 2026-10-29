@@ -28,6 +28,7 @@ import {
   type AssistantDto,
   type AssistantInput,
   type AssistantPermissionMode,
+  type ClientModelDto,
   type KbBaseDto,
   type SkillDto,
 } from '@ai-office/shared';
@@ -39,6 +40,7 @@ import {
   isUnauthorized,
   listAssistants,
   listKbBases,
+  listModels,
   listSkills,
   updateAssistant,
 } from '../../lib/api';
@@ -49,6 +51,7 @@ interface FormState {
   description: string;
   systemPrompt: string;
   permissionMode: AssistantPermissionMode;
+  model: string;
   skills: string[];
   /** 绑定的技能市场技能（公共或自己的个人技能）。 */
   skillIds: string[];
@@ -60,6 +63,7 @@ const EMPTY: FormState = {
   description: '',
   systemPrompt: '',
   permissionMode: 'standard',
+  model: '',
   skills: ASSISTANT_SKILLS.map((s) => s.key),
   skillIds: [],
   kbIds: [],
@@ -69,6 +73,7 @@ export default function AssistantsPage() {
   const router = useRouter();
   const { message, modal } = App.useApp();
   const [assistants, setAssistants] = useState<AssistantDto[]>([]);
+  const [models, setModels] = useState<ClientModelDto[]>([]);
   const [bases, setBases] = useState<KbBaseDto[]>([]);
   // 可绑定的技能：公共技能 + 自己的个人技能（接口已按可见性过滤）。
   const [skillCatalog, setSkillCatalog] = useState<SkillDto[]>([]);
@@ -94,12 +99,14 @@ export default function AssistantsPage() {
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const [rows, kbBases, skills] = await Promise.all([
+      const [rows, modelData, kbBases, skills] = await Promise.all([
         listAssistants(),
+        listModels(),
         listKbBases(),
         listSkills(),
       ]);
       setAssistants(rows);
+      setModels(modelData.models);
       setBases(kbBases);
       setSkillCatalog(skills.items);
     } catch (err) {
@@ -140,6 +147,7 @@ export default function AssistantsPage() {
       description: a.description,
       systemPrompt: a.systemPrompt,
       permissionMode: a.permissionMode,
+      model: a.model ?? '',
       skills: a.skills,
       // 已下架/已删除的技能不保留绑定，避免保存时被服务端整单拒绝。
       skillIds: a.skillIds.filter((id) => skillCatalog.some((s) => s.id === id)),
@@ -162,8 +170,7 @@ export default function AssistantsPage() {
       description: form.description,
       systemPrompt: form.systemPrompt,
       permissionMode: form.permissionMode,
-      // 专家助手不再单独选模型：统一跟随系统默认模型。
-      model: null,
+      model: form.model || null,
       skills: form.skills,
       skillIds: form.skillIds,
       kbIds: form.kbIds,
@@ -246,7 +253,7 @@ export default function AssistantsPage() {
             <div>
               <h1 className="page-title">我的专家助手</h1>
               <p className="page-sub">
-                创建专属专家助手：设定系统提示词、技能、权限模式与可检索的知识库范围。
+                创建专属专家助手：设定系统提示词、技能、权限模式、默认模型与可检索的知识库范围。
               </p>
             </div>
             <div className="page-head-actions">
@@ -299,6 +306,27 @@ export default function AssistantsPage() {
                     disabled={busy}
                     placeholder="一句话说明这个专家助手擅长什么"
                     onChange={(e) => setForm({ ...form, description: e.target.value })}
+                  />
+                </div>
+              </Col>
+              <Col xs={24} md={12}>
+                <div className="admin-field">
+                  <Typography.Text>默认模型</Typography.Text>
+                  <Select
+                    style={{ width: '100%' }}
+                    value={form.model || ''}
+                    disabled={busy}
+                    onChange={(value: string) => setForm({ ...form, model: value })}
+                    options={[
+                      { value: '', label: '系统默认模型' },
+                      ...models.map((m) => ({
+                        value: m.model,
+                        label:
+                          m.displayName && m.displayName !== m.model
+                            ? `${m.displayName} · ${m.model}`
+                            : m.model,
+                      })),
+                    ]}
                   />
                 </div>
               </Col>
@@ -517,7 +545,7 @@ export default function AssistantsPage() {
                           <Space size={4} wrap>
                             <Tag>{skillLabels(a.skills)}</Tag>
                             <Tag>{ASSISTANT_PERMISSION_MODE_LABELS[a.permissionMode].split('：')[0]}</Tag>
-                            <Tag>{a.model || '系统默认模型'}</Tag>
+                            <Tag>{a.model || '默认模型'}</Tag>
                             <Tag color={a.kbIds.length === 0 ? undefined : 'success'}>
                               {kbSummary(a.kbIds)}
                             </Tag>
