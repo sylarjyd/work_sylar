@@ -323,9 +323,18 @@ export default function SkillsPage() {
               image={Empty.PRESENTED_IMAGE_SIMPLE}
               description={filter === 'mine' ? '还没有个人技能，点右上角新建' : '暂无技能'}
             >
-              <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
-                新建技能
-              </Button>
+              <Space wrap>
+                <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
+                  新建技能
+                </Button>
+                <Button
+                  icon={<UploadOutlined />}
+                  loading={uploading}
+                  onClick={() => uploadRef.current?.click()}
+                >
+                  上传技能包
+                </Button>
+              </Space>
             </Empty>
           ) : (
             <Row gutter={[12, 12]}>
