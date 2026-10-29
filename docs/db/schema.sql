@@ -77,6 +77,7 @@ CREATE TABLE "Assistant" (
     "id" TEXT NOT NULL,
     "tenantId" TEXT NOT NULL,
     "userId" TEXT NOT NULL,
+    "scope" TEXT NOT NULL DEFAULT 'personal',
     "name" TEXT NOT NULL,
     "description" TEXT NOT NULL DEFAULT '',
     "systemPrompt" TEXT NOT NULL DEFAULT '',
@@ -516,6 +517,9 @@ CREATE INDEX "Session_assistantId_idx" ON "Session"("assistantId");
 CREATE INDEX "Assistant_tenantId_userId_idx" ON "Assistant"("tenantId", "userId");
 
 -- CreateIndex
+CREATE INDEX "Assistant_scope_updatedAt_idx" ON "Assistant"("scope", "updatedAt");
+
+-- CreateIndex
 CREATE UNIQUE INDEX "Assistant_tenantId_userId_name_key" ON "Assistant"("tenantId", "userId", "name");
 
 -- CreateIndex
@@ -772,10 +776,11 @@ COMMENT ON COLUMN "Session"."model" IS '会话选定的模型名；历史会话�
 COMMENT ON COLUMN "Session"."assistantId" IS '会话选定的自定义助手 ID；助手被删除后置空';
 COMMENT ON COLUMN "Session"."mode" IS '任务分类：chat（对话）/ task（任务）/ code（编码）';
 COMMENT ON COLUMN "Session"."createdAt" IS '创建时间';
-COMMENT ON TABLE "Assistant" IS '自定义助手表：系统提示词、技能、权限模式、默认模型与知识库范围';
+COMMENT ON TABLE "Assistant" IS '助手表：个人助手仅创建者可见，public 为内置公共助手（跨租户只读）';
 COMMENT ON COLUMN "Assistant"."id" IS '助手 ID';
 COMMENT ON COLUMN "Assistant"."tenantId" IS '所属租户 ID';
 COMMENT ON COLUMN "Assistant"."userId" IS '创建者用户 ID';
+COMMENT ON COLUMN "Assistant"."scope" IS '可见范围：personal（仅创建者）/ public（内置公共助手，所有租户只读可见）';
 COMMENT ON COLUMN "Assistant"."name" IS '助手名称，同一用户下唯一';
 COMMENT ON COLUMN "Assistant"."description" IS '助手简介';
 COMMENT ON COLUMN "Assistant"."systemPrompt" IS '系统提示词';

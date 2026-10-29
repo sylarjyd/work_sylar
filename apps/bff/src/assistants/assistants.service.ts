@@ -24,6 +24,7 @@ const MAX_SKILL_BINDINGS = 20;
 
 interface AssistantRow {
   id: string;
+  scope?: string;
   name: string;
   description: string;
   systemPrompt: string;
@@ -43,8 +44,9 @@ export class AssistantsService {
 
   async list(tenantId: string, userId: string): Promise<AssistantDto[]> {
     const rows = await this.prisma.assistant.findMany({
-      where: { tenantId, userId },
-      orderBy: [{ updatedAt: 'desc' }, { id: 'asc' }],
+      // 公共内置助手所有人可见；个人助手只有创建者可见。
+      where: { OR: [{ scope: 'public' }, { tenantId, userId }] },
+      orderBy: [{ scope: 'asc' }, { updatedAt: 'desc' }, { id: 'asc' }],
     });
     return rows.map(toDto);
   }
@@ -252,6 +254,7 @@ function mapWriteError(err: unknown): unknown {
 function toDto(row: AssistantRow): AssistantDto {
   return {
     id: row.id,
+    scope: row.scope === 'public' ? 'public' : 'personal',
     name: row.name,
     description: row.description,
     systemPrompt: row.systemPrompt,

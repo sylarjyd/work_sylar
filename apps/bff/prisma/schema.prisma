@@ -68,6 +68,8 @@ model Assistant {
   id             String   @id @default(uuid())
   tenantId       String
   userId         String
+  /// personal：仅创建者可见；public：内置/公共助手，所有租户可见但用户只读。
+  scope          String   @default("personal")
   name           String
   description    String   @default("")
   systemPrompt   String   @default("")
@@ -85,6 +87,7 @@ model Assistant {
 
   @@unique([tenantId, userId, name])
   @@index([tenantId, userId])
+  @@index([scope, updatedAt])
 }
 
 model Message {

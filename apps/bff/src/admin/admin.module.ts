@@ -32,6 +32,8 @@ import { AttachmentsModule } from '../attachments/attachments.module';
 import { SkillsModule } from '../skills/skills.module';
 import { AdminSkillsController } from './admin-skills.controller';
 import { AdminSkillsService } from './admin-skills.service';
+import { AdminAssistantsController } from './admin-assistants.controller';
+import { AdminAssistantsService } from './admin-assistants.service';
 
 /** 管理端模块：用户/租户/套餐/会话/任务/模型/参数/审计/概览/告警/知识库/问答缓存/附件预览统一装配。 */
 @Module({
@@ -60,6 +62,7 @@ import { AdminSkillsService } from './admin-skills.service';
     AdminQaCacheController,
     AdminAttachmentsController,
     AdminSkillsController,
+    AdminAssistantsController,
   ],
   providers: [
     AdminUsersService,
@@ -73,6 +76,7 @@ import { AdminSkillsService } from './admin-skills.service';
     AdminKbService,
     AdminQaCacheService,
     AdminSkillsService,
+    AdminAssistantsService,
   ],
 })
 export class AdminModule {}

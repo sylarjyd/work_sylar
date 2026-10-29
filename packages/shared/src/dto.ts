@@ -503,6 +503,8 @@ function toolsForSkillSet(skills: readonly string[]): string[] {
 
 export interface AssistantDto {
   id: string;
+  /** personal：仅自己可见可编辑；public：内置公共助手，只读。 */
+  scope: 'personal' | 'public';
   name: string;
   description: string;
   systemPrompt: string;
@@ -529,6 +531,25 @@ export interface AssistantInput {
 }
 
 export type AssistantPatch = Partial<AssistantInput>;
+
+/** 运营端助手列表：含创建者与绑定技能名，便于排查「用户到底配了什么」。 */
+export interface AdminAssistantDto {
+  id: string;
+  scope: 'personal' | 'public';
+  name: string;
+  description: string;
+  /** 系统提示词全文，运营端详情里展示。 */
+  systemPrompt: string;
+  ownerEmail: string | null;
+  model: string | null;
+  permissionMode: AssistantPermissionMode;
+  skills: string[];
+  skillIds: string[];
+  skillNames: string[];
+  kbIds: string[];
+  createdAt: string;
+  updatedAt: string;
+}
 
 // ---------------------------------------------------------------------------
 // 技能市场

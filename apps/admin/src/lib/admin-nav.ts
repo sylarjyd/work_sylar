@@ -32,6 +32,7 @@ export const ADMIN_NAV: AdminNavEntry[] = [
     label: '会话与任务',
     items: [
       { href: '/sessions', label: '会话管理' },
+      { href: '/assistants', label: '助手管理' },
       { href: '/tasks', label: '任务与运行' },
     ],
   },

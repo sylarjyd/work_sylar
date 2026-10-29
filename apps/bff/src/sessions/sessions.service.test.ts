@@ -10,6 +10,7 @@ interface AssistantFixture {
   id: string;
   tenantId: string;
   userId: string;
+  scope: string;
   name: string;
   systemPrompt: string;
   permissionMode: string;
@@ -23,6 +24,7 @@ const ASSISTANT: AssistantFixture = {
   id: 'a1',
   tenantId: 't1',
   userId: 'u1',
+  scope: 'personal',
   name: '合同助手',
   systemPrompt: '你是合同审阅助手',
   permissionMode: 'readonly',
@@ -213,12 +215,25 @@ function makeService(
       findFirst: async ({
         where,
       }: {
-        where: { id: string; tenantId: string; userId: string };
+        where: {
+          id: string;
+          tenantId?: string;
+          userId?: string;
+          OR?: Array<{ scope?: string; tenantId?: string; userId?: string }>;
+        };
       }) =>
-        assistants.find(
-          (a) =>
-            a.id === where.id && a.tenantId === where.tenantId && a.userId === where.userId,
-        ) ?? null,
+        assistants.find((a) => {
+          if (a.id !== where.id) return false;
+          // 真实查询用 OR 表达「公共助手或本人个人助手」，这里按同样语义匹配。
+          if (where.OR) {
+            return where.OR.some((part) =>
+              part.scope === 'public'
+                ? a.scope === 'public'
+                : a.tenantId === part.tenantId && a.userId === part.userId,
+            );
+          }
+          return a.tenantId === where.tenantId && a.userId === where.userId;
+        }) ?? null,
     },
     task: {
       findFirst: async ({

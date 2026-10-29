@@ -483,34 +483,43 @@ export default function AssistantsPage() {
                 split
                 renderItem={(a) => (
                   <List.Item
-                    actions={[
-                      <Button
-                        key="edit"
-                        size="small"
-                        disabled={busy}
-                        onClick={() => startEdit(a)}
-                      >
-                        编辑
-                      </Button>,
-                      <Button
-                        key="delete"
-                        size="small"
-                        type="text"
-                        danger
-                        icon={<DeleteOutlined />}
-                        disabled={busy}
-                        aria-label={`删除 ${a.name}`}
-                        onClick={() => remove(a)}
-                      >
-                        删除
-                      </Button>,
-                    ]}
+                    actions={
+                      a.scope === 'public'
+                        ? [
+                            <Typography.Text key="readonly" type="secondary" style={{ fontSize: 12 }}>
+                              公共内置，只读
+                            </Typography.Text>,
+                          ]
+                        : [
+                            <Button
+                              key="edit"
+                              size="small"
+                              disabled={busy}
+                              onClick={() => startEdit(a)}
+                            >
+                              编辑
+                            </Button>,
+                            <Button
+                              key="delete"
+                              size="small"
+                              type="text"
+                              danger
+                              icon={<DeleteOutlined />}
+                              disabled={busy}
+                              aria-label={`删除 ${a.name}`}
+                              onClick={() => remove(a)}
+                            >
+                              删除
+                            </Button>,
+                          ]
+                    }
                   >
                     <List.Item.Meta
                       avatar={<RobotOutlined style={{ fontSize: 20, color: '#00b07b' }} />}
                       title={
                         <Space size={8} wrap>
                           <Typography.Text strong>{a.name}</Typography.Text>
+                          {a.scope === 'public' ? <Tag color="green">公共内置</Tag> : null}
                           {editing === a.id ? <Tag color="processing">编辑中</Tag> : null}
                         </Space>
                       }

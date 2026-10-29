@@ -16,6 +16,7 @@ import type {
   AdminMetricTimeseriesDto,
   AdminModelDto,
   AdminModelProviderDto,
+  AdminAssistantDto,
   AdminModelsDto,
   AdminModelTestResultDto,
   AdminOverviewDto,
@@ -431,6 +432,13 @@ export function deleteAdminKbDoc(
     `/api/admin/kb/bases/${encodeURIComponent(baseId)}/docs/${encodeURIComponent(docId)}`,
     { method: 'DELETE', body: JSON.stringify(body) },
   );
+}
+
+// ------------------------------------------------------------------ 助手管理
+export function listAdminAssistants(
+  params: { page?: number; pageSize?: number; scope?: 'public' | 'personal'; q?: string } = {},
+): Promise<PageDto<AdminAssistantDto>> {
+  return request(`/api/admin/assistants${query(params)}`);
 }
 
 // ------------------------------------------------------------------ 技能市场

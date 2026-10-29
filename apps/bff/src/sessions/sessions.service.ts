@@ -178,8 +178,12 @@ export class SessionsService {
         : null;
     let assistant: AssistantRow | null = null;
     if (assistantId) {
+      // 公共内置助手所有租户可用；个人助手只能绑定自己的。
       assistant = await this.prisma.assistant.findFirst({
-        where: { id: assistantId, tenantId, userId },
+        where: {
+          id: assistantId,
+          OR: [{ scope: 'public' }, { tenantId, userId }],
+        },
         select: {
           id: true,
           name: true,
