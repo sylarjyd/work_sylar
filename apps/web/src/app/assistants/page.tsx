@@ -12,6 +12,7 @@ import {
   Empty,
   Input,
   List,
+  Modal,
   Row,
   Select,
   Space,
@@ -77,6 +78,7 @@ export default function AssistantsPage() {
   // 可绑定的技能：公共技能 + 自己的个人技能（接口已按可见性过滤）。
   const [skillCatalog, setSkillCatalog] = useState<SkillDto[]>([]);
   const [form, setForm] = useState<FormState>(EMPTY);
+  const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -126,10 +128,20 @@ export default function AssistantsPage() {
     setEditing(null);
     setForm(EMPTY);
     setError('');
+    setFormOpen(false);
+  }
+
+  // 列表默认就是主视图：新建/编辑表单放在弹窗里，点按钮才出现。
+  function openCreate() {
+    setEditing(null);
+    setForm(EMPTY);
+    setError('');
+    setFormOpen(true);
   }
 
   function startEdit(a: AssistantDto) {
     setEditing(a.id);
+    setFormOpen(true);
     setForm({
       name: a.name,
       description: a.description,
@@ -245,7 +257,7 @@ export default function AssistantsPage() {
               </p>
             </div>
             <div className="page-head-actions">
-              <Button type="primary" icon={<PlusOutlined />} disabled={busy} onClick={resetForm}>
+              <Button type="primary" icon={<PlusOutlined />} disabled={busy} onClick={openCreate}>
                 新建专家助手
               </Button>
             </div>
@@ -262,10 +274,15 @@ export default function AssistantsPage() {
             />
           ) : null}
 
-          <Card
-            size="small"
+          <Modal
+            open={formOpen}
             title={editing ? `编辑 ${form.name}` : '新建专家助手'}
-            style={{ marginBottom: 16 }}
+            footer={null}
+            width={900}
+            destroyOnClose
+            onCancel={() => {
+              if (!busy) resetForm();
+            }}
           >
             <Row gutter={[16, 0]}>
               <Col xs={24} md={12}>
@@ -448,7 +465,7 @@ export default function AssistantsPage() {
                 </Space>
               </Col>
             </Row>
-          </Card>
+          </Modal>
 
           <Card
             size="small"
@@ -472,7 +489,7 @@ export default function AssistantsPage() {
                   </Space>
                 }
               >
-                <Button type="primary" icon={<PlusOutlined />} onClick={resetForm}>
+                <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
                   新建专家助手
                 </Button>
               </Empty>
