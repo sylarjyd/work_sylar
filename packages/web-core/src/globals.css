@@ -4126,7 +4126,12 @@ button.wb-user-attachment {
 /* 任务分类 tab：贴在输入框上方，选中态用薄荷色下划线呼应品牌色。 */
 .wb-mode-tabs {
   margin: 0 0 14px;
-  padding: 0 6px;
+  padding: 0;
+}
+
+/* 分类居中：AntD 的 centered 只做 flex 居中，这里统一 tab 间距。 */
+.wb-mode-tabs .ant-tabs-nav-wrap {
+  justify-content: center;
 }
 
 .wb-mode-tabs .ant-tabs-nav {

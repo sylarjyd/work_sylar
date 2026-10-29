@@ -1425,6 +1425,7 @@ export default function Home() {
         <Tabs
           className="wb-mode-tabs"
           size="small"
+          centered
           activeKey={selectedMode}
           onChange={(key) => setSelectedMode(key as SessionMode)}
           items={SESSION_MODES.map((mode) => ({
