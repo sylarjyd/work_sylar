@@ -297,12 +297,14 @@ export default function AssistantsPage() {
                   />
                 </div>
               </Col>
-              <Col xs={24} md={12}>
+              <Col span={24}>
                 <div className="admin-field">
                   <Typography.Text>简介</Typography.Text>
-                  <Input
+                  <Input.TextArea
+                    rows={3}
                     value={form.description}
                     maxLength={200}
+                    showCount
                     disabled={busy}
                     placeholder="一句话说明这个专家助手擅长什么"
                     onChange={(e) => setForm({ ...form, description: e.target.value })}
