@@ -15,6 +15,7 @@ interface AssistantFixture {
   permissionMode: string;
   model: string | null;
   skills: string[];
+  skillIds: string[];
   kbIds: string[];
 }
 
@@ -27,6 +28,7 @@ const ASSISTANT: AssistantFixture = {
   permissionMode: 'readonly',
   model: 'm2',
   skills: ['kb', 'web'],
+  skillIds: ['k1'],
   kbIds: ['b1'],
 };
 
@@ -137,8 +139,10 @@ function makeService(
       },
       findFirst: async ({
         where,
+        include,
       }: {
         where: { id: string; tenantId: string; userId: string; status?: unknown };
+        include?: { assistant?: { select?: Record<string, boolean> } };
       }) => {
         const row =
           data.find(
@@ -149,13 +153,21 @@ function makeService(
               matchesStatus(s, where.status),
           ) ?? null;
         if (!row) return null;
-        return {
-          ...row,
-          assistant:
-            row.assistantId === ASSISTANT.id
-              ? assistants.find((a) => a.id === ASSISTANT.id) ?? null
-              : null,
-        };
+        const assistantRow =
+          row.assistantId === ASSISTANT.id
+            ? assistants.find((a) => a.id === ASSISTANT.id) ?? null
+            : null;
+        // 按真实 select 投影：少选字段（例如漏了 skillIds）会直接让断言失败。
+        const select = include?.assistant?.select;
+        const assistant =
+          assistantRow && select
+            ? Object.fromEntries(
+                Object.keys(select)
+                  .filter((key) => key in assistantRow)
+                  .map((key) => [key, (assistantRow as Record<string, unknown>)[key]]),
+              )
+            : assistantRow;
+        return { ...row, assistant };
       },
       updateMany: async ({
         where,
@@ -414,7 +426,7 @@ describe('SessionsService 选模', () => {
         systemPrompt: '你是合同审阅助手',
         permissionMode: 'readonly',
         skills: ['web', 'kb'],
-        skillIds: [],
+        skillIds: ['k1'],
         kbIds: ['b1'],
       },
     });

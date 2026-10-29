@@ -238,6 +238,7 @@ export class SessionsService {
             systemPrompt: true,
             permissionMode: true,
             skills: true,
+            skillIds: true,
             kbIds: true,
           },
         },
