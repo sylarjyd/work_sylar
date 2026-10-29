@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Tabs } from 'antd';
+import { Dropdown, Tabs, type MenuProps } from 'antd';
 import {
   ATTACHMENT_ACCEPT,
   ATTACHMENT_MAX_PER_MESSAGE,
@@ -1431,25 +1431,6 @@ export default function Home() {
         </div>
       )}
       <div className="wb-composer">
-        {!sessionId && assistants.length > 0 && (
-          <div className="wb-composer-model">
-            <select
-              className="wb-model-select"
-              value={selectedAssistantId}
-              onChange={(e) => handleAssistantChange(e.target.value)}
-              disabled={running}
-              aria-label="选择专家助手"
-              title="选择本次任务使用的专家助手"
-            >
-              <option value="">默认专家助手</option>
-              {assistants.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.name}
-                </option>
-              ))}
-            </select>
-          </div>
-        )}
         {modelsLoaded && models.length === 0 && (
           <div className="wb-model-empty">当前套餐暂无可用模型，请联系管理员。</div>
         )}
@@ -1520,16 +1501,73 @@ export default function Home() {
           aria-label="任务目标"
         />
         <div className="wb-composer-foot">
-          <button
-            type="button"
-            className="wb-attach"
-            onClick={() => fileInputRef.current?.click()}
-            disabled={running || pendingAttachments.length >= ATTACHMENT_MAX_PER_MESSAGE}
-            aria-label="添加附件"
-            title="添加附件（文本、图片、音频、视频，支持直接粘贴）"
+          <Dropdown
+            trigger={['click']}
+            disabled={running}
+            menu={{
+              items: [
+                {
+                  key: 'file',
+                  label: '添加文件',
+                  disabled: pendingAttachments.length >= ATTACHMENT_MAX_PER_MESSAGE,
+                },
+                {
+                  key: 'assistant',
+                  label: '专家',
+                  // 会话创建后专家已固定，只有新建任务（草稿态）能换。
+                  disabled: Boolean(sessionId) || assistants.length === 0,
+                  children: [
+                    { key: 'assistant:', label: '不绑定（默认）' },
+                    ...assistants.map((a) => ({
+                      key: `assistant:${a.id}`,
+                      label: a.scope === 'public' ? `${a.name}（公共）` : a.name,
+                    })),
+                  ],
+                },
+                { key: 'skills', label: '技能' },
+                { key: 'connectors', label: '连接器' },
+              ] as MenuProps['items'],
+              onClick: ({ key }) => {
+                if (key === 'file') {
+                  fileInputRef.current?.click();
+                } else if (key === 'skills') {
+                  router.push('/skills');
+                } else if (key === 'connectors') {
+                  router.push('/connectors');
+                } else if (key === 'assistant:') {
+                  handleAssistantChange('');
+                } else if (key.startsWith('assistant:')) {
+                  handleAssistantChange(key.slice('assistant:'.length));
+                }
+              },
+            }}
           >
-            <IconPlus size={16} />
-          </button>
+            <button
+              type="button"
+              className="wb-attach"
+              disabled={running}
+              aria-label="添加文件、选择专家、技能或连接器"
+              title="添加文件 / 专家 / 技能 / 连接器"
+            >
+              <IconPlus size={16} />
+            </button>
+          </Dropdown>
+          {assistants.find((a) => a.id === selectedAssistantId)?.name ? (
+            <span className="wb-assistant-badge" title="本次任务使用的专家助手">
+              专家：{assistants.find((a) => a.id === selectedAssistantId)?.name}
+              <button
+                type="button"
+                className="wb-attachment-remove"
+                style={{ marginLeft: 4 }}
+                disabled={running}
+                aria-label="取消绑定专家"
+                title="取消绑定，使用默认"
+                onClick={() => handleAssistantChange('')}
+              >
+                <IconX size={10} />
+              </button>
+            </span>
+          ) : null}
           <span className="wb-composer-hint">Enter 发送 · Shift + Enter 换行</span>
           <div className="spacer" />
           <select
