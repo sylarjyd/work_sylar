@@ -2335,6 +2335,7 @@ a {
 }
 
 .wb-drawer {
+  position: relative;
   display: flex;
   flex: 0 0 var(--wb-drawer-w);
   flex-direction: column;
@@ -3193,6 +3194,82 @@ a {
 
 .wb-drawer-trigger {
   position: relative;
+}
+
+/* 成果入口：带文字与计数的胶囊，比纯图标更容易发现，也和顶部其它控件协调。 */
+.wb-artifact-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--wb-ink-2);
+  background: #fff;
+  border: 1px solid var(--wb-line-strong);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
+}
+
+.wb-artifact-btn:hover {
+  color: var(--wb-ink);
+  background: var(--surface-2);
+  border-color: rgba(0, 0, 0, 0.22);
+}
+
+.wb-artifact-btn.active {
+  color: var(--mint-ink);
+  background: rgba(0, 176, 123, 0.09);
+  border-color: rgba(0, 176, 123, 0.45);
+}
+
+.wb-artifact-count {
+  display: grid;
+  place-items: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 1;
+  color: #fff;
+  background: #1a1a1a;
+  border-radius: 999px;
+}
+
+.wb-artifact-btn.active .wb-artifact-count {
+  background: #00a874;
+}
+
+@media (max-width: 640px) {
+  .wb-artifact-btn-label {
+    display: none;
+  }
+
+  .wb-artifact-btn {
+    padding: 0 9px;
+  }
+}
+
+/* 成果面板右侧停靠，拖动左侧手柄调整宽度（双击恢复默认）。 */
+.wb-drawer-resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -3px;
+  z-index: 3;
+  width: 6px;
+  cursor: col-resize;
+  touch-action: none;
+  background: transparent;
+  transition: background 0.15s;
+}
+
+.wb-drawer-resizer:hover,
+.wb-drawer-resizer:active {
+  background: rgba(0, 176, 123, 0.35);
 }
 
 .wb-badge {

@@ -1741,16 +1741,17 @@ export default function Home() {
         <div className="wb-topbar-actions">
           <button
             type="button"
-            className={`wb-icon-btn wb-drawer-trigger${drawerOpen ? ' active' : ''}`}
+            className={`wb-artifact-btn${drawerOpen ? ' active' : ''}`}
             onClick={() => setDrawerOpen((v) => !v)}
             aria-label={artifacts.length ? `成果（${artifacts.length} 个文件）` : '成果'}
             aria-expanded={drawerOpen}
             aria-controls="wb-artifacts-panel"
-            title="成果"
+            title={drawerOpen ? '收起成果' : '查看成果'}
           >
-            <IconFile size={17} />
+            <IconFile size={16} />
+            <span className="wb-artifact-btn-label">成果</span>
             {artifacts.length > 0 && (
-              <span className="wb-badge" aria-hidden="true">
+              <span className="wb-artifact-count" aria-hidden="true">
                 {artifacts.length}
               </span>
             )}

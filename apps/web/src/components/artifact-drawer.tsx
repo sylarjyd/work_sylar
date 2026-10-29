@@ -115,8 +115,53 @@ export function ArtifactDrawer({
 }: ArtifactDrawerProps) {
   const closeRef = useRef<HTMLButtonElement>(null);
   const onCloseRef = useRef(onClose);
+  const asideRef = useRef<HTMLElement>(null);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [preview, setPreview] = useState<SessionChartDto | null>(null);
+  // 面板宽度可拖动：null 表示用 CSS 默认宽（窄屏还受媒体查询约束）。
+  const [width, setWidth] = useState<number | null>(null);
+  const dragRef = useRef<{ startX: number; startWidth: number } | null>(null);
+
+  useEffect(() => {
+    const stored = Number(window.localStorage.getItem('wb.drawer.width'));
+    if (Number.isFinite(stored) && stored >= 320) setWidth(Math.min(stored, 760));
+  }, []);
+
+  function clampWidth(next: number): number {
+    return Math.max(320, Math.min(760, Math.min(next, window.innerWidth * 0.7)));
+  }
+
+  function startResize(e: React.PointerEvent<HTMLDivElement>): void {
+    const aside = asideRef.current;
+    if (!aside) return;
+    e.preventDefault();
+    dragRef.current = { startX: e.clientX, startWidth: aside.getBoundingClientRect().width };
+    e.currentTarget.setPointerCapture(e.pointerId);
+  }
+
+  function onResize(e: React.PointerEvent<HTMLDivElement>): void {
+    const drag = dragRef.current;
+    if (!drag) return;
+    // 面板在右侧：指针左移（clientX 变小）时变宽。
+    setWidth(clampWidth(drag.startWidth + (drag.startX - e.clientX)));
+  }
+
+  function endResize(e: React.PointerEvent<HTMLDivElement>): void {
+    if (!dragRef.current) return;
+    dragRef.current = null;
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
+    setWidth((current) => {
+      if (current !== null) window.localStorage.setItem('wb.drawer.width', String(current));
+      return current;
+    });
+  }
+
+  function resetWidth(): void {
+    setWidth(null);
+    window.localStorage.removeItem('wb.drawer.width');
+  }
 
   useEffect(() => {
     onCloseRef.current = onClose;
@@ -139,7 +184,25 @@ export function ArtifactDrawer({
 
   return (
     <div className={`wb-drawer-layer${open ? ' open' : ''}`} aria-hidden={!open} inert={!open}>
-      <aside id="wb-artifacts-panel" className="wb-drawer" aria-label="成果">
+      <aside
+        id="wb-artifacts-panel"
+        ref={asideRef}
+        className="wb-drawer"
+        aria-label="成果"
+        style={width === null ? undefined : { width, flexBasis: width }}
+      >
+        <div
+          className="wb-drawer-resizer"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="拖动调整成果面板宽度"
+          title="拖动调整宽度，双击恢复默认"
+          onPointerDown={startResize}
+          onPointerMove={onResize}
+          onPointerUp={endResize}
+          onPointerCancel={endResize}
+          onDoubleClick={resetWidth}
+        />
         <header className="wb-drawer-head">
           <div>
             <div className="wb-drawer-title">成果</div>
