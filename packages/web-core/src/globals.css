@@ -4138,18 +4138,49 @@ button.wb-user-attachment {
   margin: 0;
 }
 
-.wb-mode-tabs .ant-tabs-nav::before {
-  border-bottom: 0;
+/* AntD v5 运行时注入的样式优先级与这里相同且更晚生效，必须提权才能去掉底部分隔线。 */
+.wb-mode-tabs .ant-tabs-nav::before,
+.wb-composer-wrap .wb-mode-tabs .ant-tabs-nav::before {
+  border-bottom: 0 !important;
+}
+
+/* 选中态改用胶囊底色，不再用下划线指示器，避免出现「横线」。 */
+.wb-mode-tabs .ant-tabs-ink-bar {
+  display: none !important;
 }
 
 .wb-mode-tabs .ant-tabs-tab {
-  padding: 2px 0 6px;
+  margin: 0 !important;
+  padding: 5px 12px !important;
   font-size: 13px;
   color: var(--wb-ink-2);
+  border-radius: 999px;
+  transition: background 0.15s, color 0.15s;
 }
 
 .wb-mode-tabs .ant-tabs-tab + .ant-tabs-tab {
-  margin-left: 22px;
+  margin-left: 6px !important;
+}
+
+.wb-mode-tabs .ant-tabs-tab:not(.ant-tabs-tab-disabled):hover {
+  background: var(--surface-2);
+}
+
+.wb-mode-tabs .ant-tabs-tab.ant-tabs-tab-active {
+  background: rgba(0, 176, 123, 0.1);
+}
+
+/* 图标 + 文案：图标略小、与文字垂直居中。 */
+.wb-mode-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.wb-mode-tab-icon {
+  display: inline-flex;
+  font-size: 14px;
+  line-height: 1;
 }
 
 .wb-mode-tabs .ant-tabs-tab:not(.ant-tabs-tab-disabled):hover .ant-tabs-tab-btn,

@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Dropdown, Tabs, type MenuProps } from 'antd';
+import { CodeOutlined, FileTextOutlined, MessageOutlined } from '@ant-design/icons';
 import {
   ATTACHMENT_ACCEPT,
   ATTACHMENT_MAX_PER_MESSAGE,
@@ -1430,7 +1431,20 @@ export default function Home() {
           onChange={(key) => setSelectedMode(key as SessionMode)}
           items={SESSION_MODES.map((mode) => ({
             key: mode,
-            label: SESSION_MODE_LABELS[mode],
+            label: (
+              <span className="wb-mode-tab">
+                <span className="wb-mode-tab-icon" aria-hidden="true">
+                  {mode === 'chat' ? (
+                    <MessageOutlined />
+                  ) : mode === 'task' ? (
+                    <FileTextOutlined />
+                  ) : (
+                    <CodeOutlined />
+                  )}
+                </span>
+                {SESSION_MODE_LABELS[mode]}
+              </span>
+            ),
             disabled: running,
           }))}
         />
