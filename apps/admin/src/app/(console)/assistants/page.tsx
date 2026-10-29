@@ -4,23 +4,40 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Alert,
+  App,
   Button,
   Card,
+  Checkbox,
+  Col,
   Descriptions,
   Input,
   Modal,
+  Row,
   Segmented,
+  Select,
   Space,
   Table,
   Tag,
   Typography,
 } from 'antd';
 import type { TableColumnsType } from 'antd';
-import type { AdminAssistantDto } from '@ai-office/shared';
+import { PlusOutlined } from '@ant-design/icons';
+import {
+  ASSISTANT_PERMISSION_MODES,
+  ASSISTANT_PERMISSION_MODE_LABELS,
+  ASSISTANT_SKILLS,
+  type AdminAssistantDto,
+  type AssistantPermissionMode,
+  type SkillDto,
+} from '@ai-office/shared';
 import {
   adminErrorText,
+  createAdminAssistant,
+  deleteAdminAssistant,
   isForbidden,
   listAdminAssistants,
+  listAdminSkills,
+  updateAdminAssistant,
 } from '../../../lib/admin-api';
 import { clearToken, isUnauthorized } from '@ai-office/web-core';
 
@@ -36,15 +53,39 @@ function formatTime(value: string): string {
   return new Date(value).toLocaleString('zh-CN', { hour12: false });
 }
 
+interface AssistantForm {
+  name: string;
+  description: string;
+  systemPrompt: string;
+  permissionMode: AssistantPermissionMode;
+  skills: string[];
+  skillIds: string[];
+}
+
+const EMPTY_FORM: AssistantForm = {
+  name: '',
+  description: '',
+  systemPrompt: '',
+  permissionMode: 'standard',
+  skills: ASSISTANT_SKILLS.map((s) => s.key),
+  skillIds: [],
+};
+
 /** 运营端专家助手列表：公共内置助手与用户自定义助手只读展示。 */
 export default function AdminAssistantsPage() {
   const router = useRouter();
+  const { message, modal } = App.useApp();
   const [items, setItems] = useState<AdminAssistantDto[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [scope, setScope] = useState<'all' | 'public' | 'personal'>('all');
   const [q, setQ] = useState('');
   const [detail, setDetail] = useState<AdminAssistantDto | null>(null);
+  const [formOpen, setFormOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [form, setForm] = useState<AssistantForm>(EMPTY_FORM);
+  const [publicSkills, setPublicSkills] = useState<SkillDto[]>([]);
+  const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const loadSeq = useRef(0);
@@ -90,6 +131,80 @@ export default function AdminAssistantsPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // 公共助手只能绑定公共技能，这里只拉公共技能做选项。
+  useEffect(() => {
+    void listAdminSkills({ page: 1, pageSize: 100, scope: 'public' })
+      .then((data) => setPublicSkills(data.items))
+      .catch(() => undefined);
+  }, []);
+
+  function openCreate(): void {
+    setEditingId(null);
+    setForm(EMPTY_FORM);
+    setFormOpen(true);
+  }
+
+  function openEdit(item: AdminAssistantDto): void {
+    setEditingId(item.id);
+    setForm({
+      name: item.name,
+      description: item.description,
+      systemPrompt: item.systemPrompt,
+      permissionMode: item.permissionMode,
+      skills: item.skills,
+      skillIds: item.skillIds,
+    });
+    setFormOpen(true);
+  }
+
+  async function save(): Promise<void> {
+    if (saving) return;
+    if (!form.name.trim()) {
+      void message.error('助手名称不能为空');
+      return;
+    }
+    setSaving(true);
+    setError('');
+    try {
+      const payload = {
+        name: form.name.trim(),
+        description: form.description.trim(),
+        systemPrompt: form.systemPrompt,
+        permissionMode: form.permissionMode,
+        skills: form.skills,
+        skillIds: form.skillIds,
+      };
+      if (editingId) await updateAdminAssistant(editingId, payload);
+      else await createAdminAssistant(payload);
+      setFormOpen(false);
+      await load();
+      void message.success('已保存');
+    } catch (err) {
+      handleErr(err);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function removeAssistant(item: AdminAssistantDto): void {
+    modal.confirm({
+      title: '确认删除专家助手',
+      content: `确认删除「${item.name}」？已创建的历史会话会退化为默认助手。`,
+      okText: '删除',
+      okType: 'danger',
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          await deleteAdminAssistant(item.id);
+          await load();
+          void message.success('已删除');
+        } catch (err) {
+          handleErr(err);
+        }
+      },
+    });
+  }
 
   const columns: TableColumnsType<AdminAssistantDto> = [
     {
@@ -172,11 +287,23 @@ export default function AdminAssistantsPage() {
     {
       title: '操作',
       key: 'actions',
-      width: 90,
+      width: 220,
       render: (_: unknown, item) => (
-        <Button size="small" onClick={() => setDetail(item)}>
-          详情
-        </Button>
+        <Space size={4}>
+          <Button size="small" onClick={() => setDetail(item)}>
+            详情
+          </Button>
+          {item.scope === 'public' ? (
+            <>
+              <Button size="small" onClick={() => openEdit(item)}>
+                编辑
+              </Button>
+              <Button size="small" danger onClick={() => removeAssistant(item)}>
+                删除
+              </Button>
+            </>
+          ) : null}
+        </Space>
       ),
     },
   ];
@@ -198,6 +325,9 @@ export default function AdminAssistantsPage() {
         title="专家助手列表"
         extra={
           <Space wrap>
+            <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
+              新建专家助手
+            </Button>
             <Segmented
               value={scope}
               onChange={(value) => {
@@ -240,6 +370,110 @@ export default function AdminAssistantsPage() {
           }}
         />
       </Card>
+
+      <Modal
+        open={formOpen}
+        title={editingId ? '编辑专家助手' : '新建专家助手'}
+        width={760}
+        okText="保存"
+        cancelText="取消"
+        confirmLoading={saving}
+        onOk={() => void save()}
+        onCancel={() => {
+          if (!saving) setFormOpen(false);
+        }}
+        styles={{ body: { maxHeight: '68vh', overflowY: 'auto' } }}
+      >
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <div>
+            <Typography.Text type="secondary">名称</Typography.Text>
+            <Input
+              style={{ marginTop: 4 }}
+              maxLength={40}
+              value={form.name}
+              placeholder="如：合同审阅专家"
+              onChange={(e) => setForm({ ...form, name: e.target.value })}
+            />
+          </div>
+          <div>
+            <Typography.Text type="secondary">简介</Typography.Text>
+            <Input.TextArea
+              style={{ marginTop: 4 }}
+              rows={2}
+              maxLength={200}
+              showCount
+              value={form.description}
+              placeholder="一句话说明这个专家助手擅长什么"
+              onChange={(e) => setForm({ ...form, description: e.target.value })}
+            />
+          </div>
+          <div>
+            <Typography.Text type="secondary">系统提示词</Typography.Text>
+            <Input.TextArea
+              style={{ marginTop: 4 }}
+              rows={6}
+              maxLength={8000}
+              showCount
+              value={form.systemPrompt}
+              placeholder="描述角色、目标、工作方式与输出要求"
+              onChange={(e) => setForm({ ...form, systemPrompt: e.target.value })}
+            />
+          </div>
+          <Row gutter={12}>
+            <Col span={12}>
+              <Typography.Text type="secondary">权限模式</Typography.Text>
+              <Select
+                style={{ width: '100%', marginTop: 4 }}
+                value={form.permissionMode}
+                onChange={(value: AssistantPermissionMode) =>
+                  setForm({ ...form, permissionMode: value })
+                }
+                options={ASSISTANT_PERMISSION_MODES.map((mode) => ({
+                  value: mode,
+                  label: ASSISTANT_PERMISSION_MODE_LABELS[mode],
+                }))}
+              />
+            </Col>
+            <Col span={12}>
+              <Typography.Text type="secondary">绑定公共技能</Typography.Text>
+              <Select
+                mode="multiple"
+                style={{ width: '100%', marginTop: 4 }}
+                allowClear
+                value={form.skillIds}
+                placeholder={publicSkills.length === 0 ? '技能市场暂无公共技能' : '选择要绑定的公共技能'}
+                onChange={(value: string[]) => setForm({ ...form, skillIds: value })}
+                options={publicSkills.map((s) => ({ value: s.id, label: s.name }))}
+                optionFilterProp="label"
+              />
+            </Col>
+          </Row>
+          <div>
+            <Typography.Text type="secondary">工具</Typography.Text>
+            <div className="assistant-tool-grid">
+              {ASSISTANT_SKILLS.map((tool) => (
+                <Checkbox
+                  key={tool.key}
+                  checked={form.skills.includes(tool.key)}
+                  onChange={(e) =>
+                    setForm({
+                      ...form,
+                      skills: e.target.checked
+                        ? [...form.skills, tool.key]
+                        : form.skills.filter((x) => x !== tool.key),
+                    })
+                  }
+                >
+                  <span className="assistant-tool-name">{tool.name}</span>
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    {tool.description}
+                  </Typography.Text>
+                </Checkbox>
+              ))}
+            </div>
+          </div>
+        </Space>
+      </Modal>
 
       <Modal
         open={detail !== null}

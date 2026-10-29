@@ -441,6 +441,33 @@ export function listAdminAssistants(
   return request(`/api/admin/assistants${query(params)}`);
 }
 
+export interface AdminAssistantInput {
+  name?: string;
+  description?: string;
+  systemPrompt?: string;
+  permissionMode?: string;
+  skills?: string[];
+  skillIds?: string[];
+}
+
+export function createAdminAssistant(input: AdminAssistantInput): Promise<AdminAssistantDto> {
+  return request('/api/admin/assistants', { method: 'POST', body: JSON.stringify(input) });
+}
+
+export function updateAdminAssistant(
+  id: string,
+  input: AdminAssistantInput,
+): Promise<AdminAssistantDto> {
+  return request(`/api/admin/assistants/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  });
+}
+
+export function deleteAdminAssistant(id: string): Promise<void> {
+  return request(`/api/admin/assistants/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
 // ------------------------------------------------------------------ 技能市场
 export function listAdminSkills(
   params: { page?: number; pageSize?: number; scope?: 'public' | 'personal'; q?: string } = {},
