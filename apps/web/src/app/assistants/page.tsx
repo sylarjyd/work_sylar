@@ -7,24 +7,16 @@ import {
   App,
   Button,
   Card,
-  Checkbox,
   Col,
   Empty,
   Input,
   Modal,
-  Popover,
   Row,
-  Select,
   Space,
   Tag,
   Typography,
 } from 'antd';
-import {
-  DeleteOutlined,
-  PlusOutlined,
-  QuestionCircleOutlined,
-  RobotOutlined,
-} from '@ant-design/icons';
+import { DeleteOutlined, PlusOutlined, RobotOutlined } from '@ant-design/icons';
 import {
   ASSISTANT_PERMISSION_MODES,
   ASSISTANT_PERMISSION_MODE_HINTS,
@@ -52,29 +44,7 @@ import {
   updateAssistant,
 } from '../../lib/api';
 import { errorText } from '@ai-office/web-core';
-
-/** 字段名 + 问号说明：解释默认收起，点击问号才展开，避免表单被说明文字撑长。 */
-function FieldLabel({ text, hint }: { text: string; hint?: string }) {
-  if (!hint) return <Typography.Text>{text}</Typography.Text>;
-  return (
-    <Space size={4}>
-      <Typography.Text>{text}</Typography.Text>
-      <Popover
-        trigger="click"
-        placement="topLeft"
-        title={text}
-        content={<div style={{ maxWidth: 300, fontSize: 12, lineHeight: 1.6 }}>{hint}</div>}
-      >
-        <QuestionCircleOutlined
-          className="assistant-field-hint"
-          aria-label={`${text}说明`}
-          role="button"
-          tabIndex={0}
-        />
-      </Popover>
-    </Space>
-  );
-}
+import { AssistantEditor } from '@ai-office/web-core/assistant-editor';
 
 interface FormState {
   name: string;
@@ -400,205 +370,27 @@ export default function AssistantsPage() {
               if (!busy) resetForm();
             }}
           >
-            <Row gutter={[16, 0]}>
-              <Col xs={24} md={12}>
-                <div className="admin-field">
-                  <Typography.Text>名称</Typography.Text>
-                  <Input
-                    value={form.name}
-                    maxLength={40}
-                    disabled={busy}
-                    placeholder="如：合同审阅专家"
-                    onChange={(e) => setForm({ ...form, name: e.target.value })}
-                  />
-                </div>
-              </Col>
-              <Col xs={24} md={12}>
-                <div className="admin-field">
-                  <Typography.Text>默认模型</Typography.Text>
-                  <Select
-                    style={{ width: '100%' }}
-                    value={form.model || ''}
-                    disabled={busy}
-                    onChange={(value: string) => setForm({ ...form, model: value })}
-                    options={[
-                      { value: '', label: '系统默认模型' },
-                      ...models.map((m) => ({
-                        value: m.model,
-                        label:
-                          m.displayName && m.displayName !== m.model
-                            ? `${m.displayName} · ${m.model}`
-                            : m.model,
-                      })),
-                    ]}
-                  />
-                </div>
-              </Col>
-              <Col span={24}>
-                <div className="admin-field">
-                  <Typography.Text>简介</Typography.Text>
-                  <Input.TextArea
-                    rows={3}
-                    value={form.description}
-                    maxLength={200}
-                    showCount
-                    disabled={busy}
-                    placeholder="一句话说明这个专家助手擅长什么"
-                    onChange={(e) => setForm({ ...form, description: e.target.value })}
-                  />
-                </div>
-              </Col>
-              <Col xs={24} md={12}>
-                <div className="admin-field">
-                  <FieldLabel
-                    text="权限模式"
-                    hint={ASSISTANT_PERMISSION_MODE_HINTS[form.permissionMode]}
-                  />
-                  <Select
-                    style={{ width: '100%' }}
-                    value={form.permissionMode}
-                    disabled={busy}
-                    onChange={(value: AssistantPermissionMode) =>
-                      setForm({ ...form, permissionMode: value })
-                    }
-                    options={ASSISTANT_PERMISSION_MODES.map((mode) => ({
-                      value: mode,
-                      label: ASSISTANT_PERMISSION_MODE_LABELS[mode],
-                    }))}
-                  />
-                </div>
-              </Col>
-
-              <Col xs={24} md={12}>
-                <div className="admin-field">
-                  <Typography.Text>知识库范围</Typography.Text>
-                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                    {form.kbIds.length === 0
-                      ? '未选择时检索全部知识库'
-                      : `仅检索已选的 ${form.kbIds.length} 个知识库`}
-                  </Typography.Text>
-                  <Select
-                    mode="multiple"
-                    style={{ width: '100%' }}
-                    allowClear
-                    disabled={busy || bases.length === 0}
-                    value={form.kbIds}
-                    placeholder={bases.length === 0 ? '知识库为空，可先到「知识库」页创建' : '选择要检索的知识库'}
-                    onChange={(value: string[]) => setForm({ ...form, kbIds: value })}
-                    options={bases.map((b) => ({
-                      value: b.id,
-                      label: `${b.name}（${b.docCount} 篇）`,
-                    }))}
-                    optionFilterProp="label"
-                  />
-                  {bases.length === 0 ? (
-                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                      知识库暂无内容，可稍后在「知识库」页创建并上传文档。
-                    </Typography.Text>
-                  ) : null}
-                </div>
-              </Col>
-
-              <Col span={24}>
-                <div className="admin-field">
-                  <FieldLabel
-                    text="工具"
-                    hint="勾选后助手才能调用对应内置能力；未勾选的工具本会话不可用。技能市场里的技能不占工具名额。"
-                  />
-                  <div className="assistant-tool-grid">
-                    {ASSISTANT_SKILLS.map((tool) => (
-                      <Checkbox
-                        key={tool.key}
-                        checked={form.skills.includes(tool.key)}
-                        disabled={busy}
-                        onChange={(e) =>
-                          setForm({
-                            ...form,
-                            skills: e.target.checked
-                              ? [...form.skills, tool.key]
-                              : form.skills.filter((x) => x !== tool.key),
-                          })
-                        }
-                      >
-                        <span className="assistant-tool-name">{tool.name}</span>
-                        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                          {tool.description}
-                        </Typography.Text>
-                      </Checkbox>
-                    ))}
-                  </div>
-                </div>
-              </Col>
-
-              <Col xs={24} md={12}>
-                <div className="admin-field">
-                  <FieldLabel
-                    text="绑定技能"
-                    hint="技能内容会拼进系统提示词；不改变工具权限，工具仍由上面的「工具」开关决定。"
-                  />
-                  <Select
-                    mode="multiple"
-                    style={{ width: '100%' }}
-                    allowClear
-                    disabled={busy || skillCatalog.length === 0}
-                    value={form.skillIds}
-                    placeholder={
-                      skillCatalog.length === 0
-                        ? '技能市场为空，可先到「技能市场」页创建'
-                        : '选择要绑定的技能'
-                    }
-                    onChange={(value: string[]) => setForm({ ...form, skillIds: value })}
-                    options={skillCatalog.map((s) => ({
-                      value: s.id,
-                      label: s.scope === 'public' ? `${s.name}（公共）` : s.name,
-                    }))}
-                    optionFilterProp="label"
-                  />
-                </div>
-              </Col>
-
-              <Col xs={24} md={12}>
-                <div className="admin-field">
-                  <FieldLabel
-                    text="连接器"
-                    hint="只启用所选 MCP 连接器；不选时沿用会话/账号下已启用的连接器。"
-                  />
-                  <Select
-                    mode="multiple"
-                    style={{ width: '100%' }}
-                    allowClear
-                    disabled={busy}
-                    value={form.connectorIds}
-                    placeholder={
-                      connectorCatalog.length === 0
-                        ? '还没有启用的连接器，可先到「连接器」页添加'
-                        : '选择要启用的连接器'
-                    }
-                    onChange={(value: string[]) => setForm({ ...form, connectorIds: value })}
-                    options={connectorCatalog.map((c) => ({
-                      value: c.id,
-                      label: c.name,
-                    }))}
-                    optionFilterProp="label"
-                  />
-                </div>
-              </Col>
-
-              <Col span={24}>
-                <div className="admin-field">
-                  <Typography.Text>系统提示词</Typography.Text>
-                  <Input.TextArea
-                    rows={6}
-                    maxLength={8000}
-                    showCount
-                    value={form.systemPrompt}
-                    disabled={busy}
-                    placeholder="描述专家助手的角色、目标、工作方式与输出要求。例如：你是资深合同审阅助手，逐条指出风险条款并给出修改建议…"
-                    onChange={(e) => setForm({ ...form, systemPrompt: e.target.value })}
-                  />
-                </div>
-              </Col>
-            </Row>
+            <AssistantEditor
+              value={form}
+              onChange={(next) => setForm(next)}
+              disabled={busy}
+              modelOptions={models.map((m) => ({
+                value: m.model,
+                label:
+                  m.displayName && m.displayName !== m.model
+                    ? `${m.displayName} · ${m.model}`
+                    : m.model,
+              }))}
+              skillOptions={skillCatalog.map((s) => ({
+                value: s.id,
+                label: s.scope === 'public' ? `${s.name}（公共）` : s.name,
+              }))}
+              connectorOptions={connectorCatalog.map((c) => ({ value: c.id, label: c.name }))}
+              kbOptions={bases.map((b) => ({
+                value: b.id,
+                label: `${b.name}（${b.docCount} 篇）`,
+              }))}
+            />
           </Modal>
 
           <Card

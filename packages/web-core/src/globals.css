@@ -1940,9 +1940,17 @@ a {
 
 /* 字段说明的问号：默认只露一个小图标，点开才显示解释。 */
 .assistant-field-hint {
+  display: inline-grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
   color: var(--ink-3);
-  font-size: 12px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
   cursor: pointer;
+  border: 1px solid currentcolor;
+  border-radius: 50%;
   transition: color 0.15s;
 }
 

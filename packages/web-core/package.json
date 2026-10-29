@@ -13,6 +13,7 @@
     "./skill-detail": "./src/skill-detail.tsx",
     "./skill-editor": "./src/skill-editor.tsx",
     "./skill-test": "./src/skill-test.tsx",
+    "./assistant-editor": "./src/assistant-editor.tsx",
     "./globals.css": "./src/globals.css"
   },
   "sideEffects": [
