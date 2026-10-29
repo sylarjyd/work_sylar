@@ -120,22 +120,30 @@ export function ArtifactDrawer({
   const [preview, setPreview] = useState<SessionChartDto | null>(null);
   // 面板宽度可拖动：null 表示用 CSS 默认宽（窄屏还受媒体查询约束）。
   const [width, setWidth] = useState<number | null>(null);
+  const [resizing, setResizing] = useState(false);
   const dragRef = useRef<{ startX: number; startWidth: number } | null>(null);
-
-  useEffect(() => {
-    const stored = Number(window.localStorage.getItem('wb.drawer.width'));
-    if (Number.isFinite(stored) && stored >= 320) setWidth(Math.min(stored, 760));
-  }, []);
 
   function clampWidth(next: number): number {
     return Math.max(320, Math.min(760, Math.min(next, window.innerWidth * 0.7)));
   }
+
+  useEffect(() => {
+    // 记忆宽度也要受当前视口约束，否则小屏会撑出可视区。
+    const stored = Number(window.localStorage.getItem('wb.drawer.width'));
+    if (Number.isFinite(stored) && stored >= 320) setWidth(clampWidth(stored));
+    function onWindowResize() {
+      setWidth((current) => (current === null ? current : clampWidth(current)));
+    }
+    window.addEventListener('resize', onWindowResize);
+    return () => window.removeEventListener('resize', onWindowResize);
+  }, []);
 
   function startResize(e: React.PointerEvent<HTMLDivElement>): void {
     const aside = asideRef.current;
     if (!aside) return;
     e.preventDefault();
     dragRef.current = { startX: e.clientX, startWidth: aside.getBoundingClientRect().width };
+    setResizing(true);
     e.currentTarget.setPointerCapture(e.pointerId);
   }
 
@@ -149,6 +157,7 @@ export function ArtifactDrawer({
   function endResize(e: React.PointerEvent<HTMLDivElement>): void {
     if (!dragRef.current) return;
     dragRef.current = null;
+    setResizing(false);
     if (e.currentTarget.hasPointerCapture(e.pointerId)) {
       e.currentTarget.releasePointerCapture(e.pointerId);
     }
@@ -183,13 +192,22 @@ export function ArtifactDrawer({
   const folders = groupArtifacts(artifacts);
 
   return (
-    <div className={`wb-drawer-layer${open ? ' open' : ''}`} aria-hidden={!open} inert={!open}>
+    <div
+      className={`wb-drawer-layer${open ? ' open' : ''}${resizing ? ' resizing' : ''}`}
+      aria-hidden={!open}
+      inert={!open}
+      // 外层容器负责实际宽度（overflow:hidden），只改内层 aside 会被裁掉。
+      style={
+        width === null
+          ? undefined
+          : ({ '--wb-drawer-w': `${width}px` } as React.CSSProperties)
+      }
+    >
       <aside
         id="wb-artifacts-panel"
         ref={asideRef}
         className="wb-drawer"
         aria-label="成果"
-        style={width === null ? undefined : { width, flexBasis: width }}
       >
         <div
           className="wb-drawer-resizer"

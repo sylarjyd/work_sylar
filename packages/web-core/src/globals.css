@@ -3283,12 +3283,17 @@ a {
   }
 }
 
+/* 拖动过程中关掉开合动画，避免宽度跟着 transition 追赶指针。 */
+.wb-drawer-layer.resizing {
+  transition: none;
+}
+
 /* 成果面板右侧停靠，拖动左侧手柄调整宽度（双击恢复默认）。 */
 .wb-drawer-resizer {
   position: absolute;
   top: 0;
   bottom: 0;
-  left: -3px;
+  left: 0;
   z-index: 3;
   width: 6px;
   cursor: col-resize;
