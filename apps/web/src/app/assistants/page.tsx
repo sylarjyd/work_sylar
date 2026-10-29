@@ -12,6 +12,7 @@ import {
   Input,
   Modal,
   Row,
+  Segmented,
   Space,
   Tag,
   Typography,
@@ -82,6 +83,8 @@ export default function AssistantsPage() {
   const [skillCatalog, setSkillCatalog] = useState<SkillDto[]>([]);
   // 可绑定的连接器：账号下已启用的 MCP 连接器。
   const [connectorCatalog, setConnectorCatalog] = useState<ConnectorDto[]>([]);
+  // 列表筛选：全部 / 我的 / 公共（与技能市场一致）。
+  const [scopeFilter, setScopeFilter] = useState<'all' | 'mine' | 'public'>('all');
   const [form, setForm] = useState<FormState>(EMPTY);
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
@@ -257,9 +260,11 @@ export default function AssistantsPage() {
     return names.length <= 3 ? names.join('、') : `${names.slice(0, 3).join('、')} 等 ${names.length} 个`;
   };
 
-  // 内置（公共）与我的分开排列，避免混在一个列表里分不清归属。
+  // 内置（公共）与我的分开统计，页头分段筛选与技能市场保持一致。
   const builtinAssistants = assistants.filter((a) => a.scope === 'public');
   const myAssistants = assistants.filter((a) => a.scope !== 'public');
+  const visibleAssistants =
+    scopeFilter === 'mine' ? myAssistants : scopeFilter === 'public' ? builtinAssistants : assistants;
 
   function renderAssistantCard(a: AssistantDto) {
     const readonly = a.scope === 'public';
@@ -326,12 +331,21 @@ export default function AssistantsPage() {
         <div className="page">
           <header className="page-head">
             <div>
-              <h1 className="page-title">我的专家助手</h1>
+              <h1 className="page-title">专家助手</h1>
               <p className="page-sub">
-                创建专属专家助手：设定系统提示词、技能、权限模式、默认模型与可检索的知识库范围。
+                内置专家助手可直接使用；也可以创建自己的专家助手，设定提示词、工具、技能、模型与知识库范围。
               </p>
             </div>
             <div className="page-head-actions">
+              <Segmented
+                value={scopeFilter}
+                onChange={(value) => setScopeFilter(value as 'all' | 'mine' | 'public')}
+                options={[
+                  { value: 'all', label: `全部 ${assistants.length}` },
+                  { value: 'mine', label: `我的 ${myAssistants.length}` },
+                  { value: 'public', label: `公共 ${builtinAssistants.length}` },
+                ]}
+              />
               <Button type="primary" icon={<PlusOutlined />} disabled={busy} onClick={openCreate}>
                 新建专家助手
               </Button>
@@ -393,66 +407,28 @@ export default function AssistantsPage() {
             />
           </Modal>
 
-          <Card
-            size="small"
-            title="内置专家助手"
-            extra={
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                共 {builtinAssistants.length} 个
-              </Typography.Text>
-            }
-            style={{ marginBottom: 16 }}
-            loading={loading && assistants.length === 0}
-          >
-            {builtinAssistants.length === 0 && !loading ? (
-              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无内置专家助手" />
-            ) : (
-              <Row gutter={[12, 12]}>
-                {builtinAssistants.map((a) => (
-                  <Col key={a.id} xs={24} md={12} xl={8}>
-                    {renderAssistantCard(a)}
-                  </Col>
-                ))}
-              </Row>
-            )}
-          </Card>
-
-          <Card
-            size="small"
-            title="我的专家助手"
-            extra={
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                共 {myAssistants.length} 个
-              </Typography.Text>
-            }
-            loading={loading && assistants.length === 0}
-          >
-            {myAssistants.length === 0 && !loading ? (
-              <Empty
-                image={Empty.PRESENTED_IMAGE_SIMPLE}
-                description={
-                  <Space direction="vertical" size={2}>
-                    <Typography.Text>还没有自定义专家助手</Typography.Text>
-                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                      新建专家助手后，可在工作台新建任务时选择它。
-                    </Typography.Text>
-                  </Space>
-                }
-              >
-                <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
-                  新建专家助手
-                </Button>
-              </Empty>
-            ) : (
-              <Row gutter={[12, 12]}>
-                {myAssistants.map((a) => (
-                  <Col key={a.id} xs={24} md={12} xl={8}>
-                    {renderAssistantCard(a)}
-                  </Col>
-                ))}
-              </Row>
-            )}
-          </Card>
+          {loading && assistants.length === 0 ? (
+            <Card loading />
+          ) : visibleAssistants.length === 0 ? (
+            <Empty
+              image={Empty.PRESENTED_IMAGE_SIMPLE}
+              description={
+                scopeFilter === 'mine' ? '还没有自定义专家助手，点右上角新建' : '暂无专家助手'
+              }
+            >
+              <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
+                新建专家助手
+              </Button>
+            </Empty>
+          ) : (
+            <Row gutter={[12, 12]}>
+              {visibleAssistants.map((a) => (
+                <Col key={a.id} xs={24} md={12} xl={8}>
+                  {renderAssistantCard(a)}
+                </Col>
+              ))}
+            </Row>
+          )}
         </div>
       </div>
     </AppShell>
