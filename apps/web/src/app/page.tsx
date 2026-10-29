@@ -1618,12 +1618,13 @@ export default function Home() {
             </button>
           </Dropdown>
           {assistants.find((a) => a.id === selectedAssistantId)?.name ? (
-            <span className="wb-assistant-badge" title="本次任务使用的专家助手">
-              专家：{assistants.find((a) => a.id === selectedAssistantId)?.name}
+            <span className="wb-chip" title="本次任务使用的专家助手">
+              <span className="wb-chip-text">
+                专家：{assistants.find((a) => a.id === selectedAssistantId)?.name}
+              </span>
               <button
                 type="button"
-                className="wb-attachment-remove"
-                style={{ marginLeft: 4 }}
+                className="wb-chip-remove"
                 disabled={running}
                 aria-label="取消绑定专家"
                 title="取消绑定，使用默认"
@@ -1634,12 +1635,11 @@ export default function Home() {
             </span>
           ) : null}
           {selectedSkillIds.length > 0 ? (
-            <span className="wb-assistant-badge" title="本次任务额外启用的技能">
-              技能 {selectedSkillIds.length}
+            <span className="wb-chip" title="本次任务额外启用的技能">
+              <span className="wb-chip-text">技能 {selectedSkillIds.length}</span>
               <button
                 type="button"
-                className="wb-attachment-remove"
-                style={{ marginLeft: 4 }}
+                className="wb-chip-remove"
                 disabled={running}
                 aria-label="取消选择的技能"
                 onClick={() => setSelectedSkillIds([])}
@@ -1649,12 +1649,11 @@ export default function Home() {
             </span>
           ) : null}
           {selectedConnectorIds.length > 0 ? (
-            <span className="wb-assistant-badge" title="本次任务启用的连接器">
-              连接器 {selectedConnectorIds.length}
+            <span className="wb-chip" title="本次任务启用的连接器">
+              <span className="wb-chip-text">连接器 {selectedConnectorIds.length}</span>
               <button
                 type="button"
-                className="wb-attachment-remove"
-                style={{ marginLeft: 4 }}
+                className="wb-chip-remove"
                 disabled={running}
                 aria-label="取消选择的连接器"
                 onClick={() => setSelectedConnectorIds([])}
