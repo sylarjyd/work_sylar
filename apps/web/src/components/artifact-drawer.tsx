@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { ArtifactDto, SessionChartDto } from '@ai-office/shared';
 import { EChart, buildChartOption } from '@ai-office/web-core/chart';
 import { formatBytes } from '../lib/format';
-import { IconChevron, IconDownload, IconEye, IconFolder, IconX } from './icons';
+import { IconChevron, IconDownload, IconFolder, IconX } from './icons';
 
 interface ArtifactDrawerProps {
   open: boolean;
@@ -294,40 +294,39 @@ export function ArtifactDrawer({
                       <div className="wb-tree-files">
                         {items.map((a, i) => (
                           <div key={a.id || `pending-${def.key}-${i}`} className="wb-tree-file">
-                            <div className={`wb-file-badge ${a.kind}`}>{kindLabel(a)}</div>
-                            <div className="wb-file-body">
-                              <div className="wb-file-name" title={a.filename}>
-                                {a.filename}
+                            <button
+                              type="button"
+                              className="wb-tree-file-main"
+                              // 整行点击即预览：列表里最常用的动作不该藏在眼睛图标里。
+                              onClick={() => {
+                                if (a.id && onPreview) onPreview(a);
+                              }}
+                              disabled={!a.id || !onPreview || previewingId === a.id}
+                              aria-label={`预览 ${a.filename}`}
+                              title={a.id ? `预览 ${a.filename}` : a.filename}
+                            >
+                              <div className={`wb-file-badge ${a.kind}`}>{kindLabel(a)}</div>
+                              <div className="wb-file-body">
+                                <div className="wb-file-name" title={a.filename}>
+                                  {a.filename}
+                                </div>
+                                <div className="wb-file-meta">
+                                  {previewingId === a.id
+                                    ? '打开中…'
+                                    : `${formatBytes(a.size)} · v${a.version || 0} · ${new Date(a.createdAt).toLocaleString('zh-CN')}`}
+                                </div>
                               </div>
-                              <div className="wb-file-meta">
-                                {formatBytes(a.size)} · v{a.version || 0} ·{' '}
-                                {new Date(a.createdAt).toLocaleString('zh-CN')}
-                              </div>
-                            </div>
+                            </button>
                             {a.id ? (
-                              <>
-                                {onPreview ? (
-                                  <button
-                                    type="button"
-                                    className="wb-file-dl"
-                                    onClick={() => onPreview(a)}
-                                    disabled={previewingId === a.id}
-                                    aria-label={`预览 ${a.filename}`}
-                                    title="预览"
-                                  >
-                                    <IconEye size={14} />
-                                  </button>
-                                ) : null}
-                                <button
-                                  type="button"
-                                  className="wb-file-dl"
-                                  onClick={() => onDownload(a)}
-                                  aria-label={`下载 ${a.filename}`}
-                                  title="下载"
-                                >
-                                  <IconDownload size={14} />
-                                </button>
-                              </>
+                              <button
+                                type="button"
+                                className="wb-file-dl"
+                                onClick={() => onDownload(a)}
+                                aria-label={`下载 ${a.filename}`}
+                                title="下载"
+                              >
+                                <IconDownload size={14} />
+                              </button>
                             ) : (
                               <span className="wb-file-pending">落库中</span>
                             )}

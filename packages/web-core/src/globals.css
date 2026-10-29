@@ -2462,6 +2462,36 @@ a {
   background: #fafafa;
 }
 
+/* 文件行主体是按钮：整行点击预览，下载仍单独保留在右侧。 */
+.wb-tree-file-main {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  background: none;
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.wb-tree-file-main:disabled {
+  cursor: default;
+}
+
+.wb-tree-file-main:not(:disabled):hover .wb-file-name {
+  color: var(--mint-ink);
+}
+
+.wb-tree-file-main:focus-visible {
+  outline: 2px solid var(--mint-soft);
+  outline-offset: 2px;
+}
+
 .wb-file-badge {
   display: grid;
   flex: 0 0 auto;
