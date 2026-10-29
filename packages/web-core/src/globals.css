@@ -1938,6 +1938,19 @@ a {
   font-weight: 500;
 }
 
+/* 字段说明的问号：默认只露一个小图标，点开才显示解释。 */
+.assistant-field-hint {
+  color: var(--ink-3);
+  font-size: 12px;
+  cursor: pointer;
+  transition: color 0.15s;
+}
+
+.assistant-field-hint:hover,
+.assistant-field-hint:focus-visible {
+  color: var(--ink-1);
+}
+
 @media (max-width: 720px) {
   .assistant-tool-grid {
     grid-template-columns: 1fr;

@@ -13,13 +13,19 @@ import {
   Input,
   List,
   Modal,
+  Popover,
   Row,
   Select,
   Space,
   Tag,
   Typography,
 } from 'antd';
-import { DeleteOutlined, PlusOutlined, RobotOutlined } from '@ant-design/icons';
+import {
+  DeleteOutlined,
+  PlusOutlined,
+  QuestionCircleOutlined,
+  RobotOutlined,
+} from '@ant-design/icons';
 import {
   ASSISTANT_PERMISSION_MODES,
   ASSISTANT_PERMISSION_MODE_HINTS,
@@ -47,6 +53,29 @@ import {
   updateAssistant,
 } from '../../lib/api';
 import { errorText } from '@ai-office/web-core';
+
+/** 字段名 + 问号说明：解释默认收起，点击问号才展开，避免表单被说明文字撑长。 */
+function FieldLabel({ text, hint }: { text: string; hint?: string }) {
+  if (!hint) return <Typography.Text>{text}</Typography.Text>;
+  return (
+    <Space size={4}>
+      <Typography.Text>{text}</Typography.Text>
+      <Popover
+        trigger="click"
+        placement="topLeft"
+        title={text}
+        content={<div style={{ maxWidth: 300, fontSize: 12, lineHeight: 1.6 }}>{hint}</div>}
+      >
+        <QuestionCircleOutlined
+          className="assistant-field-hint"
+          aria-label={`${text}说明`}
+          role="button"
+          tabIndex={0}
+        />
+      </Popover>
+    </Space>
+  );
+}
 
 interface FormState {
   name: string;
@@ -291,11 +320,20 @@ export default function AssistantsPage() {
           <Modal
             open={formOpen}
             title={editing ? `编辑 ${form.name}` : '新建专家助手'}
-            footer={null}
             width={900}
             destroyOnClose
             style={{ top: 32 }}
-            styles={{ body: { maxHeight: '68vh', overflowY: 'auto', paddingRight: 8 } }}
+            styles={{ body: { maxHeight: '72vh', overflowY: 'auto', paddingRight: 8 } }}
+            footer={
+              <Space>
+                <Button disabled={busy} onClick={resetForm}>
+                  取消
+                </Button>
+                <Button type="primary" loading={busy} onClick={save}>
+                  {editing ? '保存' : '创建专家助手'}
+                </Button>
+              </Space>
+            }
             onCancel={() => {
               if (!busy) resetForm();
             }}
@@ -350,7 +388,10 @@ export default function AssistantsPage() {
               </Col>
               <Col xs={24} md={12}>
                 <div className="admin-field">
-                  <Typography.Text>权限模式</Typography.Text>
+                  <FieldLabel
+                    text="权限模式"
+                    hint={ASSISTANT_PERMISSION_MODE_HINTS[form.permissionMode]}
+                  />
                   <Select
                     style={{ width: '100%' }}
                     value={form.permissionMode}
@@ -363,9 +404,6 @@ export default function AssistantsPage() {
                       label: ASSISTANT_PERMISSION_MODE_LABELS[mode],
                     }))}
                   />
-                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                    {ASSISTANT_PERMISSION_MODE_HINTS[form.permissionMode]}
-                  </Typography.Text>
                 </div>
               </Col>
 
@@ -401,10 +439,10 @@ export default function AssistantsPage() {
 
               <Col span={24}>
                 <div className="admin-field">
-                  <Typography.Text>工具</Typography.Text>
-                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                    勾选后助手才能调用对应内置能力；未勾选的工具本会话不可用。
-                  </Typography.Text>
+                  <FieldLabel
+                    text="工具"
+                    hint="勾选后助手才能调用对应内置能力；未勾选的工具本会话不可用。技能市场里的技能不占工具名额。"
+                  />
                   <div className="assistant-tool-grid">
                     {ASSISTANT_SKILLS.map((tool) => (
                       <Checkbox
@@ -432,10 +470,10 @@ export default function AssistantsPage() {
 
               <Col xs={24} md={12}>
                 <div className="admin-field">
-                  <Typography.Text>绑定技能</Typography.Text>
-                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                    技能内容会拼进系统提示词；不改变工具权限，工具仍由上面的「工具」开关决定。
-                  </Typography.Text>
+                  <FieldLabel
+                    text="绑定技能"
+                    hint="技能内容会拼进系统提示词；不改变工具权限，工具仍由上面的「工具」开关决定。"
+                  />
                   <Select
                     mode="multiple"
                     style={{ width: '100%' }}
@@ -459,10 +497,10 @@ export default function AssistantsPage() {
 
               <Col xs={24} md={12}>
                 <div className="admin-field">
-                  <Typography.Text>连接器</Typography.Text>
-                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                    只启用所选 MCP 连接器；不选时沿用会话/账号下已启用的连接器。
-                  </Typography.Text>
+                  <FieldLabel
+                    text="连接器"
+                    hint="只启用所选 MCP 连接器；不选时沿用会话/账号下已启用的连接器。"
+                  />
                   <Select
                     mode="multiple"
                     style={{ width: '100%' }}
@@ -497,19 +535,6 @@ export default function AssistantsPage() {
                     onChange={(e) => setForm({ ...form, systemPrompt: e.target.value })}
                   />
                 </div>
-              </Col>
-
-              <Col span={24}>
-                <Space>
-                  <Button type="primary" loading={busy} onClick={save}>
-                    {editing ? '保存' : '创建专家助手'}
-                  </Button>
-                  {editing ? (
-                    <Button disabled={busy} onClick={resetForm}>
-                      取消
-                    </Button>
-                  ) : null}
-                </Space>
               </Col>
             </Row>
           </Modal>
