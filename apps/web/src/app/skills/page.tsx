@@ -9,6 +9,8 @@ import {
   Card,
   Col,
   Empty,
+  List,
+  Modal,
   Row,
   Segmented,
   Space,
@@ -38,6 +40,30 @@ import { SkillTestDialog } from '@ai-office/web-core/skill-test';
 
 type Filter = 'all' | 'mine' | 'public';
 
+interface UploadFailure {
+  name: string;
+  error: string;
+}
+
+/** 技能包解析错误码 → 可读文案；批量上传时逐条展示。 */
+function uploadErrorText(err: unknown): string {
+  const code = err instanceof Error ? err.message : '';
+  const map: Record<string, string> = {
+    skill_md_missing: 'zip 里没有 SKILL.md',
+    frontmatter_missing: 'SKILL.md 缺少 --- frontmatter ---',
+    frontmatter_invalid: 'SKILL.md frontmatter 不是合法 YAML',
+    invalid_name: 'frontmatter.name 必须是英文小写、数字和连字符',
+    description_required: 'frontmatter 必须包含 description',
+    package_too_large: '技能包不能超过 10MB',
+    file_too_large: '包内单个文件不能超过 5MB',
+    invalid_path: '技能包里有非法路径',
+    invalid_zip: '不是合法的 zip 文件',
+    empty_package: '技能包是空的',
+    too_many_files: '包内文件超过 200 个',
+  };
+  return map[code] ?? '上传失败，请检查技能包格式';
+}
+
 function formatTime(value: string): string {
   return new Date(value).toLocaleString('zh-CN', { hour12: false });
 }
@@ -62,6 +88,7 @@ export default function SkillsPage() {
   const [testFor, setTestFor] = useState<SkillDto | null>(null);
   const [testModels, setTestModels] = useState<{ value: string; label: string }[]>([]);
   const [uploading, setUploading] = useState(false);
+  const [uploadReport, setUploadReport] = useState<UploadFailure[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -180,37 +207,31 @@ export default function SkillsPage() {
     }
   }
 
-  async function upload(file: File) {
+  /** 批量上传：逐个串行提交，失败的收集起来一次性展示，成功的统一刷新。 */
+  async function upload(files: File[]) {
     if (uploading) return;
-    if (!/\.zip$/i.test(file.name)) {
-      void message.error('技能包必须是 .zip');
-      return;
-    }
+    if (files.length === 0) return;
     setUploading(true);
     setError('');
-    try {
-      await uploadSkillPackage(file);
-      await loadRef.current();
-      void message.success('技能包已上传');
-    } catch (err) {
-      const code = err instanceof Error ? err.message : '';
-      const map: Record<string, string> = {
-        skill_md_missing: 'zip 里没有 SKILL.md',
-        frontmatter_missing: 'SKILL.md 缺少 --- frontmatter ---',
-        frontmatter_invalid: 'SKILL.md frontmatter 不是合法 YAML',
-        invalid_name: 'frontmatter.name 必须是英文小写、数字和连字符',
-        description_required: 'frontmatter 必须包含 description',
-        package_too_large: '技能包不能超过 10MB',
-        file_too_large: '包内单个文件不能超过 5MB',
-        invalid_path: '技能包里有非法路径',
-        invalid_zip: '不是合法的 zip 文件',
-      };
-      if (map[code]) setError(map[code]);
-      else handleErr(err);
-    } finally {
-      setUploading(false);
-      if (uploadRef.current) uploadRef.current.value = '';
+    let ok = 0;
+    const failed: UploadFailure[] = [];
+    for (const file of files) {
+      if (!/\.zip$/i.test(file.name)) {
+        failed.push({ name: file.name, error: '只支持 .zip 技能包' });
+        continue;
+      }
+      try {
+        await uploadSkillPackage(file);
+        ok += 1;
+      } catch (err) {
+        failed.push({ name: file.name, error: uploadErrorText(err) });
+      }
     }
+    await loadRef.current();
+    setUploading(false);
+    if (uploadRef.current) uploadRef.current.value = '';
+    if (ok > 0) void message.success(`已上传 ${ok} 个技能包`);
+    if (failed.length > 0) setUploadReport(failed);
   }
 
   function share(item: SkillDto) {
@@ -305,10 +326,11 @@ export default function SkillsPage() {
                 ref={uploadRef}
                 type="file"
                 accept=".zip,application/zip"
+                multiple
                 hidden
                 onChange={(event) => {
-                  const file = event.target.files?.[0];
-                  if (file) void upload(file);
+                  const files = Array.from(event.target.files ?? []);
+                  if (files.length > 0) void upload(files);
                 }}
               />
             </Space>
@@ -412,6 +434,31 @@ export default function SkillsPage() {
         onCancel={() => setEditor(null)}
         onSubmit={(payload) => void saveEditor(payload)}
       />
+
+      <Modal
+        open={uploadReport !== null}
+        title="部分技能包上传失败"
+        width={560}
+        okText="知道了"
+        cancelButtonProps={{ style: { display: 'none' } }}
+        onOk={() => setUploadReport(null)}
+        onCancel={() => setUploadReport(null)}
+      >
+        <List
+          size="small"
+          dataSource={uploadReport ?? []}
+          renderItem={(item) => (
+            <List.Item>
+              <Space direction="vertical" size={2} style={{ width: '100%' }}>
+                <Typography.Text>{item.name}</Typography.Text>
+                <Typography.Text type="danger" style={{ fontSize: 12 }}>
+                  {item.error}
+                </Typography.Text>
+              </Space>
+            </List.Item>
+          )}
+        />
+      </Modal>
 
       <SkillTestDialog
         open={testFor !== null}
