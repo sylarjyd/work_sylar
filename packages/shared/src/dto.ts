@@ -672,6 +672,18 @@ export function normalizeSkillFiles(raw: unknown): SkillFileContent[] | null {
   return out;
 }
 
+/** 技能测试：选一个模型，用一段任务验证技能提示词是否生效。 */
+export interface SkillTestRequest {
+  model?: string;
+  prompt: string;
+}
+
+export interface SkillTestResultDto {
+  reply: string;
+  /** 实际命中的模型（缺省时由服务端默认模型决定）。 */
+  model: string;
+}
+
 /** 校验并裁剪技能输入：名称/正文必填且有上限，简介超长截断而不是整条拒绝。 */
 export function normalizeSkillInput(raw: unknown): SkillInput | null {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null;

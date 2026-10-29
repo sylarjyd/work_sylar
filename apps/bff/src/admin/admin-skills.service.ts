@@ -12,6 +12,8 @@ import {
   type SkillDto,
   type SkillPackageContentsDto,
 } from '@ai-office/shared';
+import { SkillTestService } from '../skills/skill-test.service';
+import type { SkillTestResultDto } from '@ai-office/shared';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../db/prisma.service';
 import { AuditService } from '../audit/audit.service';
@@ -57,7 +59,18 @@ export class AdminSkillsService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     @Inject(ATTACHMENT_STORAGE) private readonly storage: AttachmentStorage,
+    private readonly skillTest: SkillTestService,
   ) {}
+
+  /** 运营端测试公共技能：与用户侧同一套运行逻辑，方便验收提示词。 */
+  async testSkill(
+    id: string,
+    tenantId: string,
+    userId: string,
+    body: unknown,
+  ): Promise<SkillTestResultDto> {
+    return this.skillTest.run({ tenantId, userId }, id, body);
+  }
 
   async list(query: Record<string, unknown>, actor: AdminActor): Promise<PageDto<SkillDto>> {
     const { page, pageSize, skip, take } = parsePage(query.page, query.pageSize);

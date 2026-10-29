@@ -29,12 +29,22 @@ import { AdminQaCacheController } from './admin-qa-cache.controller';
 import { AdminQaCacheService } from './admin-qa-cache.service';
 import { AdminAttachmentsController } from './admin-attachments.controller';
 import { AttachmentsModule } from '../attachments/attachments.module';
+import { SkillsModule } from '../skills/skills.module';
 import { AdminSkillsController } from './admin-skills.controller';
 import { AdminSkillsService } from './admin-skills.service';
 
 /** 管理端模块：用户/租户/套餐/会话/任务/模型/参数/审计/概览/告警/知识库/问答缓存/附件预览统一装配。 */
 @Module({
-  imports: [AuditModule, SettingsModule, BillingModule, AlertsModule, KbModule, RunsModule, AttachmentsModule],
+  imports: [
+    AuditModule,
+    SettingsModule,
+    BillingModule,
+    AlertsModule,
+    KbModule,
+    RunsModule,
+    AttachmentsModule,
+    SkillsModule,
+  ],
   controllers: [
     AdminUsersController,
     AdminTenantsController,

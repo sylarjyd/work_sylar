@@ -21,11 +21,13 @@ import {
   type SkillDto,
   type SkillListDto,
   type SkillPackageContentsDto,
+  type SkillTestResultDto,
 } from '@ai-office/shared';
 import { JwtGuard } from '../auth/jwt.guard';
 import { CurrentUser } from '../auth/current-user';
 import type { JwtPayload } from '../auth/jwt';
 import { SkillsService } from './skills.service';
+import { SkillTestService } from './skill-test.service';
 
 /** 技能市场（用户侧）：公共技能 + 自己的个人技能；支持技能包上传与包内文件读取。 */
 @Controller('api/skills')
@@ -33,7 +35,10 @@ import { SkillsService } from './skills.service';
 export class SkillsController {
   private readonly logger = new Logger(SkillsController.name);
 
-  constructor(private readonly skills: SkillsService) {}
+  constructor(
+    private readonly skills: SkillsService,
+    private readonly skillTest: SkillTestService,
+  ) {}
 
   @Get()
   list(@CurrentUser() user: JwtPayload): Promise<SkillListDto> {
@@ -49,6 +54,16 @@ export class SkillsController {
   @Post('package')
   createPackage(@CurrentUser() user: JwtPayload, @Body() body: unknown): Promise<SkillDto> {
     return this.skills.savePackage({ tenantId: user.tenantId, userId: user.sub }, body);
+  }
+
+  /** 技能测试：选模型跑一次只注入该技能的对话。 */
+  @Post(':id/test')
+  testSkill(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ): Promise<SkillTestResultDto> {
+    return this.skillTest.run({ tenantId: user.tenantId, userId: user.sub }, id, body);
   }
 
   /** 编辑器读取包内文本文件（二进制只在清单里出现）。 */

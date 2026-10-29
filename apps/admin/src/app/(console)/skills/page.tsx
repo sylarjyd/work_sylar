@@ -23,15 +23,18 @@ import {
   deleteAdminSkill,
   downloadAdminSkillFile,
   getAdminSkillPackage,
+  getAdminModels,
   isForbidden,
   listAdminSkills,
   saveAdminSkillPackage,
   setAdminSkillEnabled,
+  testAdminSkill,
   uploadAdminSkillPackage,
 } from '../../../lib/admin-api';
 import { clearToken, isUnauthorized } from '@ai-office/web-core';
 import { SkillDetailDialog } from '@ai-office/web-core/skill-detail';
 import { SkillEditor, type SkillEditorValue } from '@ai-office/web-core/skill-editor';
+import { SkillTestDialog } from '@ai-office/web-core/skill-test';
 
 const PAGE_SIZE = 20;
 
@@ -61,6 +64,8 @@ export default function AdminSkillsPage() {
     value: SkillEditorValue;
   } | null>(null);
   const [saving, setSaving] = useState(false);
+  const [testFor, setTestFor] = useState<SkillDto | null>(null);
+  const [testModels, setTestModels] = useState<{ value: string; label: string }[]>([]);
   const [uploading, setUploading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -116,6 +121,23 @@ export default function AdminSkillsPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  async function openTest(item: SkillDto): Promise<void> {
+    setTestFor(item);
+    if (testModels.length > 0) return;
+    try {
+      // 模型清单来自运营端模型库；字段差异时降级为空列表（测试仍用默认模型）。
+      const data = (await getAdminModels()) as unknown as { models?: Array<{ model?: string }> };
+      setTestModels(
+        (data.models ?? [])
+          .map((item2) => item2.model ?? '')
+          .filter((value) => value !== '')
+          .map((value) => ({ value, label: value })),
+      );
+    } catch (err) {
+      handleErr(err);
+    }
+  }
 
   async function openEditor(item?: SkillDto) {
     if (inFlight.current) return;
@@ -332,10 +354,13 @@ export default function AdminSkillsPage() {
     {
       title: '操作',
       key: 'actions',
-      width: 240,
+      width: 290,
       render: (_: unknown, item) =>
         item.scope === 'public' ? (
           <Space size={4}>
+            <Button size="small" onClick={() => void openTest(item)}>
+              测试
+            </Button>
             <Button size="small" onClick={() => setDetailFor(item)}>
               详情
             </Button>
@@ -456,6 +481,14 @@ export default function AdminSkillsPage() {
         saving={saving}
         onCancel={() => setEditor(null)}
         onSubmit={(payload) => void saveEditor(payload)}
+      />
+
+      <SkillTestDialog
+        open={testFor !== null}
+        skill={testFor}
+        models={testModels}
+        onClose={() => setTestFor(null)}
+        onRun={(model, prompt) => testAdminSkill(testFor!.id, { model, prompt })}
       />
 
       <SkillDetailDialog

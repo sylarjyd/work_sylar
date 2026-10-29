@@ -50,6 +50,7 @@ import type {
   SkillDto,
   SkillInput,
   SkillPackageContentsDto,
+  SkillTestResultDto,
 } from '@ai-office/shared';
 import { authFetch, BFF_URL, errorText, getToken } from '@ai-office/web-core';
 
@@ -459,6 +460,17 @@ export function setAdminSkillEnabled(id: string, enabled: boolean): Promise<Skil
 
 export function deleteAdminSkill(id: string): Promise<void> {
   return request(`/api/admin/skills/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
+/** 技能测试：只注入该技能跑一次对话（不建会话、不计费）。 */
+export async function testAdminSkill(
+  id: string,
+  body: { model?: string; prompt: string },
+): Promise<SkillTestResultDto> {
+  return request(`/api/admin/skills/${encodeURIComponent(id)}/test`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
 }
 
 /** 编辑器：读取公共技能包内文本文件。 */

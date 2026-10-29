@@ -21,6 +21,7 @@ import {
   type PageDto,
   type SkillDto,
   type SkillPackageContentsDto,
+  type SkillTestResultDto,
 } from '@ai-office/shared';
 import { JwtGuard } from '../auth/jwt.guard';
 import { AdminGuard } from '../auth/admin.guard';
@@ -68,6 +69,16 @@ export class AdminSkillsController {
   @Get(':id/package')
   packageContents(@Param('id') id: string): Promise<SkillPackageContentsDto> {
     return this.skills.packageContents(id);
+  }
+
+  /** 技能测试：选模型跑一次只注入该技能的对话。 */
+  @Post(':id/test')
+  testSkill(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ): Promise<SkillTestResultDto> {
+    return this.skills.testSkill(id, user.tenantId, user.sub, body);
   }
 
   @Put(':id/package')

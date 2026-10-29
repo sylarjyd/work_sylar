@@ -24,14 +24,17 @@ import {
   getSkillPackage,
   getToken,
   isUnauthorized,
+  listModels,
   listSkills,
   saveSkillPackage,
   shareSkill,
+  testSkill,
   uploadSkillPackage,
 } from '../../lib/api';
 import { errorText } from '@ai-office/web-core';
 import { SkillDetailDialog } from '@ai-office/web-core/skill-detail';
 import { SkillEditor, type SkillEditorValue } from '@ai-office/web-core/skill-editor';
+import { SkillTestDialog } from '@ai-office/web-core/skill-test';
 
 type Filter = 'all' | 'mine' | 'public';
 
@@ -56,6 +59,8 @@ export default function SkillsPage() {
     null,
   );
   const [saving, setSaving] = useState(false);
+  const [testFor, setTestFor] = useState<SkillDto | null>(null);
+  const [testModels, setTestModels] = useState<{ value: string; label: string }[]>([]);
   const [uploading, setUploading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -135,6 +140,17 @@ export default function SkillsPage() {
       handleErr(err);
     } finally {
       inFlight.current = false;
+    }
+  }
+
+  async function openTest(item: SkillDto): Promise<void> {
+    setTestFor(item);
+    if (testModels.length > 0) return;
+    try {
+      const data = await listModels();
+      setTestModels(data.models.map((m) => ({ value: m.model, label: m.model })));
+    } catch (err) {
+      handleErr(err);
     }
   }
 
@@ -329,6 +345,9 @@ export default function SkillsPage() {
                     }
                     extra={
                       <Space size={4}>
+                        <Button size="small" onClick={() => void openTest(item)}>
+                          测试
+                        </Button>
                         <Button size="small" onClick={() => setDetailFor(item)}>
                           详情
                         </Button>
@@ -383,6 +402,14 @@ export default function SkillsPage() {
         saving={saving}
         onCancel={() => setEditor(null)}
         onSubmit={(payload) => void saveEditor(payload)}
+      />
+
+      <SkillTestDialog
+        open={testFor !== null}
+        skill={testFor}
+        models={testModels}
+        onClose={() => setTestFor(null)}
+        onRun={(model, prompt) => testSkill(testFor!.id, { model, prompt })}
       />
 
       <SkillDetailDialog

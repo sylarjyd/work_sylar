@@ -24,6 +24,7 @@ import type {
   SkillInput,
   SkillListDto,
   SkillPackageContentsDto,
+  SkillTestResultDto,
   SessionSummary,
   UpdateSessionRequest,
   UsageAggregateDto,
@@ -331,6 +332,28 @@ export async function saveSkillPackage(
   );
   if (!res.ok) throw new Error(`skill_save_failed_${res.status}`);
   return (await res.json()) as SkillDto;
+}
+
+/** 技能测试：只注入该技能跑一次对话（不建会话、不计费）。 */
+export async function testSkill(
+  id: string,
+  body: { model?: string; prompt: string },
+): Promise<SkillTestResultDto> {
+  const res = await authFetch(`/api/skills/${encodeURIComponent(id)}/test`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    let code = '';
+    try {
+      const payload = (await res.json()) as { message?: unknown };
+      if (typeof payload.message === 'string') code = payload.message;
+    } catch {
+      // 错误体不一定是 JSON。
+    }
+    throw new Error(code || `skill_test_failed_${res.status}`);
+  }
+  return (await res.json()) as SkillTestResultDto;
 }
 
 /** 取消运行：排队中的直接撤销，执行中的交由控制总线通知；终态 run 幂等返回当前状态。 */
