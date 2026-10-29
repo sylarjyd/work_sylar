@@ -10,6 +10,7 @@
     "./antd": "./src/antd.tsx",
     "./chart": "./src/chart.tsx",
     "./file-preview": "./src/file-preview.tsx",
+    "./skill-detail": "./src/skill-detail.tsx",
     "./globals.css": "./src/globals.css"
   },
   "sideEffects": [

@@ -8,7 +8,6 @@ import {
   Button,
   Card,
   Input,
-  List,
   Modal,
   Segmented,
   Space,
@@ -31,6 +30,7 @@ import {
   uploadAdminSkillPackage,
 } from '../../../lib/admin-api';
 import { clearToken, isUnauthorized } from '@ai-office/web-core';
+import { SkillDetailDialog } from '@ai-office/web-core/skill-detail';
 
 const PAGE_SIZE = 20;
 
@@ -52,7 +52,7 @@ export default function AdminSkillsPage() {
   const [scope, setScope] = useState<'all' | 'public' | 'personal'>('all');
   const [q, setQ] = useState('');
   const [form, setForm] = useState<SkillForm | null>(null);
-  const [filesFor, setFilesFor] = useState<SkillDto | null>(null);
+  const [detailFor, setDetailFor] = useState<SkillDto | null>(null);
   const [uploading, setUploading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -216,10 +216,19 @@ export default function AdminSkillsPage() {
       dataIndex: 'name',
       width: 260,
       render: (_: unknown, item) => (
-        <div>
-          <Typography.Text strong>{item.name}</Typography.Text>
+        // 简介可能很长：单行省略并在悬浮时给全文，避免整行被撑高。
+        <div style={{ minWidth: 0 }}>
+          <Typography.Text strong ellipsis={{ tooltip: item.name }}>
+            {item.name}
+          </Typography.Text>
           {item.description ? (
-            <div style={{ fontSize: 12, color: '#8a958f' }}>{item.description}</div>
+            <Typography.Text
+              type="secondary"
+              style={{ fontSize: 12, display: 'block' }}
+              ellipsis={{ tooltip: item.description }}
+            >
+              {item.description}
+            </Typography.Text>
           ) : null}
         </div>
       ),
@@ -251,7 +260,8 @@ export default function AdminSkillsPage() {
       title: '来源',
       dataIndex: 'source',
       width: 110,
-      render: (_: unknown, item) => (item.source === 'run' ? '任务总结' : '手工创建'),
+      render: (_: unknown, item) =>
+        item.source === 'run' ? '任务总结' : item.source === 'upload' ? '技能包' : '手工创建',
     },
     {
       title: '内容',
@@ -264,12 +274,10 @@ export default function AdminSkillsPage() {
     {
       title: '文件',
       key: 'files',
-      width: 110,
+      width: 90,
       render: (_: unknown, item) =>
         item.files.length > 0 ? (
-          <Button size="small" onClick={() => setFilesFor(item)}>
-            {item.files.length} 个
-          </Button>
+          <Typography.Text>{item.files.length} 个</Typography.Text>
         ) : (
           <Typography.Text type="secondary">-</Typography.Text>
         ),
@@ -290,10 +298,13 @@ export default function AdminSkillsPage() {
     {
       title: '操作',
       key: 'actions',
-      width: 200,
+      width: 240,
       render: (_: unknown, item) =>
         item.scope === 'public' ? (
           <Space size={4}>
+            <Button size="small" onClick={() => setDetailFor(item)}>
+              详情
+            </Button>
             <Button
               size="small"
               disabled={busy}
@@ -316,7 +327,12 @@ export default function AdminSkillsPage() {
             </Button>
           </Space>
         ) : (
-          <Typography.Text type="secondary">用户私域，只读</Typography.Text>
+          <Space size={4}>
+            <Button size="small" onClick={() => setDetailFor(item)}>
+              详情
+            </Button>
+            <Typography.Text type="secondary">只读</Typography.Text>
+          </Space>
         ),
     },
   ];
@@ -461,40 +477,34 @@ export default function AdminSkillsPage() {
         ) : null}
       </Modal>
 
-      <Modal
-        title={`技能包文件 · ${filesFor?.name ?? ''}`}
-        open={filesFor !== null}
-        footer={null}
-        width={600}
-        onCancel={() => setFilesFor(null)}
-      >
-        <List
-          size="small"
-          dataSource={filesFor?.files ?? []}
-          locale={{ emptyText: '该技能没有附带文件' }}
-          renderItem={(file) => (
-            <List.Item
-              actions={[
-                <Button
-                  key="download"
-                  size="small"
-                  onClick={() =>
-                    void downloadAdminSkillFile(
-                      filesFor!.id,
-                      file.path,
-                      file.path.split('/').pop() ?? 'file',
-                    ).catch((err) => handleErr(err))
-                  }
-                >
-                  下载
-                </Button>,
-              ]}
+      <SkillDetailDialog
+        open={detailFor !== null}
+        skill={detailFor}
+        onClose={() => setDetailFor(null)}
+        onDownloadFile={(skill, path) =>
+          void downloadAdminSkillFile(skill.id, path, path.split('/').pop() ?? 'file').catch((err) =>
+            handleErr(err),
+          )
+        }
+        extra={
+          detailFor?.scope === 'public' ? (
+            <Button
+              onClick={() => {
+                if (!detailFor) return;
+                setDetailFor(null);
+                setForm({
+                  id: detailFor.id,
+                  name: detailFor.name,
+                  description: detailFor.description,
+                  content: detailFor.content,
+                });
+              }}
             >
-              <Typography.Text code>{file.path}</Typography.Text>
-            </List.Item>
-          )}
-        />
-      </Modal>
+              编辑
+            </Button>
+          ) : null
+        }
+      />
     </Space>
   );
 }

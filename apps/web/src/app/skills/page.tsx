@@ -10,7 +10,6 @@ import {
   Col,
   Empty,
   Input,
-  List,
   Modal,
   Row,
   Segmented,
@@ -33,7 +32,7 @@ import {
   uploadSkillPackage,
 } from '../../lib/api';
 import { errorText } from '@ai-office/web-core';
-import { formatBytes } from '../../lib/format';
+import { SkillDetailDialog } from '@ai-office/web-core/skill-detail';
 
 const EMPTY_FORM: SkillInput = { name: '', description: '', content: '' };
 
@@ -54,7 +53,7 @@ export default function SkillsPage() {
   const [items, setItems] = useState<SkillDto[]>([]);
   const [filter, setFilter] = useState<Filter>('all');
   const [form, setForm] = useState<SkillForm | null>(null);
-  const [filesFor, setFilesFor] = useState<SkillDto | null>(null);
+  const [detailFor, setDetailFor] = useState<SkillDto | null>(null);
   const [uploading, setUploading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -307,8 +306,11 @@ export default function SkillsPage() {
                       </Space>
                     }
                     extra={
-                      item.owned && item.scope === 'personal' && item.files.length === 0 ? (
-                        <Space size={4}>
+                      <Space size={4}>
+                        <Button size="small" onClick={() => setDetailFor(item)}>
+                          详情
+                        </Button>
+                        {item.owned && item.scope === 'personal' && item.files.length === 0 ? (
                           <Button
                             size="small"
                             disabled={busy}
@@ -323,42 +325,22 @@ export default function SkillsPage() {
                           >
                             编辑
                           </Button>
-                          <Button size="small" disabled={busy} onClick={() => share(item)}>
-                            共享
-                          </Button>
-                          <Button size="small" danger disabled={busy} onClick={() => remove(item)}>
-                            删除
-                          </Button>
-                        </Space>
-                      ) : item.owned && item.files.length > 0 ? (
-                        <Space size={4}>
-                          <Button size="small" disabled={busy} onClick={() => setFilesFor(item)}>
-                            文件 {item.files.length}
-                          </Button>
-                          {item.scope === 'personal' ? (
-                            <>
-                              <Button size="small" disabled={busy} onClick={() => share(item)}>
-                                共享
-                              </Button>
-                              <Button size="small" danger disabled={busy} onClick={() => remove(item)}>
-                                删除
-                              </Button>
-                            </>
-                          ) : (
-                            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                              已共享
-                            </Typography.Text>
-                          )}
-                        </Space>
-                      ) : item.owned ? (
-                        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                          已共享
-                        </Typography.Text>
-                      ) : item.files.length > 0 ? (
-                        <Button size="small" onClick={() => setFilesFor(item)}>
-                          文件 {item.files.length}
-                        </Button>
-                      ) : null
+                        ) : null}
+                        {item.owned && item.scope === 'personal' ? (
+                          <>
+                            <Button size="small" disabled={busy} onClick={() => share(item)}>
+                              共享
+                            </Button>
+                            <Button size="small" danger disabled={busy} onClick={() => remove(item)}>
+                              删除
+                            </Button>
+                          </>
+                        ) : item.owned ? (
+                          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                            已共享
+                          </Typography.Text>
+                        ) : null}
+                      </Space>
                     }
                   >
                     {item.description ? (
@@ -452,46 +434,16 @@ export default function SkillsPage() {
         ) : null}
       </Modal>
 
-      <Modal
-        title={`技能包文件 · ${filesFor?.name ?? ''}`}
-        open={filesFor !== null}
-        footer={null}
-        width={600}
-        onCancel={() => setFilesFor(null)}
-      >
-        {filesFor && filesFor.files.length > 0 ? (
-          <List
-            size="small"
-            dataSource={filesFor.files}
-            renderItem={(file) => (
-              <List.Item
-                actions={[
-                  <Button
-                    key="download"
-                    size="small"
-                    onClick={() =>
-                      void downloadSkillFile(
-                        filesFor.id,
-                        file.path,
-                        file.path.split('/').pop() ?? 'file',
-                      ).catch((err) => handleErr(err))
-                    }
-                  >
-                    下载
-                  </Button>,
-                ]}
-              >
-                <Typography.Text code>{file.path}</Typography.Text>
-                <Typography.Text type="secondary" style={{ marginLeft: 8, fontSize: 12 }}>
-                  {formatBytes(file.size)}
-                </Typography.Text>
-              </List.Item>
-            )}
-          />
-        ) : (
-          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="该技能没有附带文件" />
-        )}
-      </Modal>
+      <SkillDetailDialog
+        open={detailFor !== null}
+        skill={detailFor}
+        onClose={() => setDetailFor(null)}
+        onDownloadFile={(skill, path) =>
+          void downloadSkillFile(skill.id, path, path.split('/').pop() ?? 'file').catch((err) =>
+            handleErr(err),
+          )
+        }
+      />
     </AppShell>
   );
 }
