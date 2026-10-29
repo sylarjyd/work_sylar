@@ -280,6 +280,8 @@ export default function AssistantsPage() {
             footer={null}
             width={900}
             destroyOnClose
+            style={{ top: 32 }}
+            styles={{ body: { maxHeight: '68vh', overflowY: 'auto', paddingRight: 8 } }}
             onCancel={() => {
               if (!busy) resetForm();
             }}
@@ -294,20 +296,6 @@ export default function AssistantsPage() {
                     disabled={busy}
                     placeholder="如：合同审阅专家"
                     onChange={(e) => setForm({ ...form, name: e.target.value })}
-                  />
-                </div>
-              </Col>
-              <Col span={24}>
-                <div className="admin-field">
-                  <Typography.Text>简介</Typography.Text>
-                  <Input.TextArea
-                    rows={3}
-                    value={form.description}
-                    maxLength={200}
-                    showCount
-                    disabled={busy}
-                    placeholder="一句话说明这个专家助手擅长什么"
-                    onChange={(e) => setForm({ ...form, description: e.target.value })}
                   />
                 </div>
               </Col>
@@ -332,6 +320,20 @@ export default function AssistantsPage() {
                   />
                 </div>
               </Col>
+              <Col span={24}>
+                <div className="admin-field">
+                  <Typography.Text>简介</Typography.Text>
+                  <Input.TextArea
+                    rows={3}
+                    value={form.description}
+                    maxLength={200}
+                    showCount
+                    disabled={busy}
+                    placeholder="一句话说明这个专家助手擅长什么"
+                    onChange={(e) => setForm({ ...form, description: e.target.value })}
+                  />
+                </div>
+              </Col>
               <Col xs={24} md={12}>
                 <div className="admin-field">
                   <Typography.Text>权限模式</Typography.Text>
@@ -350,35 +352,6 @@ export default function AssistantsPage() {
                   <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                     {ASSISTANT_PERMISSION_MODE_HINTS[form.permissionMode]}
                   </Typography.Text>
-                </div>
-              </Col>
-
-              <Col xs={24} md={12}>
-                <div className="admin-field">
-                  <Typography.Text>技能</Typography.Text>
-                  <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                    {ASSISTANT_SKILLS.map((s) => (
-                      <Checkbox
-                        key={s.key}
-                        checked={form.skills.includes(s.key)}
-                        disabled={busy}
-                        onChange={(e) =>
-                          setForm({
-                            ...form,
-                            skills: e.target.checked
-                              ? [...form.skills, s.key]
-                              : form.skills.filter((x) => x !== s.key),
-                          })
-                        }
-                      >
-                        {s.name}
-                        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                          {' '}
-                          · {s.description}
-                        </Typography.Text>
-                      </Checkbox>
-                    ))}
-                  </Space>
                 </div>
               </Col>
 
@@ -414,9 +387,40 @@ export default function AssistantsPage() {
 
               <Col span={24}>
                 <div className="admin-field">
+                  <Typography.Text>工具</Typography.Text>
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    勾选后助手才能调用对应内置能力；未勾选的工具本会话不可用。
+                  </Typography.Text>
+                  <div className="assistant-tool-grid">
+                    {ASSISTANT_SKILLS.map((tool) => (
+                      <Checkbox
+                        key={tool.key}
+                        checked={form.skills.includes(tool.key)}
+                        disabled={busy}
+                        onChange={(e) =>
+                          setForm({
+                            ...form,
+                            skills: e.target.checked
+                              ? [...form.skills, tool.key]
+                              : form.skills.filter((x) => x !== tool.key),
+                          })
+                        }
+                      >
+                        <span className="assistant-tool-name">{tool.name}</span>
+                        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                          {tool.description}
+                        </Typography.Text>
+                      </Checkbox>
+                    ))}
+                  </div>
+                </div>
+              </Col>
+
+              <Col span={24}>
+                <div className="admin-field">
                   <Typography.Text>绑定技能</Typography.Text>
                   <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                    技能内容会拼进系统提示词；不改变工具权限，工具仍由上面的技能开关决定。
+                    技能内容会拼进系统提示词；不改变工具权限，工具仍由上面的「工具」开关决定。
                   </Typography.Text>
                   <Select
                     mode="multiple"

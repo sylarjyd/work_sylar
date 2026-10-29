@@ -1914,6 +1914,36 @@ a {
   color: var(--ink-2);
 }
 
+/* 专家助手「工具」勾选：宽屏两列，避免四个选项纵向拉得很长。 */
+.assistant-tool-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 20px;
+  margin-top: 2px;
+}
+
+.assistant-tool-grid .ant-checkbox-wrapper {
+  align-items: flex-start;
+  margin-inline-start: 0;
+  line-height: 1.5;
+}
+
+.assistant-tool-grid .ant-checkbox {
+  margin-top: 3px;
+}
+
+.assistant-tool-name {
+  margin-right: 6px;
+  color: var(--ink-1);
+  font-weight: 500;
+}
+
+@media (max-width: 720px) {
+  .assistant-tool-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .admin-panel {
   background: var(--surface);
   border: 1px solid var(--line);
