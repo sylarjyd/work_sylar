@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { ADMIN_NAV, ADMIN_NAV_ITEMS, selectedNavKey } from './admin-nav';
 
 describe('admin-nav', () => {
-  it('导航覆盖 7 个分组与 1 个一级页面，共 14 个不重复路由', () => {
-    expect(ADMIN_NAV).toHaveLength(8);
+  it('导航覆盖 7 个分组与 2 个一级页面，共 14 个不重复路由', () => {
+    expect(ADMIN_NAV).toHaveLength(9);
     expect(ADMIN_NAV_ITEMS).toHaveLength(14);
     const hrefs = ADMIN_NAV_ITEMS.map((item) => item.href);
     expect(new Set(hrefs).size).toBe(hrefs.length);
@@ -14,15 +14,25 @@ describe('admin-nav', () => {
       '/tenants',
       '/plans',
       '/sessions',
-      '/assistants',
       '/tasks',
       '/kb',
       '/skills',
+      '/assistants',
       '/models',
       '/settings',
       '/qa-cache',
       '/audit',
     ]);
+  });
+
+  it('专家助手是一级菜单，不再挂在会话与任务分组下', () => {
+    const assistants = ADMIN_NAV.find((entry) => entry.key === 'assistants');
+    expect(assistants).toMatchObject({ label: '专家助手', href: '/assistants' });
+
+    const conversations = ADMIN_NAV.find((entry) => entry.key === 'conversations');
+    expect(
+      conversations && 'items' in conversations ? conversations.items : [],
+    ).not.toContainEqual(expect.objectContaining({ href: '/assistants' }));
   });
 
   it('缓存管理是一级菜单，不再挂在模型与配置分组下', () => {

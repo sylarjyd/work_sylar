@@ -32,7 +32,6 @@ export const ADMIN_NAV: AdminNavEntry[] = [
     label: '会话与任务',
     items: [
       { href: '/sessions', label: '会话管理' },
-      { href: '/assistants', label: '助手管理' },
       { href: '/tasks', label: '任务与运行' },
     ],
   },
@@ -46,6 +45,7 @@ export const ADMIN_NAV: AdminNavEntry[] = [
     label: '技能市场',
     items: [{ href: '/skills', label: '技能管理' }],
   },
+  { key: 'assistants', label: '专家助手', href: '/assistants' },
   {
     key: 'models',
     label: '模型与配置',

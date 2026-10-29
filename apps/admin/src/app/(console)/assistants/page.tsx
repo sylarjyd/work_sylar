@@ -36,7 +36,7 @@ function formatTime(value: string): string {
   return new Date(value).toLocaleString('zh-CN', { hour12: false });
 }
 
-/** 运营端助手列表：公共内置助手与用户自定义助手只读展示。 */
+/** 运营端专家助手列表：公共内置助手与用户自定义助手只读展示。 */
 export default function AdminAssistantsPage() {
   const router = useRouter();
   const [items, setItems] = useState<AdminAssistantDto[]>([]);
@@ -185,7 +185,7 @@ export default function AdminAssistantsPage() {
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
       <div>
         <Typography.Title level={4} style={{ margin: 0 }}>
-          助手管理
+          专家助手
         </Typography.Title>
         <Typography.Text type="secondary">
           公共内置助手对所有用户可见并可直接使用；个人助手只有创建者可见，运营端只读排查。
@@ -195,7 +195,7 @@ export default function AdminAssistantsPage() {
       {error ? <Alert type="error" showIcon message={error} /> : null}
 
       <Card
-        title="助手列表"
+        title="专家助手列表"
         extra={
           <Space wrap>
             <Segmented
