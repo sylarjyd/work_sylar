@@ -967,6 +967,11 @@ export default function Home() {
     }
   }
 
+  /** 已选技能的名称（用于输入框下方胶囊，直接展示名字而不是数量）。 */
+  function selectedSkillNames(): string[] {
+    return selectedSkillIds.map((id) => skillOptions.find((s) => s.id === id)?.name ?? '已删除技能');
+  }
+
   /** 客户端预检后立即展示 chip，并并发上传；单个失败只影响该附件。 */
   function addFiles(files: File[]): void {
     if (running || files.length === 0) return;
@@ -1635,8 +1640,11 @@ export default function Home() {
             </span>
           ) : null}
           {selectedSkillIds.length > 0 ? (
-            <span className="wb-chip" title="本次任务额外启用的技能">
-              <span className="wb-chip-text">技能 {selectedSkillIds.length}</span>
+            <span
+              className="wb-chip"
+              title={`本次任务启用的技能：${selectedSkillNames().join('、')}`}
+            >
+              <span className="wb-chip-text">技能：{selectedSkillNames().join('、')}</span>
               <button
                 type="button"
                 className="wb-chip-remove"
