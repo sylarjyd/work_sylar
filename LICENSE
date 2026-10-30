@@ -1,0 +1,120 @@
+# AI Office Agent 源码可见许可 v1.0
+
+**（非商业免费使用；商业使用需事先取得书面授权）**
+
+Copyright (c) 2026 AI Office Agent 项目版权方（下称“版权方”）
+
+> 本许可是「源码可见」（source-available）许可，**不是** OSI 认可的开源许可。
+> 我们允许你阅读、学习、修改并在非商业场景下使用本软件；任何商业使用都必须先取得
+> 版权方的书面商业授权（见 `LICENSE-COMMERCIAL.md`）。
+
+---
+
+## 1. 定义
+
+1.1 **软件**：本仓库中包含的源代码、文档、配置、脚本、资源文件及其修改、衍生作品。
+
+1.2 **非商业目的**：以个人学习、研究、教学、非营利组织内部非营收用途为目的的使用，
+且**不以任何形式直接或间接获取商业利益**。
+
+1.3 **商业使用**：任何以营利或获取商业利益为目的的使用，包括但不限于：
+
+- 在企业的生产或经营环境中部署、运行本软件（含内部办公、客服、研发等业务系统）；
+- 将本软件或其衍生作品作为产品、服务、SaaS、私有化交付的一部分提供给第三方；
+- 使用本软件为客户提供服务并收取费用（含咨询、实施、运维、培训）；
+- 以本软件为基础开发与本项目存在竞争关系的产品或托管服务；
+- 将本软件嵌入硬件、镜像、发行版或其他商业产品中分发。
+
+1.4 **商业授权**：版权方另行出具的、明确允许商业使用的书面授权（含电子形式）。
+
+## 2. 非商业许可
+
+在遵守本许可全部条款的前提下，版权方授予你一项**免费、非独占、不可转授、可撤销**的
+许可，允许你：
+
+1. 复制、运行本软件，用于非商业目的；
+2. 修改本软件并制作衍生作品，用于非商业目的；
+3. 在非商业目的范围内向他人分发本软件或其衍生作品。
+
+分发时必须：保留本许可与全部版权声明；在修改过的文件中显著标注修改；随附本许可
+全文或指向本许可的链接。
+
+## 3. 商业使用需授权
+
+3.1 **任何商业使用都必须事先取得版权方的书面商业授权**，并按商业授权约定支付费用
+（如有）。
+
+3.2 未取得商业授权前，不得将本软件用于生产环境、对外提供服务或交付客户。
+
+3.3 商业授权的范围、期限、费用、支持与 SLA 以双方签署的协议为准；商业授权说明见
+`LICENSE-COMMERCIAL.md`。
+
+## 4. 限制
+
+除本许可明确授予的权利外，你不得：
+
+1. 移除、隐藏或篡改本软件中的版权声明、许可声明、商标或署名信息；
+2. 使用本项目名称、Logo 或作者名义为你的产品或服务背书，或造成官方关联的误解；
+3. 将本软件或其衍生作品作为托管服务、API 服务向第三方提供（商业授权除外）；
+4. 规避商业授权限制（例如通过拆分、包装、改名、仅提供二进制等方式）；
+5. 将本软件用于违反适用法律法规的场景。
+
+## 5. 贡献
+
+5.1 你向本项目提交的代码、文档或其他贡献，视为你授予版权方一项永久、全球范围、
+免费、可转授（含商业再许可）、不可撤销的许可，用于在本项目及商业授权中使用、
+修改与分发该贡献。
+
+5.2 你保证对所提交的贡献拥有合法权利，且不侵犯第三方知识产权。
+
+## 6. 无担保
+
+本软件按「现状」提供，不附带任何明示或默示的担保，包括但不限于适销性、特定用途
+适用性、不侵权及无缺陷的担保。你自行承担使用本软件的全部风险。
+
+## 7. 责任限制
+
+在适用法律允许的最大范围内，版权方不对任何直接、间接、偶然、特殊、惩罚性或后果性
+损害承担责任，包括但不限于利润损失、数据丢失、业务中断、替代成本，无论基于合同、
+侵权或其他理论，即使已被告知可能发生此类损害。
+
+## 8. 终止
+
+8.1 你违反本许可任何条款时，本许可自动终止，无需另行通知。
+
+8.2 商业授权终止后，你应立即停止商业使用，并从生产环境与分发渠道中删除本软件及
+衍生作品。
+
+8.3 本许可终止后，第 4、5、6、7、9 条继续有效。
+
+## 9. 其他
+
+9.1 本许可适用中华人民共和国法律；争议应先友好协商，协商不成的，提交版权方所在地
+有管辖权的人民法院解决。
+
+9.2 本许可以中文版本为准；下方英文摘要仅为方便理解，与中文版本不一致时以中文为准。
+
+9.3 版权方可在后续版本中调整许可条款；已发布版本仍适用其发布时的许可，除非你主动
+升级到新版本。
+
+---
+
+## English Summary (non-binding)
+
+This is a **source-available** license, not an OSI-approved open-source license.
+
+- **Non-commercial use** (personal learning, research, teaching, internal
+  non-revenue use by non-profits) is free: you may use, modify and share the
+  software, provided you keep this license and copyright notices.
+- **Commercial use** — including production deployment inside a company,
+  delivering it to customers, offering it as a hosted/SaaS product, paid
+  consulting/training, or embedding it into a commercial product — **requires a
+  prior written commercial license** from the copyright holder.
+- You may not remove copyright/license notices, imply endorsement, or use the
+  project name/logo without permission.
+- Contributions are licensed to the copyright holder, including the right to
+  sublicense commercially.
+- THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND; THE COPYRIGHT
+  HOLDER IS NOT LIABLE FOR ANY DAMAGES.
+
+For commercial licensing, see `LICENSE-COMMERCIAL.md`.

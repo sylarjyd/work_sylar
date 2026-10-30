@@ -1,6 +1,7 @@
 {
   "name": "ai-office",
   "private": true,
+  "license": "SEE LICENSE IN LICENSE",
   "packageManager": "pnpm@10.19.0",
   "engines": { "node": ">=22" },
   "scripts": {
