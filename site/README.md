@@ -15,6 +15,16 @@ node site/server.mjs        # http://127.0.0.1:3002
 
 ## 部署
 
+```bash
+# 静态托管（Nginx 示例见 nginx.conf）
+rsync -av site/ user@host:/var/www/worksylar/site/
+```
+
+- `site/nginx.conf`：HTTP/HTTPS、gzip、静态缓存与安全响应头示例；
+- 域名、证书、分析统计需要你提供：正式域名、证书方式（Let's Encrypt / 已有证书）、
+  统计平台（如 Plausible / 百度统计 / GA4 的站点 ID）。
+  统计脚本建议放在 `</body>` 前，先征得同意再接入。
+
 ```nginx
 server {
   listen 80;
