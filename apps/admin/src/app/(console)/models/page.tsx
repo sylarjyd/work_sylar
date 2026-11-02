@@ -8,10 +8,12 @@ import {
   Button,
   Card,
   Checkbox,
+  Col,
   Drawer,
   Input,
   InputNumber,
   Modal,
+  Row,
   Select,
   Space,
   Switch,
@@ -696,7 +698,13 @@ export default function AdminModelsPage() {
         />
       ) : null}
 
-      <Card title="厂商" extra={<Typography.Text type="secondary">{providers.length} 个</Typography.Text>}>
+      <Row gutter={[16, 16]} align="stretch">
+        <Col xs={24} xl={9}>
+          <Card
+            title="厂商"
+            extra={<Typography.Text type="secondary">{providers.length} 个</Typography.Text>}
+            style={{ height: '100%' }}
+          >
         {providers.length === 0 ? (
           <Typography.Text type="secondary">尚未在运营平台配置厂商。</Typography.Text>
         ) : (
@@ -754,18 +762,21 @@ export default function AdminModelsPage() {
             ))}
           </div>
         )}
-      </Card>
+          </Card>
+        </Col>
 
-      <Card
-        title="模型列表"
-        extra={
-          <Typography.Text type="secondary">
-            {models.length === allModels.length
-              ? `共 ${allModels.length} 个`
-              : `筛选出 ${models.length} / ${allModels.length} 个`}
-          </Typography.Text>
-        }
-      >
+        <Col xs={24} xl={15}>
+          <Card
+            title="模型列表"
+            extra={
+              <Typography.Text type="secondary">
+                {models.length === allModels.length
+                  ? `共 ${allModels.length} 个`
+                  : `筛选出 ${models.length} / ${allModels.length} 个`}
+              </Typography.Text>
+            }
+            style={{ height: '100%' }}
+          >
         <Table<AdminModelDto>
           rowKey="model"
           size="middle"
@@ -788,8 +799,10 @@ export default function AdminModelsPage() {
                 ? '暂无模型'
                 : '当前筛选条件下没有模型，试试切换厂商或分类',
           }}
-        />
-      </Card>
+          />
+          </Card>
+        </Col>
+      </Row>
 
       <Modal
         title={providerForm?.id ? '编辑厂商' : '新增厂商'}
