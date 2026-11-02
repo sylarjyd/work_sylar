@@ -4,9 +4,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Alert,
+  App,
+  Button,
   Card,
   Col,
   Empty,
+  Modal,
   Progress,
   Row,
   Segmented,
@@ -21,16 +24,20 @@ import type {
   BillingSummaryDto,
   CreditLedgerItemDto,
   PlanDto,
+  PlanOrderDto,
   UsageAggregateDto,
 } from '@ai-office/shared';
 import { AppShell } from '../../components/app-shell';
 import {
+  createPlanOrder,
   getBillingSummary,
   getToken,
   getUsage,
   isUnauthorized,
   listCreditLedger,
+  listPlanOrders,
   listPlans,
+  payPlanOrder,
 } from '../../lib/api';
 import { errorText } from '@ai-office/web-core';
 import { EChart, buildChartOption } from '@ai-office/web-core/chart';
@@ -104,8 +111,12 @@ const ledgerColumns: TableColumnsType<CreditLedgerItemDto> = [
 
 export default function BillingPage() {
   const router = useRouter();
+  const { message } = App.useApp();
   const [summary, setSummary] = useState<BillingSummaryDto | null>(null);
   const [plans, setPlans] = useState<PlanDto[]>([]);
+  const [orders, setOrders] = useState<PlanOrderDto[]>([]);
+  const [orderPlan, setOrderPlan] = useState<PlanDto | null>(null);
+  const [paying, setPaying] = useState(false);
   const [ledger, setLedger] = useState<CreditLedgerItemDto[]>([]);
   const [usage, setUsage] = useState<UsageAggregateDto[]>([]);
   const [groupBy, setGroupBy] = useState<'day' | 'model'>('day');
@@ -121,14 +132,16 @@ export default function BillingPage() {
     setError('');
     setLoadingBase(true);
     try {
-      const [s, p, l] = await Promise.allSettled([
+      const [s, p, l, o] = await Promise.allSettled([
         getBillingSummary(),
         listPlans(),
         listCreditLedger(30),
+        listPlanOrders(),
       ]);
       if (s.status === 'fulfilled') setSummary(s.value);
       if (p.status === 'fulfilled') setPlans(p.value);
       if (l.status === 'fulfilled') setLedger(l.value.items);
+      if (o.status === 'fulfilled') setOrders(o.value);
 
       const failures = [s, p, l].filter(
         (r): r is PromiseRejectedResult => r.status === 'rejected',
@@ -168,6 +181,23 @@ export default function BillingPage() {
     },
     [router],
   );
+
+  async function payNow(): Promise<void> {
+    if (!orderPlan || paying) return;
+    setPaying(true);
+    try {
+      const order = await createPlanOrder(orderPlan.id);
+      await payPlanOrder(order.id);
+      message.success(`已订阅「${orderPlan.name}」，积分已发放`);
+      setOrderPlan(null);
+      await loadBase();
+    } catch (err) {
+      if (isUnauthorized(err)) router.push('/login');
+      else message.error(errorText(err));
+    } finally {
+      setPaying(false);
+    }
+  }
 
   useEffect(() => {
     if (!getToken()) {
@@ -287,6 +317,15 @@ export default function BillingPage() {
                           <span>单次最多 {p.maxCreditsPerRun} 积分</span>
                           <span>每分钟 {p.rpm} 次运行</span>
                           <span>模型：{p.allowedModels.join('、')}</span>
+                          <Button
+                            block
+                            type={current ? 'default' : 'primary'}
+                            disabled={current || p.id === 'free'}
+                            style={{ marginTop: 8 }}
+                            onClick={() => setOrderPlan(p)}
+                          >
+                            {current ? '当前套餐' : p.id === 'free' ? '默认体验' : '订阅'}
+                          </Button>
                         </Space>
                       </Card>
                     </Col>
@@ -336,6 +375,50 @@ export default function BillingPage() {
             )}
           </Card>
 
+          <Card
+            size="small"
+            title="我的订单"
+            style={{ marginBottom: 16 }}
+            extra={<Typography.Text type="secondary" style={{ fontSize: 12 }}>最近 50 条</Typography.Text>}
+          >
+            <Table<PlanOrderDto>
+              rowKey="id"
+              size="small"
+              loading={loadingBase && orders.length === 0}
+              dataSource={orders}
+              pagination={{ pageSize: 20, hideOnSinglePage: true }}
+              locale={{ emptyText: '暂无订单，订阅套餐后会出现在这里' }}
+              columns={[
+                { title: '时间', dataIndex: 'createdAt', width: 180, render: (v: string) => stamp(v) },
+                { title: '套餐', dataIndex: 'planName', ellipsis: true },
+                {
+                  title: '金额',
+                  dataIndex: 'amountCents',
+                  width: 100,
+                  align: 'right',
+                  render: (v: number) => `¥${(v / 100).toFixed(2)}`,
+                },
+                { title: '渠道', dataIndex: 'provider', width: 90 },
+                {
+                  title: '状态',
+                  dataIndex: 'status',
+                  width: 90,
+                  render: (v: string) => (
+                    <Tag color={v === 'paid' ? 'success' : v === 'pending' ? 'processing' : 'default'}>
+                      {v === 'paid' ? '已支付' : v === 'pending' ? '待支付' : v}
+                    </Tag>
+                  ),
+                },
+                {
+                  title: '支付时间',
+                  dataIndex: 'paidAt',
+                  width: 180,
+                  render: (v: string | null) => (v ? stamp(v) : '—'),
+                },
+              ]}
+            />
+          </Card>
+
           <Card size="small" title="积分流水" extra={<Typography.Text type="secondary" style={{ fontSize: 12 }}>最近 30 条</Typography.Text>}>
             <Table<CreditLedgerItemDto>
               rowKey="id"
@@ -350,6 +433,36 @@ export default function BillingPage() {
           </Card>
         </div>
       </div>
+
+      <Modal
+        open={orderPlan !== null}
+        title={`订阅「${orderPlan?.name ?? ''}」`}
+        okText="模拟支付"
+        cancelText="取消"
+        confirmLoading={paying}
+        onOk={() => void payNow()}
+        onCancel={() => {
+          if (!paying) setOrderPlan(null);
+        }}
+      >
+        {orderPlan ? (
+          <Space direction="vertical" size={8} style={{ width: '100%' }}>
+            <Typography.Text>
+              金额：<strong>¥{(orderPlan.priceCents / 100).toFixed(2)}</strong> / 月
+            </Typography.Text>
+            <Typography.Text type="secondary">
+              本期发放 {orderPlan.monthlyBaseCredits + orderPlan.monthlyBonusCredits} 积分，
+              单次最多 {orderPlan.maxCreditsPerRun} 积分，每分钟 {orderPlan.rpm} 次运行。
+            </Typography.Text>
+            <Alert
+              type="info"
+              showIcon
+              message="当前为模拟支付"
+              description="点击「模拟支付」立即创建订单并完成支付，订阅与积分即时生效；后续接入微信/支付宝时替换为真实收银台。"
+            />
+          </Space>
+        ) : null}
+      </Modal>
     </AppShell>
   );
 }

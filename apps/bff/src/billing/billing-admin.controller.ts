@@ -2,11 +2,13 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Get,
   HttpCode,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
-import type { BillingSummaryDto } from '@ai-office/shared';
+import type { AdminPlanOrderDto, BillingSummaryDto } from '@ai-office/shared';
 import { BillingService } from './billing.service';
 import { JwtGuard } from '../auth/jwt.guard';
 import { AdminGuard } from '../auth/admin.guard';
@@ -21,6 +23,20 @@ const MAX_ADJUST_AMOUNT = 1_000_000_000;
 @UseGuards(JwtGuard, AdminGuard)
 export class BillingAdminController {
   constructor(private readonly billing: BillingService) {}
+
+  @Get('orders')
+  orders(
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+    @Query('status') status?: string,
+  ): Promise<{
+    items: AdminPlanOrderDto[];
+    total: number;
+    page: number;
+    pageSize: number;
+  }> {
+    return this.billing.adminOrders(page, pageSize, status);
+  }
 
   @Post('subscribe')
   @HttpCode(200)

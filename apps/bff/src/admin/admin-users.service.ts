@@ -50,6 +50,10 @@ function toItem(row: UserRow): AdminUserItemDto {
     tenantName: row.tenant.name,
     role: row.role as UserRole,
     status: row.status as UserStatus,
+    planId: null,
+    planName: null,
+    subscriptionStatus: null,
+    balance: 0,
     createdAt: row.createdAt.toISOString(),
   };
 }
@@ -87,7 +91,33 @@ export class AdminUsersService {
       this.prisma.user.count({ where }),
     ]);
 
-    return { items: rows.map(toItem), total, page, pageSize };
+    const tenantIds = [...new Set(rows.map((r) => r.tenantId))];
+    const [subs, credits] = await Promise.all([
+      this.prisma.subscription.findMany({
+        where: { tenantId: { in: tenantIds } },
+        include: { plan: { select: { id: true, name: true } } },
+      }),
+      this.prisma.tenantCredit.findMany({ where: { tenantId: { in: tenantIds } } }),
+    ]);
+    const subBy = new Map(subs.map((s) => [s.tenantId, s]));
+    const creditBy = new Map(credits.map((c) => [c.tenantId, c]));
+
+    return {
+      items: rows.map((row) => {
+        const sub = subBy.get(row.tenantId);
+        const credit = creditBy.get(row.tenantId);
+        return {
+          ...toItem(row),
+          planId: sub?.plan.id ?? null,
+          planName: sub?.plan.name ?? null,
+          subscriptionStatus: sub?.status ?? null,
+          balance: Math.max(0, (credit?.balance ?? 0) - (credit?.reserved ?? 0)),
+        };
+      }),
+      total,
+      page,
+      pageSize,
+    };
   }
 
   async detail(id: string, actor: AdminActor): Promise<AdminUserDetailDto> {

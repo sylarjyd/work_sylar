@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { ADMIN_NAV, ADMIN_NAV_ITEMS, selectedNavKey } from './admin-nav';
 
 describe('admin-nav', () => {
-  it('导航覆盖 7 个分组与 2 个一级页面，共 14 个不重复路由', () => {
+  it('导航覆盖 7 个分组与 2 个一级页面，共 15 个不重复路由', () => {
     expect(ADMIN_NAV).toHaveLength(9);
-    expect(ADMIN_NAV_ITEMS).toHaveLength(14);
+    expect(ADMIN_NAV_ITEMS).toHaveLength(15);
     const hrefs = ADMIN_NAV_ITEMS.map((item) => item.href);
     expect(new Set(hrefs).size).toBe(hrefs.length);
     expect(hrefs).toEqual([
@@ -13,6 +13,7 @@ describe('admin-nav', () => {
       '/users',
       '/tenants',
       '/plans',
+      '/orders',
       '/sessions',
       '/tasks',
       '/kb',

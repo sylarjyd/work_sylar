@@ -133,6 +133,29 @@ export default function AdminUsersPage() {
     },
     { title: '租户', dataIndex: 'tenantName' },
     {
+      title: '套餐',
+      dataIndex: 'planName',
+      width: 130,
+      render: (v: string | null, row: AdminUserItemDto) =>
+        v ? (
+          <Space size={4}>
+            <span>{v}</span>
+            {row.subscriptionStatus && row.subscriptionStatus !== 'active' ? (
+              <Tag color="warning">已过期</Tag>
+            ) : null}
+          </Space>
+        ) : (
+          <Typography.Text type="secondary">未订阅</Typography.Text>
+        ),
+    },
+    {
+      title: '积分余额',
+      dataIndex: 'balance',
+      width: 100,
+      align: 'right',
+      render: (v: number) => v.toLocaleString('zh-CN'),
+    },
+    {
       title: '角色',
       dataIndex: 'role',
       render: (v: AdminUserItemDto['role']) =>

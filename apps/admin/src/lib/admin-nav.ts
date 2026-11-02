@@ -25,6 +25,7 @@ export const ADMIN_NAV: AdminNavEntry[] = [
       { href: '/users', label: '用户管理' },
       { href: '/tenants', label: '会员管理' },
       { href: '/plans', label: '套餐目录' },
+      { href: '/orders', label: '订单管理' },
     ],
   },
   {

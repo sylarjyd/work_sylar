@@ -23,6 +23,7 @@ import type {
   AdminOverviewRange,
   AdminPlanDeleteInput,
   AdminPlanDto,
+  AdminPlanOrderDto,
   AdminPlanInput,
   AdminPlanPatch,
   AdminProviderModelsDto,
@@ -224,6 +225,25 @@ export function updateAdminPlan(id: string, patch: AdminPlanPatch): Promise<Admi
     method: 'PATCH',
     body: JSON.stringify(patch),
   });
+}
+
+export interface AdminOrderPage {
+  items: AdminPlanOrderDto[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+export function listAdminOrders(params: {
+  page?: number;
+  pageSize?: number;
+  status?: string;
+}): Promise<AdminOrderPage> {
+  const qs = new URLSearchParams();
+  if (params.page) qs.set('page', String(params.page));
+  if (params.pageSize) qs.set('pageSize', String(params.pageSize));
+  if (params.status) qs.set('status', params.status);
+  return request(`/api/billing/admin/orders?${qs.toString()}`);
 }
 
 export function deleteAdminPlan(id: string, body: AdminPlanDeleteInput): Promise<void> {

@@ -17,6 +17,7 @@ import type {
   KbDocDto,
   MessageDto,
   PlanDto,
+  PlanOrderDto,
   SessionChartDto,
   SessionMode,
   SessionPage,
@@ -567,6 +568,33 @@ export async function getBillingSummary(): Promise<BillingSummaryDto> {
   const res = await authFetch('/api/billing/summary');
   if (!res.ok) throw new Error(`billing_summary_failed_${res.status}`);
   return (await res.json()) as BillingSummaryDto;
+}
+
+export async function createPlanOrder(planId: string): Promise<PlanOrderDto> {
+  const res = await authFetch('/api/billing/orders', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ planId, provider: 'mock' }),
+  });
+  if (!res.ok) throw new Error(`order_create_failed_${res.status}`);
+  return (await res.json()) as PlanOrderDto;
+}
+
+export async function payPlanOrder(orderId: string): Promise<PlanOrderDto> {
+  const res = await authFetch(`/api/billing/orders/${encodeURIComponent(orderId)}/pay`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    // Fastify 对声明 JSON 但空 body 的请求直接 400，这里显式发空对象。
+    body: '{}',
+  });
+  if (!res.ok) throw new Error(`order_pay_failed_${res.status}`);
+  return (await res.json()) as PlanOrderDto;
+}
+
+export async function listPlanOrders(): Promise<PlanOrderDto[]> {
+  const res = await authFetch('/api/billing/orders');
+  if (!res.ok) throw new Error(`orders_failed_${res.status}`);
+  return (await res.json()) as PlanOrderDto[];
 }
 
 export async function listCreditLedger(limit = 20, cursor?: string): Promise<CreditLedgerPageDto> {

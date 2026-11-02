@@ -50,8 +50,14 @@ function makeService(seed: Row[]) {
         return row;
       },
     },
-    subscription: { findUnique: async () => null },
-    tenantCredit: { findUnique: async () => null },
+    subscription: {
+      findUnique: async () => null,
+      findMany: async () => [],
+    },
+    tenantCredit: {
+      findUnique: async () => null,
+      findMany: async () => [],
+    },
     session: { count: async () => 3 },
     adminAuditLog: {
       create: async ({ data }: { data: unknown }) => {

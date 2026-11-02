@@ -10,6 +10,7 @@ import {
 import { Prisma } from '@prisma/client';
 import type { Plan, Subscription } from '@prisma/client';
 import type {
+  AdminPlanOrderDto,
   BillingSummaryDto,
   CreditLedgerPageDto,
   PlanDto,
@@ -599,6 +600,53 @@ export class BillingService implements OnModuleDestroy {
       include: { plan: true },
     });
     return rows.map(toPlanOrderDto);
+  }
+
+  /** 运营端订单列表：跨租户，带用户邮箱与租户名。 */
+  async adminOrders(
+    pageRaw: unknown,
+    pageSizeRaw: unknown,
+    statusRaw: unknown,
+  ): Promise<{ items: AdminPlanOrderDto[]; total: number; page: number; pageSize: number }> {
+    const page = Math.max(1, Math.floor(Number(pageRaw) || 1));
+    const pageSize = Math.min(100, Math.max(1, Math.floor(Number(pageSizeRaw) || 20)));
+    const status = typeof statusRaw === 'string' && statusRaw !== '' ? statusRaw : undefined;
+    const where = status ? { status } : {};
+    const [rows, total] = await Promise.all([
+      this.prisma.planOrder.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+        include: { plan: true },
+      }),
+      this.prisma.planOrder.count({ where }),
+    ]);
+    const userIds = [...new Set(rows.map((r) => r.userId))];
+    const tenantIds = [...new Set(rows.map((r) => r.tenantId))];
+    const [users, tenants] = await Promise.all([
+      this.prisma.user.findMany({
+        where: { id: { in: userIds } },
+        select: { id: true, email: true },
+      }),
+      this.prisma.tenant.findMany({
+        where: { id: { in: tenantIds } },
+        select: { id: true, name: true },
+      }),
+    ]);
+    const emailById = new Map(users.map((u) => [u.id, u.email]));
+    const tenantById = new Map(tenants.map((t) => [t.id, t.name]));
+    return {
+      items: rows.map((row) => ({
+        ...toPlanOrderDto(row),
+        tenantId: row.tenantId,
+        tenantName: tenantById.get(row.tenantId) ?? row.tenantId,
+        userEmail: emailById.get(row.userId) ?? row.userId,
+      })),
+      total,
+      page,
+      pageSize,
+    };
   }
 
   async adjust(

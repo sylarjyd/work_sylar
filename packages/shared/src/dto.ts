@@ -987,6 +987,11 @@ export interface AdminUserItemDto {
   tenantName: string;
   role: UserRole;
   status: UserStatus;
+  /** 套餐与积分概览：运营端用户列表直接展示。 */
+  planId: string | null;
+  planName: string | null;
+  subscriptionStatus: string | null;
+  balance: number;
   createdAt: string;
 }
 
