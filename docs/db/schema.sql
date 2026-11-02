@@ -1,7 +1,7 @@
 -- =============================================================================
 -- AI 办公智能体 · 数据库 Schema（PostgreSQL 16）
 -- -----------------------------------------------------------------------------
--- 本文件是 apps/bff/prisma/schema.prisma 的等价 DDL（30 张表），用于：
+-- 本文件是 apps/bff/prisma/schema.prisma 的等价 DDL（32 张表），用于：
 --   1) 首次建库的基线（无 Prisma 迁移历史时）；
 --   2) 审阅数据模型 / 供 DBA 参考。
 --
@@ -752,6 +752,25 @@ ALTER TABLE "ModelPrice" ADD CONSTRAINT "ModelPrice_providerId_fkey" FOREIGN KEY
 CREATE INDEX "kb_chunk_vec_idx" ON "KbChunk" USING hnsw ("vector" vector_cosine_ops);
 CREATE INDEX "user_memory_vec_idx" ON "UserMemory" USING hnsw ("vector" vector_cosine_ops);
 
+-- 套餐订单（PlanOrder）：用户自服务订阅的支付单
+CREATE TABLE "PlanOrder" (
+    "id" TEXT NOT NULL,
+    "tenantId" TEXT NOT NULL,
+    "userId" TEXT NOT NULL,
+    "planId" TEXT NOT NULL,
+    "amountCents" INTEGER NOT NULL,
+    "status" TEXT NOT NULL DEFAULT 'pending',
+    "provider" TEXT NOT NULL DEFAULT 'mock',
+    "providerTradeNo" TEXT,
+    "periodStart" TIMESTAMP(3),
+    "periodEnd" TIMESTAMP(3),
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "paidAt" TIMESTAMP(3),
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "PlanOrder_pkey" PRIMARY KEY ("id")
+);
+
 -- -----------------------------------------------------------------------------
 -- 表与字段中文注释（与 apps/bff/prisma/comments.sql 一致，由 db:comments 应用）
 -- -----------------------------------------------------------------------------
@@ -1075,3 +1094,18 @@ COMMENT ON COLUMN "Skill"."sharedAt" IS '个人技能共享为公共的时间；
 COMMENT ON COLUMN "Skill"."enabled" IS '是否启用；运营端可下架公共技能';
 COMMENT ON COLUMN "Skill"."createdAt" IS '创建时间';
 COMMENT ON COLUMN "Skill"."updatedAt" IS '更新时间';
+
+COMMENT ON TABLE "PlanOrder" IS '套餐订单表：用户自服务订阅的支付单与状态';
+COMMENT ON COLUMN "PlanOrder"."id" IS '订单 ID';
+COMMENT ON COLUMN "PlanOrder"."tenantId" IS '下单租户 ID';
+COMMENT ON COLUMN "PlanOrder"."userId" IS '下单用户 ID';
+COMMENT ON COLUMN "PlanOrder"."planId" IS '购买的套餐 ID';
+COMMENT ON COLUMN "PlanOrder"."amountCents" IS '下单时的套餐价格快照（分）';
+COMMENT ON COLUMN "PlanOrder"."status" IS '订单状态：pending / paid / canceled / refunded';
+COMMENT ON COLUMN "PlanOrder"."provider" IS '支付渠道：mock / wechat / alipay';
+COMMENT ON COLUMN "PlanOrder"."providerTradeNo" IS '渠道交易号（回调或查单得到）';
+COMMENT ON COLUMN "PlanOrder"."periodStart" IS '支付成功后的订阅周期开始（UTC）';
+COMMENT ON COLUMN "PlanOrder"."periodEnd" IS '支付成功后的订阅周期结束（UTC）';
+COMMENT ON COLUMN "PlanOrder"."createdAt" IS '创建时间';
+COMMENT ON COLUMN "PlanOrder"."paidAt" IS '支付完成时间';
+COMMENT ON COLUMN "PlanOrder"."updatedAt" IS '更新时间';

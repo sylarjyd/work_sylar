@@ -324,6 +324,36 @@ model Plan {
   active              Boolean        @default(true)
   createdAt           DateTime       @default(now())
   subscriptions       Subscription[]
+  orders              PlanOrder[]
+}
+
+/// 套餐订单：用户自服务订阅的支付凭证与状态机。
+model PlanOrder {
+  id              String    @id @default(uuid())
+  /// 下单租户；跨租户查询必须带此字段。
+  tenantId        String
+  /// 下单用户。
+  userId          String
+  planId          String
+  /// 下单时的套餐价格快照（分），避免后续调价影响历史订单。
+  amountCents     Int
+  /// 订单状态：pending / paid / canceled / refunded。
+  status          String    @default("pending")
+  /// 支付渠道：mock / wechat / alipay。
+  provider        String    @default("mock")
+  /// 渠道交易号（回调或查单得到）。
+  providerTradeNo String?
+  /// 支付成功后的订阅周期快照。
+  periodStart     DateTime?
+  periodEnd       DateTime?
+  createdAt       DateTime  @default(now())
+  paidAt          DateTime?
+  updatedAt       DateTime  @updatedAt
+  plan            Plan      @relation(fields: [planId], references: [id])
+
+  @@index([tenantId, createdAt])
+  @@index([status, createdAt])
+  @@map("PlanOrder")
 }
 
 model Subscription {

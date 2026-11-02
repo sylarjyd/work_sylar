@@ -205,6 +205,21 @@ COMMENT ON COLUMN "Subscription"."periodEnd" IS '当前周期结束（UTC），�
 COMMENT ON COLUMN "Subscription"."createdAt" IS '创建时间';
 COMMENT ON COLUMN "Subscription"."updatedAt" IS '更新时间';
 
+COMMENT ON TABLE "PlanOrder" IS '套餐订单表：用户自服务订阅的支付单与状态';
+COMMENT ON COLUMN "PlanOrder"."id" IS '订单 ID';
+COMMENT ON COLUMN "PlanOrder"."tenantId" IS '下单租户 ID';
+COMMENT ON COLUMN "PlanOrder"."userId" IS '下单用户 ID';
+COMMENT ON COLUMN "PlanOrder"."planId" IS '购买的套餐 ID';
+COMMENT ON COLUMN "PlanOrder"."amountCents" IS '下单时的套餐价格快照（分）';
+COMMENT ON COLUMN "PlanOrder"."status" IS '订单状态：pending / paid / canceled / refunded';
+COMMENT ON COLUMN "PlanOrder"."provider" IS '支付渠道：mock / wechat / alipay';
+COMMENT ON COLUMN "PlanOrder"."providerTradeNo" IS '渠道交易号（回调或查单得到）';
+COMMENT ON COLUMN "PlanOrder"."periodStart" IS '支付成功后的订阅周期开始（UTC）';
+COMMENT ON COLUMN "PlanOrder"."periodEnd" IS '支付成功后的订阅周期结束（UTC）';
+COMMENT ON COLUMN "PlanOrder"."createdAt" IS '创建时间';
+COMMENT ON COLUMN "PlanOrder"."paidAt" IS '支付完成时间';
+COMMENT ON COLUMN "PlanOrder"."updatedAt" IS '更新时间';
+
 COMMENT ON TABLE "CreditLot" IS '积分批次表：每批积分的来源、余额与到期时间';
 COMMENT ON COLUMN "CreditLot"."id" IS '批次 ID';
 COMMENT ON COLUMN "CreditLot"."tenantId" IS '所属租户 ID';
