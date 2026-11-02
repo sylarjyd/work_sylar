@@ -277,6 +277,7 @@ docs/
 | 文档 | 内容 |
 | --- | --- |
 | `docs/develop/04-dev-guide.md` | 开发指南：目录、数据模型、关键链路 |
+| `docs/develop/06-progress.md` | 开发进度：完成度、验证结果、已知问题与下一步 |
 | `docs/db/schema.sql` | 数据库基线（含中文注释） |
 | `docs/deploy/06-deployment.md` | 容器化部署与运营端 |
 | `docs/superpowers/specs/` | 设计规格 |
