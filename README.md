@@ -257,6 +257,8 @@ apps/
   bff/             NestJS(Fastify)：认证、会话、任务、附件成果、知识库、连接器、计费、管理端
   web/             Next.js 客户工作台（3000）
   admin/           Next.js 运营平台（3001，独立部署）
+  desktop/         Electron 桌面壳（Win/macOS/Linux 安装包）
+  mobile/          Capacitor 移动壳（Android APK / iOS）
 packages/
   shared/          协议类型与校验（DTO、SSE 编解码）
   web-core/        两端共用的组件与样式（图表、文件预览、技能编辑器、专家助手表单等）

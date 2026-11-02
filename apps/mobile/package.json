@@ -1,0 +1,21 @@
+{
+  "name": "@ai-office/mobile",
+  "private": true,
+  "version": "0.1.0",
+  "description": "WorkSylar 移动客户端（Capacitor 套壳 Web 工作台）",
+  "scripts": {
+    "add:android": "cap add android",
+    "add:ios": "cap add ios",
+    "sync": "cap sync",
+    "open:android": "cap open android",
+    "open:ios": "cap open ios"
+  },
+  "dependencies": {
+    "@capacitor/android": "^7.0.0",
+    "@capacitor/core": "^7.0.0",
+    "@capacitor/ios": "^7.0.0"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^7.0.0"
+  }
+}

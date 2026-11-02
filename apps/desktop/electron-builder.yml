@@ -1,0 +1,46 @@
+appId: com.worksylar.app
+productName: WorkSylar
+copyright: Copyright © 2026 WorkSylar
+
+directories:
+  output: release
+  buildResources: build
+
+files:
+  - main.cjs
+  - package.json
+
+asar: true
+npmRebuild: false
+
+win:
+  target:
+    - target: nsis
+      arch: [x64, arm64]
+  artifactName: WorkSylar-${version}-win-${arch}.${ext}
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  shortcutName: WorkSylar
+
+mac:
+  target:
+    - target: dmg
+      arch: [x64, arm64]
+  category: public.app-category.productivity
+  artifactName: WorkSylar-${version}-mac-${arch}.${ext}
+  # 正式分发需要 Apple Developer ID 证书与公证；CI 中通过 CSC_LINK / CSC_KEY_PASSWORD 注入。
+  hardenedRuntime: true
+  gatekeeperAssess: false
+
+linux:
+  target:
+    - AppImage
+    - deb
+  category: Office
+  artifactName: WorkSylar-${version}-linux-${arch}.${ext}
+
+publish: null
