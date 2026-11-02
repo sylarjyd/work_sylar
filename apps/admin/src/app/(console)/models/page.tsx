@@ -494,18 +494,34 @@ export default function AdminModelsPage() {
     {
       title: '模型',
       dataIndex: 'model',
+      width: 220,
+      ellipsis: true,
       render: (_: unknown, m) => (
-        <div>
-          <Typography.Text strong>{m.displayName}</Typography.Text>
-          <div style={{ fontSize: 12, color: '#8a958f' }}>{m.model}</div>
+        <div style={{ minWidth: 0 }}>
+          <Typography.Text strong ellipsis={{ tooltip: m.displayName }}>
+            {m.displayName}
+          </Typography.Text>
+          <Typography.Text
+            type="secondary"
+            style={{ display: 'block', fontSize: 12 }}
+            ellipsis={{ tooltip: m.model }}
+          >
+            {m.model}
+          </Typography.Text>
         </div>
       ),
     },
-    { title: '厂商', dataIndex: 'providerName', width: 140, render: (v: string | null) => v ?? '未绑定' },
+    {
+      title: '厂商',
+      dataIndex: 'providerName',
+      width: 120,
+      ellipsis: true,
+      render: (v: string | null) => v ?? '未绑定',
+    },
     {
       title: '分类',
       dataIndex: 'capabilities',
-      width: 200,
+      width: 170,
       render: (v: ModelCapability[]) => (
         <Space size={4} wrap>
           {v.map((x) => (
@@ -519,13 +535,18 @@ export default function AdminModelsPage() {
     {
       title: '模态',
       dataIndex: 'modalities',
-      width: 140,
-      render: (v: ModelModality[]) => v.map((x) => MODEL_MODALITY_LABELS[x]).join('、'),
+      width: 110,
+      ellipsis: true,
+      render: (v: ModelModality[]) => {
+        const text = v.map((x) => MODEL_MODALITY_LABELS[x]).join('、');
+        return <span title={text}>{text}</span>;
+      },
     },
     {
       title: '启用',
       dataIndex: 'enabled',
-      width: 80,
+      width: 70,
+      align: 'center',
       render: (_: unknown, m) => (
         <Switch
           size="small"
@@ -536,13 +557,13 @@ export default function AdminModelsPage() {
         />
       ),
     },
-    { title: '排序', dataIndex: 'sortOrder', align: 'right', width: 80 },
-    { title: '输入', dataIndex: 'inputMilliCreditsPer1k', align: 'right', width: 90 },
-    { title: '输出', dataIndex: 'outputMilliCreditsPer1k', align: 'right', width: 90 },
+    { title: '排序', dataIndex: 'sortOrder', align: 'right', width: 64 },
+    { title: '输入', dataIndex: 'inputMilliCreditsPer1k', align: 'right', width: 84 },
+    { title: '输出', dataIndex: 'outputMilliCreditsPer1k', align: 'right', width: 84 },
     {
       title: '默认',
       key: 'default',
-      width: 130,
+      width: 110,
       render: (_: unknown, m) =>
         m.isDefault ? (
           <Tag color="gold">★ 默认</Tag>
@@ -559,13 +580,13 @@ export default function AdminModelsPage() {
     {
       title: '更新时间',
       dataIndex: 'updatedAt',
-      width: 180,
+      width: 150,
       render: (v: string) => formatTime(v),
     },
     {
       title: '操作',
       key: 'actions',
-      width: 170,
+      width: 160,
       render: (_: unknown, m) => (
         <Space size={4}>
           <Button
@@ -788,7 +809,7 @@ export default function AdminModelsPage() {
           loading={loading}
           columns={columns}
           dataSource={pagedModels}
-          scroll={{ x: 1500 }}
+          scroll={{ x: 1360 }}
           pagination={adminPagination({
             page: currentPage,
             pageSize,
