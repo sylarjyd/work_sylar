@@ -123,6 +123,13 @@ export default function AdminModelsPage() {
     result?: AdminModelTestResultDto;
     error?: string;
   } | null>(null);
+  // 批量改价：作用于当前筛选结果，可只补 0 价格模型。
+  const [priceForm, setPriceForm] = useState<{
+    input: number | null;
+    output: number | null;
+    onlyUnpriced: boolean;
+  } | null>(null);
+  const [pricingBusy, setPricingBusy] = useState(false);
   const [capFilter, setCapFilter] = useState<'all' | ModelCapability>('all');
   // 厂商筛选与能力分类叠加生效；'__none__' 表示未绑定厂商的环境变量模型。
   const [providerFilter, setProviderFilter] = useState('all');
@@ -478,6 +485,44 @@ export default function AdminModelsPage() {
     }
   }
 
+  async function applyBulkPrices() {
+    if (!priceForm || pricingBusy) return;
+    const { input, output, onlyUnpriced } = priceForm;
+    if (input === null && output === null) {
+      void message.warning('至少填写输入价或输出价');
+      return;
+    }
+    const targets = models.filter(
+      (m) => !onlyUnpriced || (m.inputMilliCreditsPer1k === 0 && m.outputMilliCreditsPer1k === 0),
+    );
+    if (targets.length === 0) {
+      void message.warning('没有需要更新的模型');
+      return;
+    }
+    setPricingBusy(true);
+    let ok = 0;
+    let fail = 0;
+    for (const m of targets) {
+      try {
+        await updateAdminModel({
+          model: m.model,
+          prices: {
+            inputMilliCreditsPer1k: input ?? m.inputMilliCreditsPer1k,
+            outputMilliCreditsPer1k: output ?? m.outputMilliCreditsPer1k,
+          },
+        });
+        ok += 1;
+      } catch {
+        fail += 1;
+      }
+    }
+    setPricingBusy(false);
+    setPriceForm(null);
+    await refreshAfterWrite();
+    if (fail > 0) void message.warning(`已更新 ${ok} 个模型，${fail} 个失败`);
+    else void message.success(`已更新 ${ok} 个模型价格`);
+  }
+
   const providers = data?.providers ?? [];
   const allModels = data?.models ?? [];
   const hasUnboundModels = allModels.some((m) => !m.providerId);
@@ -485,6 +530,11 @@ export default function AdminModelsPage() {
     providerId: providerFilter,
     capability: capFilter,
   });
+  const bulkPriceTargets = priceForm
+    ? models.filter(
+        (m) => !priceForm.onlyUnpriced || (m.inputMilliCreditsPer1k === 0 && m.outputMilliCreditsPer1k === 0),
+      )
+    : [];
   // 筛选后总数变小可能让当前页越界：渲染时夹取，不额外触发一次 setState。
   const maxPage = Math.max(1, Math.ceil(models.length / pageSize));
   const currentPage = Math.min(page, maxPage);
@@ -795,11 +845,22 @@ export default function AdminModelsPage() {
           <Card
             title="模型列表"
             extra={
-              <Typography.Text type="secondary">
-                {models.length === allModels.length
-                  ? `共 ${allModels.length} 个`
-                  : `筛选出 ${models.length} / ${allModels.length} 个`}
-              </Typography.Text>
+              <Space size={10}>
+                <Typography.Text type="secondary">
+                  {models.length === allModels.length
+                    ? `共 ${allModels.length} 个`
+                    : `筛选出 ${models.length} / ${allModels.length} 个`}
+                </Typography.Text>
+                <Button
+                  size="small"
+                  disabled={models.length === 0}
+                  onClick={() =>
+                    setPriceForm({ input: null, output: null, onlyUnpriced: true })
+                  }
+                >
+                  批量设置价格
+                </Button>
+              </Space>
             }
             style={{ height: '100%' }}
           >
@@ -1129,6 +1190,78 @@ export default function AdminModelsPage() {
               </Typography.Text>
             </Space>
           )
+        ) : null}
+      </Modal>
+
+      <Modal
+        open={priceForm !== null}
+        title="批量设置价格"
+        okText={pricingBusy ? '写入中…' : `应用到 ${bulkPriceTargets.length} 个模型`}
+        okButtonProps={{
+          loading: pricingBusy,
+          disabled:
+            bulkPriceTargets.length === 0 ||
+            (priceForm?.input == null && priceForm?.output == null),
+        }}
+        cancelText="取消"
+        cancelButtonProps={{ disabled: pricingBusy }}
+        onOk={() => void applyBulkPrices()}
+        onCancel={() => {
+          if (!pricingBusy) setPriceForm(null);
+        }}
+        width={520}
+      >
+        {priceForm ? (
+          <Space direction="vertical" size={12} style={{ width: '100%' }}>
+            <Alert
+              type="info"
+              showIcon
+              message={`作用范围：当前筛选结果 ${models.length} 个模型`}
+              description="单价为「毫积分 / 1K tokens」，填 0 表示免费。留空的字段保留原值。"
+            />
+            <div>
+              <Typography.Text>输入（毫积分/1K）</Typography.Text>
+              <InputNumber
+                style={{ width: '100%', marginTop: 4 }}
+                min={0}
+                max={MAX_MILLI_CREDITS}
+                precision={0}
+                placeholder="保持原值"
+                value={priceForm.input}
+                disabled={pricingBusy}
+                onChange={(v) => setPriceForm({ ...priceForm, input: v })}
+              />
+            </div>
+            <div>
+              <Typography.Text>输出（毫积分/1K）</Typography.Text>
+              <InputNumber
+                style={{ width: '100%', marginTop: 4 }}
+                min={0}
+                max={MAX_MILLI_CREDITS}
+                precision={0}
+                placeholder="保持原值"
+                value={priceForm.output}
+                disabled={pricingBusy}
+                onChange={(v) => setPriceForm({ ...priceForm, output: v })}
+              />
+            </div>
+            <Checkbox
+              checked={priceForm.onlyUnpriced}
+              disabled={pricingBusy}
+              onChange={(e) => setPriceForm({ ...priceForm, onlyUnpriced: e.target.checked })}
+            >
+              只更新输入、输出都为 0 的模型（首次批量填充时建议勾选）
+            </Checkbox>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              将更新 {bulkPriceTargets.length} / {models.length} 个模型
+              {bulkPriceTargets.length > 0
+                ? `：${bulkPriceTargets
+                    .slice(0, 5)
+                    .map((m) => m.model)
+                    .join('、')}${bulkPriceTargets.length > 5 ? ' 等' : ''}`
+                : ''}
+            </Typography.Text>
+          </Space>
         ) : null}
       </Modal>
     </Space>
