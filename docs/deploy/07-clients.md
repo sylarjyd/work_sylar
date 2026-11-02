@@ -27,6 +27,12 @@ pnpm --filter @ai-office/desktop dist     # 当前系统安装包
 
 产物：`apps/desktop/release/`
 
+**当前状态（Windows）**：已产出 `WorkSylar-0.1.0-win-x64.exe`（portable，74MB，
+SHA256 `4D00CECFFB5B019214148A78362A695D39E957F6C9EA08B2F7C5000CE31CCFF8`）。
+本机构建 NSIS 安装包时，electron-builder 在最后一步执行未签名安装器被系统安全策略
+拦截；已保留 NSIS 配置，配置代码签名或在 CI 上构建即可产出安装包。
+macOS/Linux 与移动端本次未构建。
+
 - Windows：NSIS 安装包（x64 + arm64）
 - macOS：DMG（Intel + Apple Silicon）
 - Linux：AppImage + deb

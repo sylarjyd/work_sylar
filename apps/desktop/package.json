@@ -3,12 +3,14 @@
   "private": true,
   "version": "0.1.0",
   "description": "WorkSylar 桌面客户端（Electron 套壳 Web 工作台）",
+  "author": "WorkSylar",
   "main": "main.cjs",
   "scripts": {
     "dev": "cross-env WORKBUDDY_URL=http://localhost:3000 electron .",
     "start": "electron .",
     "dist": "electron-builder --publish never",
     "dist:win": "electron-builder --win --publish never",
+    "dist:win:portable": "electron-builder --win portable --x64 --publish never",
     "dist:mac": "electron-builder --mac --publish never",
     "dist:linux": "electron-builder --linux --publish never"
   },

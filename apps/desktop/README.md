@@ -17,12 +17,28 @@ $env:WORKBUDDY_URL="https://app.worksylar.com"; pnpm --filter @ai-office/desktop
 ## 打包
 
 ```bash
-pnpm --filter @ai-office/desktop dist:win    # Windows NSIS（x64 + arm64）
-pnpm --filter @ai-office/desktop dist:mac    # macOS DMG（需在 macOS 上执行）
-pnpm --filter @ai-office/desktop dist:linux  # AppImage + deb
+pnpm --filter @ai-office/desktop dist:win:portable  # Windows 单文件（已验证可产出）
+pnpm --filter @ai-office/desktop dist:win           # Windows NSIS 安装包
+pnpm --filter @ai-office/desktop dist:mac           # macOS DMG（需在 macOS 上执行）
+pnpm --filter @ai-office/desktop dist:linux         # AppImage + deb
 ```
 
 产物在 `apps/desktop/release/`。
+
+**Windows 已验证产物**：`WorkSylar-0.1.0-win-x64.exe`（portable，约 74MB）。
+当前构建机上 NSIS 安装包在最后一步被系统安全策略拦截（electron-builder 无法执行
+未签名的安装器），因此先用 portable 单文件分发；签名后或换 CI 构建即可产出 NSIS。
+
+## 运行地址
+
+默认 `http://localhost:3000`（当前阶段连本地工作台）。安装后要连其他地址：
+
+```powershell
+$env:WORKBUDDY_URL="https://app.worksylar.com"
+& "$env:LOCALAPPDATA\Programs\WorkSylar\WorkSylar.exe"
+```
+
+或直接修改 `main.cjs` 的默认值后重新打包。
 
 ## 说明
 

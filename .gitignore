@@ -21,3 +21,7 @@ dist/
 # Flyfish File Viewer è¿è¡Œæ—¶èµ„æºï¼ˆçº¦ 190MB/ç«¯ï¼‰ï¼Œç”± assets:viewer ç”Ÿæˆï¼Œä¸å…¥åº“ã€‚
 /apps/web/public/file-viewer/
 /apps/admin/public/file-viewer/
+
+# ×ÀÃæ¶Ë¹¹½¨²úÎï
+apps/desktop/release/
+.tmp-electron*

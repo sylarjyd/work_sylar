@@ -1,8 +1,8 @@
-const { app, BrowserWindow, Menu, shell, session } = require('electron');
+const { app, BrowserWindow, Menu, shell, session, dialog } = require('electron');
 const path = require('node:path');
 
-// 默认加载线上工作台；本地联调用 WORKBUDDY_URL 覆盖。
-const APP_URL = process.env.WORKBUDDY_URL || 'https://app.worksylar.com';
+// 默认连本地工作台，方便当前阶段直接使用；线上通过 WORKBUDDY_URL 覆盖。
+const APP_URL = process.env.WORKBUDDY_URL || 'http://localhost:3000';
 const APP_ORIGIN = (() => {
   try {
     return new URL(APP_URL).origin;
@@ -51,6 +51,22 @@ function createWindow() {
 
   mainWindow.on('closed', () => {
     mainWindow = null;
+  });
+
+  // 页面加载失败（服务未启动/断网）时给出明确提示，而不是一片空白。
+  mainWindow.webContents.on('did-fail-load', (_event, code, description, url, isMainFrame) => {
+    if (!isMainFrame || code === -3) return;
+    const retry = dialog.showMessageBoxSync(mainWindow, {
+      type: 'error',
+      title: '无法打开 WorkSylar',
+      message: `加载 ${url} 失败`,
+      detail: `${description}（${code}）\n\n请确认工作台已启动，或设置环境变量 WORKBUDDY_URL 指向正确地址。`,
+      buttons: ['重试', '退出'],
+      defaultId: 0,
+      cancelId: 1,
+    });
+    if (retry === 0) mainWindow.loadURL(APP_URL);
+    else app.quit();
   });
 }
 
