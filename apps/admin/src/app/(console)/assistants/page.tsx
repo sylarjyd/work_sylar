@@ -376,7 +376,7 @@ export default function AdminAssistantsPage() {
       <Modal
         open={formOpen}
         title={editingId ? '编辑专家助手' : '新建专家助手'}
-        width={900}
+        width={960}
         footer={
           <Space>
             <Button disabled={saving} onClick={() => setFormOpen(false)}>
@@ -387,11 +387,10 @@ export default function AdminAssistantsPage() {
             </Button>
           </Space>
         }
-        style={{ top: 32 }}
+        style={{ top: 24 }}
         onCancel={() => {
           if (!saving) setFormOpen(false);
         }}
-        styles={{ body: { maxHeight: '72vh', overflowY: 'auto', paddingRight: 8 } }}
       >
         <AssistantEditor
           value={form}

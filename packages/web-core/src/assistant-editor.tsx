@@ -66,8 +66,9 @@ function FieldLabel({ text, hint }: { text: string; hint?: string }) {
 }
 
 /**
- * 专家助手表单：运营端与客户端共用同一套字段顺序与样式，避免两端各写一份对不上。
- * 运营端的公共助手不涉及租户私有资源（默认模型/知识库/连接器），按开关隐藏。
+ * 专家助手表单：运营端与客户端共用同一套字段与布局。
+ * 采用左右两栏（左：身份与范围，右：能力与提示词），整体高度可控，
+ * 常见笔记本视口下无需内部滚动即可完整展示。
  */
 export function AssistantEditor({
   value,
@@ -85,189 +86,182 @@ export function AssistantEditor({
   const patch = (next: Partial<AssistantEditorValue>) => onChange({ ...value, ...next });
 
   return (
-    <Row gutter={[16, 0]}>
-      <Col xs={24} md={showModel ? 12 : 24}>
-        <div className="admin-field">
-          <Typography.Text>名称</Typography.Text>
-          <Input
-            value={value.name}
-            maxLength={40}
-            disabled={disabled}
-            placeholder="如：合同审阅专家"
-            onChange={(e) => patch({ name: e.target.value })}
-          />
-        </div>
-      </Col>
-      {showModel ? (
-        <Col xs={24} md={12}>
+    <Row gutter={[24, 12]}>
+      <Col xs={24} lg={12}>
+        <Space direction="vertical" size={10} style={{ width: '100%' }}>
           <div className="admin-field">
-            <Typography.Text>默认模型</Typography.Text>
-            <Select
-              style={{ width: '100%' }}
-              value={value.model}
+            <Typography.Text>名称</Typography.Text>
+            <Input
+              value={value.name}
+              maxLength={40}
               disabled={disabled}
-              onChange={(model: string) => patch({ model })}
-              options={[{ value: '', label: '系统默认模型' }, ...modelOptions]}
+              placeholder="如：合同审阅专家"
+              onChange={(e) => patch({ name: e.target.value })}
             />
           </div>
-        </Col>
-      ) : null}
 
-      <Col span={24}>
-        <div className="admin-field">
-          <Typography.Text>简介</Typography.Text>
-          <Input.TextArea
-            rows={3}
-            value={value.description}
-            maxLength={200}
-            showCount
-            disabled={disabled}
-            placeholder="一句话说明这个专家助手擅长什么"
-            onChange={(e) => patch({ description: e.target.value })}
-          />
-        </div>
-      </Col>
-
-      <Col xs={24} md={showKb ? 12 : 24}>
-        <div className="admin-field">
-          <FieldLabel
-            text="权限模式"
-            hint={ASSISTANT_PERMISSION_MODE_HINTS[value.permissionMode]}
-          />
-          <Select
-            style={{ width: '100%' }}
-            value={value.permissionMode}
-            disabled={disabled}
-            onChange={(permissionMode: AssistantPermissionMode) => patch({ permissionMode })}
-            options={ASSISTANT_PERMISSION_MODES.map((mode) => ({
-              value: mode,
-              label: ASSISTANT_PERMISSION_MODE_LABELS[mode],
-            }))}
-          />
-        </div>
-      </Col>
-      {showKb ? (
-        <Col xs={24} md={12}>
-          <div className="admin-field">
-            <Typography.Text>知识库范围</Typography.Text>
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              {lockTenantResources
-                ? '公共助手不绑定知识库'
-                : value.kbIds.length === 0
-                  ? '未选择时检索全部知识库'
-                  : `仅检索已选的 ${value.kbIds.length} 个知识库`}
-            </Typography.Text>
-            <Select
-              mode="multiple"
-              style={{ width: '100%' }}
-              allowClear
-              disabled={disabled || lockTenantResources || kbOptions.length === 0}
-              value={value.kbIds}
-              placeholder={
-                lockTenantResources
-                  ? '公共助手不绑定知识库'
-                  : kbOptions.length === 0
-                    ? '知识库为空，可先到「知识库」页创建'
-                    : '选择要检索的知识库'
-              }
-              onChange={(kbIds: string[]) => patch({ kbIds })}
-              options={kbOptions}
-              optionFilterProp="label"
-            />
-          </div>
-        </Col>
-      ) : null}
-
-      <Col span={24}>
-        <div className="admin-field">
-          <FieldLabel
-            text="工具"
-            hint="勾选后助手才能调用对应内置能力；未勾选的工具本会话不可用。技能市场里的技能不占工具名额。"
-          />
-          <div className="assistant-tool-grid">
-            {ASSISTANT_SKILLS.map((tool) => (
-              <Checkbox
-                key={tool.key}
-                checked={value.skills.includes(tool.key)}
+          {showModel ? (
+            <div className="admin-field">
+              <Typography.Text>默认模型</Typography.Text>
+              <Select
+                style={{ width: '100%' }}
+                value={value.model}
                 disabled={disabled}
-                onChange={(e) =>
-                  patch({
-                    skills: e.target.checked
-                      ? [...value.skills, tool.key]
-                      : value.skills.filter((x) => x !== tool.key),
-                  })
-                }
-              >
-                <span className="assistant-tool-name">{tool.name}</span>
-                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                  {tool.description}
-                </Typography.Text>
-              </Checkbox>
-            ))}
-          </div>
-        </div>
-      </Col>
+                onChange={(model: string) => patch({ model })}
+                options={[{ value: '', label: '系统默认模型' }, ...modelOptions]}
+              />
+            </div>
+          ) : null}
 
-      <Col xs={24} md={showConnectors ? 12 : 24}>
-        <div className="admin-field">
-          <FieldLabel
-            text="绑定技能"
-            hint="技能内容会拼进系统提示词；不改变工具权限，工具仍由上面的「工具」开关决定。"
-          />
-          <Select
-            mode="multiple"
-            style={{ width: '100%' }}
-            allowClear
-            disabled={disabled || skillOptions.length === 0}
-            value={value.skillIds}
-            placeholder={skillOptions.length === 0 ? '技能市场暂无可绑定技能' : '选择要绑定的技能'}
-            onChange={(skillIds: string[]) => patch({ skillIds })}
-            options={skillOptions}
-            optionFilterProp="label"
-          />
-        </div>
-      </Col>
-      {showConnectors ? (
-        <Col xs={24} md={12}>
+          <div className="admin-field">
+            <Typography.Text>简介</Typography.Text>
+            <Input.TextArea
+              rows={2}
+              value={value.description}
+              maxLength={200}
+              showCount
+              disabled={disabled}
+              placeholder="一句话说明这个专家助手擅长什么"
+              onChange={(e) => patch({ description: e.target.value })}
+            />
+          </div>
+
           <div className="admin-field">
             <FieldLabel
-              text="连接器"
-              hint="只启用所选 MCP 连接器；不选时沿用会话/账号下已启用的连接器。"
+              text="权限模式"
+              hint={ASSISTANT_PERMISSION_MODE_HINTS[value.permissionMode]}
+            />
+            <Select
+              style={{ width: '100%' }}
+              value={value.permissionMode}
+              disabled={disabled}
+              onChange={(permissionMode: AssistantPermissionMode) => patch({ permissionMode })}
+              options={ASSISTANT_PERMISSION_MODES.map((mode) => ({
+                value: mode,
+                label: ASSISTANT_PERMISSION_MODE_LABELS[mode],
+              }))}
+            />
+          </div>
+
+          {showKb ? (
+            <div className="admin-field">
+              <Typography.Text>知识库范围</Typography.Text>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                {lockTenantResources
+                  ? '公共助手不绑定知识库'
+                  : value.kbIds.length === 0
+                    ? '未选择时检索全部知识库'
+                    : `仅检索已选的 ${value.kbIds.length} 个知识库`}
+              </Typography.Text>
+              <Select
+                mode="multiple"
+                style={{ width: '100%' }}
+                allowClear
+                disabled={disabled || lockTenantResources || kbOptions.length === 0}
+                value={value.kbIds}
+                placeholder={
+                  lockTenantResources
+                    ? '公共助手不绑定知识库'
+                    : kbOptions.length === 0
+                      ? '知识库为空，可先到「知识库」页创建'
+                      : '选择要检索的知识库'
+                }
+                onChange={(kbIds: string[]) => patch({ kbIds })}
+                options={kbOptions}
+                optionFilterProp="label"
+              />
+            </div>
+          ) : null}
+        </Space>
+      </Col>
+
+      <Col xs={24} lg={12}>
+        <Space direction="vertical" size={10} style={{ width: '100%' }}>
+          <div className="admin-field">
+            <FieldLabel
+              text="工具"
+              hint="勾选后助手才能调用对应内置能力；未勾选的工具本会话不可用。技能市场里的技能不占工具名额。"
+            />
+            <div className="assistant-tool-grid">
+              {ASSISTANT_SKILLS.map((tool) => (
+                <Checkbox
+                  key={tool.key}
+                  checked={value.skills.includes(tool.key)}
+                  disabled={disabled}
+                  onChange={(e) =>
+                    patch({
+                      skills: e.target.checked
+                        ? [...value.skills, tool.key]
+                        : value.skills.filter((x) => x !== tool.key),
+                    })
+                  }
+                >
+                  <span className="assistant-tool-name">{tool.name}</span>
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    {tool.description}
+                  </Typography.Text>
+                </Checkbox>
+              ))}
+            </div>
+          </div>
+
+          <div className="admin-field">
+            <FieldLabel
+              text="绑定技能"
+              hint="技能内容会拼进系统提示词；不改变工具权限，工具仍由上面的「工具」开关决定。"
             />
             <Select
               mode="multiple"
               style={{ width: '100%' }}
               allowClear
-              disabled={disabled || lockTenantResources}
-              value={value.connectorIds}
-              placeholder={
-                lockTenantResources
-                  ? '公共助手不绑定连接器'
-                  : connectorOptions.length === 0
-                    ? '还没有启用的连接器，可先到「连接器」页添加'
-                    : '选择要启用的连接器'
-              }
-              onChange={(connectorIds: string[]) => patch({ connectorIds })}
-              options={connectorOptions}
+              disabled={disabled || skillOptions.length === 0}
+              value={value.skillIds}
+              placeholder={skillOptions.length === 0 ? '技能市场暂无可绑定技能' : '选择要绑定的技能'}
+              onChange={(skillIds: string[]) => patch({ skillIds })}
+              options={skillOptions}
               optionFilterProp="label"
             />
           </div>
-        </Col>
-      ) : null}
 
-      <Col span={24}>
-        <div className="admin-field">
-          <Typography.Text>系统提示词</Typography.Text>
-          <Input.TextArea
-            rows={6}
-            maxLength={8000}
-            showCount
-            value={value.systemPrompt}
-            disabled={disabled}
-            placeholder="描述专家助手的角色、目标、工作方式与输出要求。例如：你是资深合同审阅专家，逐条指出风险条款并给出修改建议…"
-            onChange={(e) => patch({ systemPrompt: e.target.value })}
-          />
-        </div>
+          {showConnectors ? (
+            <div className="admin-field">
+              <FieldLabel
+                text="连接器"
+                hint="只启用所选 MCP 连接器；不选时沿用会话/账号下已启用的连接器。"
+              />
+              <Select
+                mode="multiple"
+                style={{ width: '100%' }}
+                allowClear
+                disabled={disabled || lockTenantResources}
+                value={value.connectorIds}
+                placeholder={
+                  lockTenantResources
+                    ? '公共助手不绑定连接器'
+                    : connectorOptions.length === 0
+                      ? '还没有启用的连接器，可先到「连接器」页添加'
+                      : '选择要启用的连接器'
+                }
+                onChange={(connectorIds: string[]) => patch({ connectorIds })}
+                options={connectorOptions}
+                optionFilterProp="label"
+              />
+            </div>
+          ) : null}
+
+          <div className="admin-field">
+            <Typography.Text>系统提示词</Typography.Text>
+            <Input.TextArea
+              rows={6}
+              maxLength={8000}
+              showCount
+              value={value.systemPrompt}
+              disabled={disabled}
+              placeholder="描述专家助手的角色、目标、工作方式与输出要求。例如：你是资深合同审阅专家，逐条指出风险条款并给出修改建议…"
+              onChange={(e) => patch({ systemPrompt: e.target.value })}
+            />
+          </div>
+        </Space>
       </Col>
     </Row>
   );

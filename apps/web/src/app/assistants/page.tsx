@@ -366,10 +366,9 @@ export default function AssistantsPage() {
           <Modal
             open={formOpen}
             title={editing ? `编辑 ${form.name}` : '新建专家助手'}
-            width={900}
+            width={960}
             destroyOnClose
-            style={{ top: 32 }}
-            styles={{ body: { maxHeight: '72vh', overflowY: 'auto', paddingRight: 8 } }}
+            style={{ top: 24 }}
             footer={
               <Space>
                 <Button disabled={busy} onClick={resetForm}>

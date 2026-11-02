@@ -1914,11 +1914,11 @@ a {
   color: var(--ink-2);
 }
 
-/* 专家助手「工具」勾选：宽屏两列，避免四个选项纵向拉得很长。 */
+/* 专家助手「工具」勾选：右栏宽度有限，单列展示避免描述被挤成多行。 */
 .assistant-tool-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 6px 20px;
+  grid-template-columns: 1fr;
+  gap: 4px;
   margin-top: 2px;
 }
 
