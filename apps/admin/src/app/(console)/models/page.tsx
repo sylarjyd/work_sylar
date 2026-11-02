@@ -699,10 +699,14 @@ export default function AdminModelsPage() {
       ) : null}
 
       <Row gutter={[16, 16]} align="stretch">
-        <Col xs={24} xl={9}>
+        <Col xs={24} xl={7}>
           <Card
             title="厂商"
-            extra={<Typography.Text type="secondary">{providers.length} 个</Typography.Text>}
+            extra={
+              <Typography.Text type="secondary">
+                点击厂商筛选 · {providers.length} 个
+              </Typography.Text>
+            }
             style={{ height: '100%' }}
           >
         {providers.length === 0 ? (
@@ -711,12 +715,27 @@ export default function AdminModelsPage() {
           <div
             style={{
               display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
+              gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))',
               gap: 12,
             }}
           >
             {providers.map((p) => (
-              <Card key={p.id} size="small">
+              <Card
+                key={p.id}
+                size="small"
+                hoverable
+                onClick={() => {
+                  // 再次点击已选中的厂商回到全部，等同于清除筛选。
+                  setProviderFilter(providerFilter === p.id ? 'all' : p.id);
+                  setPage(1);
+                }}
+                style={{
+                  cursor: 'pointer',
+                  borderColor: providerFilter === p.id ? '#00b07b' : undefined,
+                  boxShadow:
+                    providerFilter === p.id ? '0 0 0 1px rgba(0, 176, 123, 0.35)' : undefined,
+                }}
+              >
                 <Space direction="vertical" size={4} style={{ width: '100%' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
                     <Typography.Text strong>{p.name}</Typography.Text>
@@ -731,7 +750,7 @@ export default function AdminModelsPage() {
                   <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                     创建于 {formatTime(p.createdAt)}
                   </Typography.Text>
-                  <Space size={4}>
+                  <Space size={4} onClick={(e) => e.stopPropagation()}>
                     <Button
                       size="small"
                       disabled={busy}
@@ -765,7 +784,7 @@ export default function AdminModelsPage() {
           </Card>
         </Col>
 
-        <Col xs={24} xl={15}>
+        <Col xs={24} xl={17}>
           <Card
             title="模型列表"
             extra={
