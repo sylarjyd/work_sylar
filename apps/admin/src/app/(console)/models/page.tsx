@@ -699,7 +699,7 @@ export default function AdminModelsPage() {
       ) : null}
 
       <Row gutter={[16, 16]} align="stretch">
-        <Col xs={24} xl={7}>
+        <Col xs={24} xl={5}>
           <Card
             title="厂商"
             extra={
@@ -715,7 +715,7 @@ export default function AdminModelsPage() {
           <div
             style={{
               display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))',
+              gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
               gap: 12,
             }}
           >
@@ -784,7 +784,7 @@ export default function AdminModelsPage() {
           </Card>
         </Col>
 
-        <Col xs={24} xl={17}>
+        <Col xs={24} xl={19}>
           <Card
             title="模型列表"
             extra={
