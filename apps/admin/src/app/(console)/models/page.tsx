@@ -16,6 +16,7 @@ import {
   Row,
   Select,
   Space,
+  Spin,
   Switch,
   Table,
   Tag,
@@ -116,7 +117,12 @@ export default function AdminModelsPage() {
   const [probe, setProbe] = useState<{ models: string[]; selected: string[] } | null>(null);
   const [probing, setProbing] = useState(false);
   const [modelForm, setModelForm] = useState<ModelForm | null>(null);
-  const [testResults, setTestResults] = useState<Record<string, AdminModelTestResultDto>>({});
+  // 连通性测试结果统一弹窗展示，避免把表格行撑高。
+  const [testDialog, setTestDialog] = useState<{
+    model: AdminModelDto;
+    result?: AdminModelTestResultDto;
+    error?: string;
+  } | null>(null);
   const [capFilter, setCapFilter] = useState<'all' | ModelCapability>('all');
   // 厂商筛选与能力分类叠加生效；'__none__' 表示未绑定厂商的环境变量模型。
   const [providerFilter, setProviderFilter] = useState('all');
@@ -446,11 +452,6 @@ export default function AdminModelsPage() {
     setError('');
     try {
       await deleteAdminModel(row.model);
-      setTestResults((prev) => {
-        const next = { ...prev };
-        delete next[row.model];
-        return next;
-      });
       await refreshAfterWrite();
     } catch (err) {
       handleErr(err);
@@ -465,11 +466,12 @@ export default function AdminModelsPage() {
     inFlight.current = true;
     setBusy(true);
     setError('');
+    setTestDialog({ model: row });
     try {
       const result = await testAdminModel(row.model);
-      setTestResults((prev) => ({ ...prev, [row.model]: result }));
+      setTestDialog({ model: row, result });
     } catch (err) {
-      handleErr(err);
+      setTestDialog({ model: row, error: adminErrorText(err) });
     } finally {
       inFlight.current = false;
       setBusy(false);
@@ -492,28 +494,12 @@ export default function AdminModelsPage() {
     {
       title: '模型',
       dataIndex: 'model',
-      render: (_: unknown, m) => {
-        const result = testResults[m.model];
-        return (
-          <div>
-            <Typography.Text strong>{m.displayName}</Typography.Text>
-            <div style={{ fontSize: 12, color: '#8a958f' }}>{m.model}</div>
-            {result ? (
-              <div style={{ marginTop: 4, fontSize: 12 }}>
-                {result.ok ? (
-                  <Typography.Text type="success">
-                    连接正常（{result.latencyMs}ms）
-                  </Typography.Text>
-                ) : (
-                  <Typography.Text type="danger">
-                    测试失败：{result.error ?? '未知错误'}
-                  </Typography.Text>
-                )}
-              </div>
-            ) : null}
-          </div>
-        );
-      },
+      render: (_: unknown, m) => (
+        <div>
+          <Typography.Text strong>{m.displayName}</Typography.Text>
+          <div style={{ fontSize: 12, color: '#8a958f' }}>{m.model}</div>
+        </div>
+      ),
     },
     { title: '厂商', dataIndex: 'providerName', width: 140, render: (v: string | null) => v ?? '未绑定' },
     {
@@ -1078,6 +1064,52 @@ export default function AdminModelsPage() {
           </Space>
         ) : null}
       </Drawer>
+
+      <Modal
+        open={testDialog !== null}
+        title={`模型测试 · ${testDialog?.model.displayName ?? ''}`}
+        footer={
+          <Button onClick={() => setTestDialog(null)}>关闭</Button>
+        }
+        width={520}
+        onCancel={() => setTestDialog(null)}
+      >
+        {testDialog ? (
+          testDialog.error ? (
+            <Alert type="error" showIcon message="测试请求失败" description={testDialog.error} />
+          ) : testDialog.result ? (
+            <Space direction="vertical" size={10} style={{ width: '100%' }}>
+              <Space size={8}>
+                <Tag color={testDialog.result.ok ? 'success' : 'error'}>
+                  {testDialog.result.ok ? '连接正常' : '测试失败'}
+                </Tag>
+                <Typography.Text type="secondary">
+                  耗时 {testDialog.result.latencyMs} ms
+                </Typography.Text>
+              </Space>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                模型：{testDialog.model.model}
+                {testDialog.model.providerName ? ` · ${testDialog.model.providerName}` : ''}
+              </Typography.Text>
+              {testDialog.result.ok ? null : (
+                <Alert
+                  type="error"
+                  showIcon
+                  message="错误信息"
+                  description={testDialog.result.error ?? '未知错误'}
+                />
+              )}
+            </Space>
+          ) : (
+            <Space direction="vertical" size={10} style={{ width: '100%' }}>
+              <Spin />
+              <Typography.Text type="secondary">
+                正在请求模型 {testDialog.model.model}，通常需要几百毫秒到几秒…
+              </Typography.Text>
+            </Space>
+          )
+        ) : null}
+      </Modal>
     </Space>
   );
 }
