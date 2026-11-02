@@ -19,6 +19,7 @@
 * { box-sizing: border-box; }
 
 html { scroll-behavior: smooth; }
+section[id] { scroll-margin-top: 84px; }
 
 body {
   margin: 0;
@@ -68,7 +69,15 @@ a { color: inherit; text-decoration: none; }
 .brand-mark svg { width: 20px; height: 20px; }
 .brand-name { font-size: 17px; letter-spacing: -0.2px; }
 .nav-links { display: flex; gap: 26px; margin-left: 12px; font-size: 14px; color: var(--ink-2); }
-.nav-links a { transition: color 0.15s; }
+.nav-links a { position: relative; transition: color 0.15s; }
+.nav-links a::after {
+  content: ""; position: absolute; left: 50%; bottom: -8px; width: 4px; height: 4px;
+  border-radius: 50%; background: var(--mint); transform: translateX(-50%) scale(0);
+  transition: transform 0.2s;
+}
+.nav-links a.active { color: var(--ink); }
+.nav-links a.active::after { transform: translateX(-50%) scale(1); }
+.nav:not(.scrolled) .nav-links a.active { color: #fff; }
 .nav-links a:hover { color: var(--ink); }
 .nav-actions { display: flex; gap: 10px; margin-left: auto; }
 
@@ -88,6 +97,12 @@ a { color: inherit; text-decoration: none; }
 .btn.primary:hover { background: var(--mint-strong); transform: translateY(-1px); }
 .btn.ghost { background: #fff; border-color: var(--line); color: var(--ink); }
 .btn.ghost:hover { border-color: #c9d2cc; transform: translateY(-1px); }
+.btn:focus-visible, .nav-links a:focus-visible, .faq summary:focus-visible {
+  outline: 2px solid var(--mint);
+  outline-offset: 3px;
+  border-radius: 6px;
+}
+::selection { background: rgba(0, 176, 123, 0.22); }
 
 /* ---------------- Hero ---------------- */
 .hero {
@@ -151,7 +166,8 @@ a { color: inherit; text-decoration: none; }
 .side-item { padding: 7px 9px; border-radius: 8px; margin-bottom: 3px; }
 .side-item.active { background: rgba(0, 176, 123, 0.14); color: #d9f3e8; }
 .side-label { margin: 14px 9px 6px; color: #66746c; font-size: 10px; letter-spacing: 1px; }
-.side-file { display: flex; gap: 6px; align-items: center; padding: 6px 8px; }
+.side-file { display: flex; gap: 6px; align-items: center; padding: 6px 8px; white-space: nowrap; overflow: hidden; }
+.side-file span { overflow: hidden; text-overflow: ellipsis; }
 .file-doc, .file-xls { font-style: normal; font-size: 8.5px; padding: 2px 4px; border-radius: 4px; background: rgba(255, 255, 255, 0.08); color: #b9c5be; }
 .file-xls { background: rgba(0, 176, 123, 0.16); color: #9fe3c8; }
 .app-main { padding: 16px; display: flex; flex-direction: column; gap: 12px; background: #0b110e; }
@@ -174,7 +190,7 @@ a { color: inherit; text-decoration: none; }
 }
 .float-card b { font-size: 18px; }
 .float-card span { font-size: 11.5px; color: var(--ink-3); }
-.float-a { left: -26px; bottom: 34px; }
+.float-a { left: -120px; bottom: 48px; }
 .float-b { right: -16px; bottom: 26px; }
 
 .stat-strip {
@@ -203,7 +219,9 @@ a { color: inherit; text-decoration: none; }
   background: #fff; transition: transform 0.2s, box-shadow 0.2s, border-color 0.2s;
 }
 .card:hover { transform: translateY(-4px); box-shadow: var(--shadow); border-color: #d5ded8; }
-.card-icon { width: 44px; height: 44px; display: grid; place-items: center; font-size: 20px; border-radius: 12px; background: var(--mint-soft); margin-bottom: 16px; }
+.card-icon { width: 44px; height: 44px; display: grid; place-items: center; border-radius: 12px; background: var(--mint-soft); color: var(--mint-strong); margin-bottom: 16px; transition: background 0.2s, color 0.2s, transform 0.2s; }
+.card-icon .ico { width: 22px; height: 22px; }
+.card:hover .card-icon { background: var(--mint); color: #fff; transform: translateY(-1px); }
 .card h3 { margin: 0 0 8px; font-size: 17px; }
 .card p { margin: 0 0 14px; color: var(--ink-2); font-size: 13.8px; }
 .card-list { margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 6px; }
@@ -248,7 +266,9 @@ a { color: inherit; text-decoration: none; }
 
 /* ---------------- 定价 ---------------- */
 .pricing-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; align-items: stretch; }
-.price-card { position: relative; display: flex; flex-direction: column; padding: 26px; border-radius: var(--radius); background: #fff; border: 1px solid var(--line); }
+.price-card { position: relative; display: flex; flex-direction: column; padding: 26px; border-radius: var(--radius); background: #fff; border: 1px solid var(--line); transition: transform 0.2s, box-shadow 0.2s, border-color 0.2s; }
+.price-card:hover { transform: translateY(-3px); box-shadow: var(--shadow); border-color: #d5ded8; }
+.price-card.featured:hover { border-color: rgba(0, 176, 123, 0.65); }
 .price-card.featured { border-color: rgba(0, 176, 123, 0.5); box-shadow: 0 20px 50px rgba(0, 176, 123, 0.12); }
 .badge { position: absolute; top: -11px; left: 24px; background: var(--mint); color: #fff; font-size: 11px; padding: 3px 10px; border-radius: 999px; }
 .price-card h3 { margin: 0 0 10px; font-size: 16px; }
@@ -262,7 +282,8 @@ a { color: inherit; text-decoration: none; }
 
 /* ---------------- FAQ ---------------- */
 .faq { display: flex; flex-direction: column; gap: 10px; }
-.faq details { border: 1px solid var(--line); border-radius: 14px; padding: 18px 22px; background: #fff; }
+.faq details { border: 1px solid var(--line); border-radius: 14px; padding: 18px 22px; background: #fff; transition: border-color 0.2s, box-shadow 0.2s; }
+.faq details:hover { border-color: #d5ded8; box-shadow: 0 10px 26px rgba(13, 19, 16, 0.05); }
 .faq summary { cursor: pointer; font-weight: 600; font-size: 15px; list-style: none; display: flex; justify-content: space-between; align-items: center; }
 .faq summary::-webkit-details-marker { display: none; }
 .faq summary::after { content: "+"; color: var(--mint-strong); font-size: 20px; margin-left: 16px; }

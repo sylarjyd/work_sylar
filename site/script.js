@@ -48,4 +48,26 @@
     { threshold: 0.12, rootMargin: '0px 0px -40px' },
   );
   items.forEach((el) => observer.observe(el));
+
+  // 滚动时高亮当前栏目；用窄观察带避免相邻 section 同时命中。
+  const navLinks = [...document.querySelectorAll('.nav-links a')];
+  const linkById = new Map(
+    navLinks.map((link) => [link.getAttribute('href').slice(1), link]),
+  );
+  const sections = [...document.querySelectorAll('main section[id]')].filter((s) =>
+    linkById.has(s.id),
+  );
+  if (sections.length > 0 && 'IntersectionObserver' in window) {
+    const spy = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (!entry.isIntersecting) return;
+          navLinks.forEach((link) => link.classList.remove('active'));
+          linkById.get(entry.target.id)?.classList.add('active');
+        });
+      },
+      { rootMargin: '-42% 0px -52% 0px', threshold: 0 },
+    );
+    sections.forEach((section) => spy.observe(section));
+  }
 })();
