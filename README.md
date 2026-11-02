@@ -260,6 +260,7 @@ apps/
 packages/
   shared/          协议类型与校验（DTO、SSE 编解码）
   web-core/        两端共用的组件与样式（图表、文件预览、技能编辑器、专家助手表单等）
+site/              产品官网（静态单页，node site/server.mjs → 3002）
 docs/
   db/              数据库基线 schema.sql（含中文注释）
   design/          设计文档

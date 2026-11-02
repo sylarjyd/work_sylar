@@ -1,0 +1,405 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>WorkSylar · AI 办公智能体</title>
+    <meta
+      name="description"
+      content="WorkSylar 是把 AI 真正放进工作流的办公智能体：专家助手、技能市场、文档生成、数据分析、知识库与连接器，让 AI 交付结果，而不只是回答问题。"
+    />
+    <meta property="og:title" content="WorkSylar · AI 办公智能体" />
+    <meta
+      property="og:description"
+      content="让 AI 成为你的同事，而不只是工具。专家助手、技能市场、多格式交付、企业知识库与 MCP 连接器。"
+    />
+    <meta property="og:type" content="website" />
+    <meta name="theme-color" content="#00b07b" />
+    <link rel="stylesheet" href="./styles.css" />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='24' fill='%2300b07b'/><path d='M28 62c10 14 34 14 44 0' stroke='white' stroke-width='8' fill='none' stroke-linecap='round'/></svg>" />
+  </head>
+  <body>
+    <header class="nav" id="nav">
+      <div class="wrap nav-inner">
+        <a class="brand" href="#top" aria-label="WorkSylar 首页">
+          <span class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M5 15c3 4 11 4 14 0" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/><circle cx="8" cy="9" r="1.6" fill="currentColor"/><circle cx="16" cy="9" r="1.6" fill="currentColor"/></svg>
+          </span>
+          <span class="brand-name">WorkSylar</span>
+        </a>
+        <nav class="nav-links" aria-label="主导航">
+          <a href="#capabilities">产品能力</a>
+          <a href="#workflow">工作方式</a>
+          <a href="#scenarios">应用场景</a>
+          <a href="#security">安全与部署</a>
+          <a href="#pricing">定价</a>
+          <a href="#faq">常见问题</a>
+        </nav>
+        <div class="nav-actions">
+          <a class="btn ghost" href="http://localhost:3000/login">登录</a>
+          <a class="btn primary" href="http://localhost:3000/login">免费体验</a>
+        </div>
+        <button class="nav-toggle" id="navToggle" aria-label="展开菜单" aria-expanded="false">
+          <span></span><span></span><span></span>
+        </button>
+      </div>
+    </header>
+
+    <main id="top">
+      <!-- Hero -->
+      <section class="hero">
+        <div class="hero-grid" aria-hidden="true"></div>
+        <div class="hero-glow" aria-hidden="true"></div>
+        <div class="wrap hero-inner">
+          <div class="hero-copy reveal">
+            <span class="pill"><span class="dot"></span>AI Agent 办公新范式</span>
+            <h1>让 AI 成为你的同事，<br /><em>而不只是工具</em></h1>
+            <p>
+              WorkSylar 把模型、工具、技能与知识库编排成可交付的智能体团队。
+              一句需求，直接拿到文档、表格、图表与可复用的工作方法。
+            </p>
+            <div class="hero-actions">
+              <a class="btn primary lg" href="http://localhost:3000/login">免费体验 <span aria-hidden="true">→</span></a>
+              <a class="btn ghost lg" href="#workflow">看看怎么工作</a>
+            </div>
+            <ul class="hero-points">
+              <li>无需配置，开箱即用</li>
+              <li>结果可预览、可下载</li>
+              <li>支持私有化部署</li>
+            </ul>
+          </div>
+
+          <div class="hero-visual reveal" aria-hidden="true">
+            <div class="app-window">
+              <div class="app-bar">
+                <span class="traffic"></span><span class="traffic"></span><span class="traffic"></span>
+                <span class="app-title">WorkSylar · 合同审阅专家</span>
+                <span class="app-chip">code 模式</span>
+              </div>
+              <div class="app-body">
+                <aside class="app-side">
+                  <div class="side-item active">＋ 新任务</div>
+                  <div class="side-item">合同审阅</div>
+                  <div class="side-item">周报生成</div>
+                  <div class="side-item">竞品调研</div>
+                  <div class="side-label">成果</div>
+                  <div class="side-file"><i class="file-doc">DOC</i> 合同风险清单.docx</div>
+                  <div class="side-file"><i class="file-xls">XLS</i> 条款对比表.xlsx</div>
+                </aside>
+                <div class="app-main">
+                  <div class="msg user">审阅这份采购合同，标出对我方不利的条款并给出修改建议。</div>
+                  <div class="msg agent">
+                    <div class="agent-head"><span class="avatar">S</span> 正在分析 32 页条款…</div>
+                    <div class="tool-line"><span class="tick">✓</span> 解析文档 · 已完成</div>
+                    <div class="tool-line"><span class="tick">✓</span> 检索知识库 · 命中 6 条内部规范</div>
+                    <div class="tool-line"><span class="tick">✓</span> 生成风险清单与对比表</div>
+                    <div class="result-card">
+                      <div class="result-title">交付物已生成</div>
+                      <div class="result-files">
+                        <span class="mini-file">合同风险清单.docx</span>
+                        <span class="mini-file">条款对比表.xlsx</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="float-card float-a">
+              <b>8 个</b><span>并行工具调用</span>
+            </div>
+            <div class="float-card float-b">
+              <b>100%</b><span>来源可追溯</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="wrap stat-strip reveal">
+          <div><b>6 类</b><span>办公交付物</span></div>
+          <div><b>多模型</b><span>自由切换与路由</span></div>
+          <div><b>MCP</b><span>连接企业系统</span></div>
+          <div><b>私有化</b><span>数据不出内网</span></div>
+        </div>
+      </section>
+
+      <!-- Capabilities -->
+      <section class="section" id="capabilities">
+        <div class="wrap">
+          <div class="section-head reveal">
+            <span class="eyebrow">产品能力</span>
+            <h2>不是聊天框，是一支能交付的 AI 团队</h2>
+            <p>从理解任务到产出文件，每一步都在真实工具链里完成，过程可见、结果可用。</p>
+          </div>
+
+          <div class="cards">
+            <article class="card reveal">
+              <div class="card-icon">🧠</div>
+              <h3>专家助手</h3>
+              <p>预置合同、法务、运营、研发等专家角色，绑定工具、技能与知识库，开口即进入专业工作状态。</p>
+              <ul class="card-list"><li>自定义系统提示词</li><li>工具与技能自由组合</li><li>公共 / 私有助手</li></ul>
+            </article>
+            <article class="card reveal">
+              <div class="card-icon">🧩</div>
+              <h3>技能市场</h3>
+              <p>把一套做事方法沉淀成可复用技能，支持 SKILL.md 与技能包，团队越长越聪明。</p>
+              <ul class="card-list"><li>个人 / 公共技能</li><li>zip 技能包导入</li><li>对话一键沉淀</li></ul>
+            </article>
+            <article class="card reveal">
+              <div class="card-icon">📄</div>
+              <h3>多格式交付</h3>
+              <p>直接产出 Word、Excel、PPT 与代码文件，成果栏在线预览、下载与版本管理。</p>
+              <ul class="card-list"><li>docx / xlsx / pptx</li><li>在线预览，无需下载</li><li>文件随会话沉淀</li></ul>
+            </article>
+            <article class="card reveal">
+              <div class="card-icon">📊</div>
+              <h3>数据分析与图表</h3>
+              <p>读取表格、拆解指标、生成可交互图表，结论与数据在同一处对齐。</p>
+              <ul class="card-list"><li>折线 / 柱状 / 饼图 / 散点</li><li>图表随步骤回放</li><li>用量与成本可视</li></ul>
+            </article>
+            <article class="card reveal">
+              <div class="card-icon">📚</div>
+              <h3>企业知识库</h3>
+              <p>上传内部制度、产品资料与案例，回答带来源引用，让 AI 说“我们公司的话”。</p>
+              <ul class="card-list"><li>向量检索（RAG）</li><li>引用可追溯</li><li>租户级隔离</li></ul>
+            </article>
+            <article class="card reveal">
+              <div class="card-icon">🔌</div>
+              <h3>连接器（MCP）</h3>
+              <p>通过 MCP 接入 CRM、工单、数据库等企业系统，让智能体真正“能动手”。</p>
+              <ul class="card-list"><li>工具自动发现</li><li>敏感操作需确认</li><li>凭证加密存储</li></ul>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <!-- Workflow -->
+      <section class="section alt" id="workflow">
+        <div class="wrap">
+          <div class="section-head reveal">
+            <span class="eyebrow">工作方式</span>
+            <h2>说清目标，剩下的交给智能体</h2>
+            <p>任务拆解、工具调用、结果校验由 Agent 自主完成；你只负责确认与决策。</p>
+          </div>
+          <ol class="steps">
+            <li class="step reveal">
+              <span class="step-no">01</span>
+              <h3>描述任务</h3>
+              <p>用自然语言说明目标、约束与交付格式，可附文件、选专家、挂技能。</p>
+            </li>
+            <li class="step reveal">
+              <span class="step-no">02</span>
+              <h3>智能体执行</h3>
+              <p>自动规划步骤，联网检索、查知识库、跑代码、生成文档，敏感操作先征得同意。</p>
+            </li>
+            <li class="step reveal">
+              <span class="step-no">03</span>
+              <h3>拿到结果</h3>
+              <p>成果即时预览，过程可回溯；满意就下载，不满意补充一句继续改。</p>
+            </li>
+          </ol>
+        </div>
+      </section>
+
+      <!-- Scenarios -->
+      <section class="section" id="scenarios">
+        <div class="wrap">
+          <div class="section-head reveal">
+            <span class="eyebrow">应用场景</span>
+            <h2>把重复工作，变成一句需求</h2>
+            <p>从个人效率到团队协作，WorkSylar 已经在这些高频场景里交付结果。</p>
+          </div>
+          <div class="scenario-grid">
+            <article class="scenario reveal">
+              <span class="tag">法务</span>
+              <h3>合同审阅</h3>
+              <p>识别风险条款、对照内部规范、生成修改建议与条款对比表。</p>
+            </article>
+            <article class="scenario reveal">
+              <span class="tag">运营</span>
+              <h3>周报与月报</h3>
+              <p>汇总多份数据与会议纪要，按固定模板产出结构化汇报。</p>
+            </article>
+            <article class="scenario reveal">
+              <span class="tag">市场</span>
+              <h3>竞品调研</h3>
+              <p>联网检索海外与国内动态，去重、归纳并输出带来源的研究简报。</p>
+            </article>
+            <article class="scenario reveal">
+              <span class="tag">财务</span>
+              <h3>经营分析</h3>
+              <p>读取 Excel、计算关键指标、生成图表与异常说明。</p>
+            </article>
+            <article class="scenario reveal">
+              <span class="tag">客服</span>
+              <h3>知识库问答</h3>
+              <p>基于产品文档与历史工单回答，引用原文，降低幻觉与培训成本。</p>
+            </article>
+            <article class="scenario reveal">
+              <span class="tag">研发</span>
+              <h3>技术方案</h3>
+              <p>读代码与接口文档，产出技术设计、排期建议与风险清单。</p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <!-- Security -->
+      <section class="section dark" id="security">
+        <div class="wrap security-inner">
+          <div class="section-head reveal">
+            <span class="eyebrow light">安全与部署</span>
+            <h2>企业级底座，从第一天就准备好</h2>
+            <p>多租户隔离、权限分级、全链路审计与可观测，既能在云端用，也能搬进内网。</p>
+          </div>
+          <div class="security-grid">
+            <div class="sec-item reveal"><b>租户级隔离</b><span>所有数据按租户隔离，越权访问一律拒绝。</span></div>
+            <div class="sec-item reveal"><b>操作确认</b><span>写文件、执行代码等敏感工具需人工确认。</span></div>
+            <div class="sec-item reveal"><b>审计日志</b><span>登录、配置、数据访问全量留痕。</span></div>
+            <div class="sec-item reveal"><b>可观测</b><span>结构化日志、链路追踪与指标大盘。</span></div>
+            <div class="sec-item reveal"><b>私有化</b><span>一键容器部署，模型与数据都可以留在内网。</span></div>
+            <div class="sec-item reveal"><b>成本可控</b><span>积分预占、按量结算、单次与月度上限。</span></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Pricing -->
+      <section class="section alt" id="pricing">
+        <div class="wrap">
+          <div class="section-head reveal">
+            <span class="eyebrow">定价</span>
+            <h2>先免费用起来，再按需要升级</h2>
+            <p>免费体验版包含一次性积分；用完后选择适合团队的套餐，随时升级。</p>
+          </div>
+          <div class="pricing-grid">
+            <article class="price-card reveal">
+              <h3>免费体验</h3>
+              <div class="price"><b>¥0</b><span>/ 一次性</span></div>
+              <p class="price-desc">完整体验智能体工作流</p>
+              <ul>
+                <li>500 体验积分</li>
+                <li>内置专家助手</li>
+                <li>技能市场基础能力</li>
+                <li>文档 / 图表交付</li>
+              </ul>
+              <a class="btn ghost block" href="http://localhost:3000/login">立即体验</a>
+            </article>
+            <article class="price-card featured reveal">
+              <span class="badge">推荐</span>
+              <h3>专业版</h3>
+              <div class="price"><b>¥99</b><span>/ 月</span></div>
+              <p class="price-desc">适合个人与小型团队</p>
+              <ul>
+                <li>2,000 积分 / 月</li>
+                <li>全部专家助手与技能</li>
+                <li>知识库与连接器</li>
+                <li>更高并发与模型额度</li>
+              </ul>
+              <a class="btn primary block" href="http://localhost:3000/billing">订阅专业版</a>
+            </article>
+            <article class="price-card reveal">
+              <h3>团队版</h3>
+              <div class="price"><b>¥199</b><span>/ 月</span></div>
+              <p class="price-desc">适合多角色协作</p>
+              <ul>
+                <li>4,000 积分 / 月</li>
+                <li>团队共享技能与助手</li>
+                <li>成员与权限管理</li>
+                <li>运营端用量与订单</li>
+              </ul>
+              <a class="btn ghost block" href="http://localhost:3000/billing">订阅团队版</a>
+            </article>
+            <article class="price-card reveal">
+              <h3>企业定制</h3>
+              <div class="price"><b>定制</b><span>按需报价</span></div>
+              <p class="price-desc">私有化与深度集成</p>
+              <ul>
+                <li>私有化 / 专有云部署</li>
+                <li>专属模型与算力</li>
+                <li>SSO 与审计对接</li>
+                <li>专属支持与 SLA</li>
+              </ul>
+              <a class="btn ghost block" href="mailto:hello@worksylar.com">联系我们</a>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <!-- FAQ -->
+      <section class="section" id="faq">
+        <div class="wrap narrow">
+          <div class="section-head reveal">
+            <span class="eyebrow">常见问题</span>
+            <h2>你可能想了解</h2>
+          </div>
+          <div class="faq">
+            <details class="reveal" open>
+              <summary>WorkSylar 和普通 AI 聊天工具有什么不同？</summary>
+              <p>普通聊天只给建议，WorkSylar 会调用真实工具完成任务：检索、读文件、跑代码、生成可下载的 Word / Excel / PPT，并把过程与来源留在会话里。</p>
+            </details>
+            <details class="reveal">
+              <summary>免费体验用完后会怎样？</summary>
+              <p>体验积分耗尽后，新建任务会提示订阅。选择套餐并完成订阅后立即恢复使用，积分与周期在「套餐与用量」中可见。</p>
+            </details>
+            <details class="reveal">
+              <summary>支持哪些模型？</summary>
+              <p>支持 OpenAI 兼容接口的模型服务，运营端可配置多家厂商与模型，并按任务路由、限流与计费；也支持接入本地模型服务。</p>
+            </details>
+            <details class="reveal">
+              <summary>数据安全怎么保障？</summary>
+              <p>租户级数据隔离、敏感工具人工确认、加密存储凭证、全量审计日志与链路追踪；支持私有化部署，数据与模型都可留在内网。</p>
+            </details>
+            <details class="reveal">
+              <summary>可以接入我们自己的系统吗？</summary>
+              <p>可以。通过 MCP 连接器接入 CRM、工单、数据库等系统，自动发现工具；也可用知识库导入内部文档。</p>
+            </details>
+          </div>
+        </div>
+      </section>
+
+      <!-- CTA -->
+      <section class="cta">
+        <div class="wrap cta-inner reveal">
+          <h2>把下一条指令，变成一份交付物</h2>
+          <p>现在注册，获得完整体验额度。无需信用卡，几分钟上手。</p>
+          <div class="hero-actions center">
+            <a class="btn primary lg" href="http://localhost:3000/login">免费开始使用 <span aria-hidden="true">→</span></a>
+            <a class="btn ghost lg" href="#capabilities">了解能力</a>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <div class="wrap footer-inner">
+        <div class="footer-brand">
+          <span class="brand-name">WorkSylar</span>
+          <p>让 AI 成为你的同事，而不只是工具。</p>
+        </div>
+        <div class="footer-links">
+          <div>
+            <b>产品</b>
+            <a href="#capabilities">产品能力</a>
+            <a href="#scenarios">应用场景</a>
+            <a href="#pricing">定价</a>
+          </div>
+          <div>
+            <b>资源</b>
+            <a href="#faq">常见问题</a>
+            <a href="#workflow">工作方式</a>
+            <a href="http://localhost:3000/login">登录工作台</a>
+          </div>
+          <div>
+            <b>公司</b>
+            <a href="mailto:hello@worksylar.com">联系我们</a>
+            <a href="#security">安全与合规</a>
+          </div>
+        </div>
+      </div>
+      <div class="wrap footer-bottom">
+        <span>© <span id="year">2026</span> WorkSylar. 保留所有权利。</span>
+        <span>AI 办公智能体 · 多租户 · 可私有化</span>
+      </div>
+    </footer>
+
+    <script src="./script.js"></script>
+  </body>
+</html>
