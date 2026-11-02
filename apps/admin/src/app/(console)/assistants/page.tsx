@@ -21,6 +21,7 @@ import { PlusOutlined } from '@ant-design/icons';
 import {
   ASSISTANT_SKILLS,
   type AdminAssistantDto,
+  type AdminModelDto,
   type AssistantPermissionMode,
   type SkillDto,
 } from '@ai-office/shared';
@@ -29,6 +30,7 @@ import {
   adminErrorText,
   createAdminAssistant,
   deleteAdminAssistant,
+  getAdminModels,
   isForbidden,
   listAdminAssistants,
   listAdminSkills,
@@ -76,6 +78,7 @@ export default function AdminAssistantsPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<AssistantForm>(EMPTY_FORM);
   const [publicSkills, setPublicSkills] = useState<SkillDto[]>([]);
+  const [models, setModels] = useState<AdminModelDto[]>([]);
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -128,6 +131,10 @@ export default function AdminAssistantsPage() {
     void listAdminSkills({ page: 1, pageSize: 100, scope: 'public' })
       .then((data) => setPublicSkills(data.items))
       .catch(() => undefined);
+    // 默认模型选项与客户端一致，供公共助手预设模型。
+    void getAdminModels()
+      .then((data) => setModels(data.models ?? []))
+      .catch(() => undefined);
   }, []);
 
   function openCreate(): void {
@@ -166,6 +173,7 @@ export default function AdminAssistantsPage() {
         description: form.description.trim(),
         systemPrompt: form.systemPrompt,
         permissionMode: form.permissionMode,
+        model: form.model || null,
         skills: form.skills,
         skillIds: form.skillIds,
       };
@@ -368,23 +376,36 @@ export default function AdminAssistantsPage() {
       <Modal
         open={formOpen}
         title={editingId ? '编辑专家助手' : '新建专家助手'}
-        width={760}
-        okText="保存"
-        cancelText="取消"
-        confirmLoading={saving}
-        onOk={() => void save()}
+        width={900}
+        footer={
+          <Space>
+            <Button disabled={saving} onClick={() => setFormOpen(false)}>
+              取消
+            </Button>
+            <Button type="primary" loading={saving} onClick={() => void save()}>
+              {editingId ? '保存' : '创建专家助手'}
+            </Button>
+          </Space>
+        }
+        style={{ top: 32 }}
         onCancel={() => {
           if (!saving) setFormOpen(false);
         }}
-        styles={{ body: { maxHeight: '68vh', overflowY: 'auto' } }}
+        styles={{ body: { maxHeight: '72vh', overflowY: 'auto', paddingRight: 8 } }}
       >
         <AssistantEditor
           value={form}
           onChange={(next) => setForm(next)}
           disabled={saving}
-          showModel={false}
-          showKb={false}
-          showConnectors={false}
+          modelOptions={models.map((m) => ({
+            value: m.model,
+            label:
+              m.displayName && m.displayName !== m.model
+                ? `${m.displayName} · ${m.model}`
+                : m.model,
+          }))}
+          // 公共助手不绑定租户私有资源：字段保留（布局与客户端一致）但禁用。
+          lockTenantResources
           skillOptions={publicSkills.map((s) => ({ value: s.id, label: s.name }))}
         />
       </Modal>

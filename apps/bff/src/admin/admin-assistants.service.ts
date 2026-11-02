@@ -26,6 +26,8 @@ export interface AdminAssistantInput {
   description?: string;
   systemPrompt?: string;
   permissionMode?: string;
+  /** 公共助手也可预设默认模型；空表示跟随系统默认。 */
+  model?: string | null;
   skills?: string[];
   skillIds?: string[];
 }
@@ -104,6 +106,7 @@ export class AdminAssistantsService {
     const description = parseDescription(input.description);
     const systemPrompt = parsePrompt(input.systemPrompt);
     const permissionMode = parsePermissionMode(input.permissionMode);
+    const model = parseModel(input.model);
     const skills = parseSkills(input.skills);
     const skillIds = await this.parsePublicSkillIds(input.skillIds);
 
@@ -122,6 +125,7 @@ export class AdminAssistantsService {
         description,
         systemPrompt,
         permissionMode,
+        model,
         skills,
         skillIds,
         connectorIds: [],
@@ -150,6 +154,7 @@ export class AdminAssistantsService {
     if (input.permissionMode !== undefined) {
       data.permissionMode = parsePermissionMode(input.permissionMode);
     }
+    if (input.model !== undefined) data.model = parseModel(input.model);
     if (input.skills !== undefined) data.skills = parseSkills(input.skills);
     if (input.skillIds !== undefined) data.skillIds = await this.parsePublicSkillIds(input.skillIds);
     if (Object.keys(data).length === 0) throw new BadRequestException('invalid_assistant_patch');
@@ -268,6 +273,16 @@ function parsePermissionMode(raw: unknown): AssistantPermissionMode {
   if (raw === undefined || raw === null) return 'standard';
   if (!isAssistantPermissionMode(raw)) throw new BadRequestException('invalid_permission_mode');
   return raw;
+}
+
+/** 默认模型：空串/缺省表示跟随系统默认；非空时只做长度与类型校验。 */
+function parseModel(raw: unknown): string | null {
+  if (raw === undefined || raw === null) return null;
+  if (typeof raw !== 'string') throw new BadRequestException('invalid_model');
+  const model = raw.trim();
+  if (model === '') return null;
+  if (model.length > 200) throw new BadRequestException('invalid_model');
+  return model;
 }
 
 function parseSkills(raw: unknown): string[] {

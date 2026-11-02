@@ -446,6 +446,7 @@ export interface AdminAssistantInput {
   description?: string;
   systemPrompt?: string;
   permissionMode?: string;
+  model?: string | null;
   skills?: string[];
   skillIds?: string[];
 }

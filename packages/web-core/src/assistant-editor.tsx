@@ -38,6 +38,11 @@ export interface AssistantEditorProps {
   showModel?: boolean;
   showConnectors?: boolean;
   showKb?: boolean;
+  /**
+   * 公共助手（运营端）不绑定租户私有资源：字段仍显示以保持两端布局一致，
+   * 但禁用知识库/连接器，并给出说明。
+   */
+  lockTenantResources?: boolean;
 }
 
 /** 字段名 + 问号说明：解释默认收起，点击问号才展开。 */
@@ -75,6 +80,7 @@ export function AssistantEditor({
   showModel = true,
   showConnectors = true,
   showKb = true,
+  lockTenantResources = false,
 }: AssistantEditorProps) {
   const patch = (next: Partial<AssistantEditorValue>) => onChange({ ...value, ...next });
 
@@ -145,17 +151,25 @@ export function AssistantEditor({
           <div className="admin-field">
             <Typography.Text>知识库范围</Typography.Text>
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              {value.kbIds.length === 0
-                ? '未选择时检索全部知识库'
-                : `仅检索已选的 ${value.kbIds.length} 个知识库`}
+              {lockTenantResources
+                ? '公共助手不绑定知识库'
+                : value.kbIds.length === 0
+                  ? '未选择时检索全部知识库'
+                  : `仅检索已选的 ${value.kbIds.length} 个知识库`}
             </Typography.Text>
             <Select
               mode="multiple"
               style={{ width: '100%' }}
               allowClear
-              disabled={disabled || kbOptions.length === 0}
+              disabled={disabled || lockTenantResources || kbOptions.length === 0}
               value={value.kbIds}
-              placeholder={kbOptions.length === 0 ? '知识库为空，可先到「知识库」页创建' : '选择要检索的知识库'}
+              placeholder={
+                lockTenantResources
+                  ? '公共助手不绑定知识库'
+                  : kbOptions.length === 0
+                    ? '知识库为空，可先到「知识库」页创建'
+                    : '选择要检索的知识库'
+              }
               onChange={(kbIds: string[]) => patch({ kbIds })}
               options={kbOptions}
               optionFilterProp="label"
@@ -224,12 +238,14 @@ export function AssistantEditor({
               mode="multiple"
               style={{ width: '100%' }}
               allowClear
-              disabled={disabled}
+              disabled={disabled || lockTenantResources}
               value={value.connectorIds}
               placeholder={
-                connectorOptions.length === 0
-                  ? '还没有启用的连接器，可先到「连接器」页添加'
-                  : '选择要启用的连接器'
+                lockTenantResources
+                  ? '公共助手不绑定连接器'
+                  : connectorOptions.length === 0
+                    ? '还没有启用的连接器，可先到「连接器」页添加'
+                    : '选择要启用的连接器'
               }
               onChange={(connectorIds: string[]) => patch({ connectorIds })}
               options={connectorOptions}
