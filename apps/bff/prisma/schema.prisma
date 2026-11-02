@@ -429,6 +429,9 @@ model ModelConfig {
   sortOrder               Int            @default(0)
   inputMilliCreditsPer1k  Int
   outputMilliCreditsPer1k Int
+  /** 成本价（分/百万 tokens），用于按成本 × 毛利自动重算售价；0 表示未填成本。 */
+  costInputCentsPerMillion  Int            @default(0)
+  costOutputCentsPerMillion Int            @default(0)
   updatedAt               DateTime       @updatedAt
   provider                ModelProvider? @relation(fields: [providerId], references: [id], onDelete: Restrict)
 

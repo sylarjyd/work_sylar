@@ -43,6 +43,7 @@ import {
   getAdminModels,
   isForbidden,
   probeProviderModels,
+  repriceAdminModels,
   setDefaultModel,
   testAdminModel,
   updateAdminModel,
@@ -62,6 +63,19 @@ function parseAmount(raw: string): number | null {
   const value = Number(text);
   if (!Number.isSafeInteger(value) || value < 0 || value > MAX_MILLI_CREDITS) return null;
   return value;
+}
+
+/** 成本价输入单位是元/百万 tokens，落库为分（×100，四舍五入）。 */
+function parseCostYuan(raw: string): number | null {
+  const text = raw.trim();
+  if (!text) return null;
+  const value = Number(text);
+  if (!Number.isFinite(value) || value < 0 || value > 1_000_000) return null;
+  return Math.round(value * 100);
+}
+
+function formatCostYuan(cents: number): string {
+  return String(Math.round((cents ?? 0) / 100) === cents / 100 ? cents / 100 : (cents / 100).toFixed(2));
 }
 
 function formatTime(value: string): string {
@@ -90,6 +104,9 @@ interface ModelForm {
   sortOrder: string;
   input: string;
   output: string;
+  /** 成本价（元/百万 tokens），保存时 ×100 转成分。 */
+  costInput: string;
+  costOutput: string;
 }
 
 function emptyModelForm(providerId = ''): ModelForm {
@@ -104,6 +121,8 @@ function emptyModelForm(providerId = ''): ModelForm {
     sortOrder: '0',
     input: '0',
     output: '0',
+    costInput: '0',
+    costOutput: '0',
   };
 }
 
@@ -130,6 +149,9 @@ export default function AdminModelsPage() {
     onlyUnpriced: boolean;
   } | null>(null);
   const [pricingBusy, setPricingBusy] = useState(false);
+  // 按成本重算：只影响填了成本价的模型。
+  const [repriceForm, setRepriceForm] = useState<{ markup: number } | null>(null);
+  const [repriceBusy, setRepriceBusy] = useState(false);
   const [capFilter, setCapFilter] = useState<'all' | ModelCapability>('all');
   // 厂商筛选与能力分类叠加生效；'__none__' 表示未绑定厂商的环境变量模型。
   const [providerFilter, setProviderFilter] = useState('all');
@@ -331,9 +353,15 @@ export default function AdminModelsPage() {
     }
     const input = parseAmount(modelForm.input);
     const output = parseAmount(modelForm.output);
+    const costInput = parseCostYuan(modelForm.costInput);
+    const costOutput = parseCostYuan(modelForm.costOutput);
     const order = Number(modelForm.sortOrder);
     if (input === null || output === null) {
       void message.error('输入/输出必须是非负整数');
+      return;
+    }
+    if (costInput === null || costOutput === null) {
+      void message.error('成本价必须是非负金额（元/百万 tokens）');
       return;
     }
     if (!Number.isSafeInteger(order) || order < 0 || order > 1_000_000) {
@@ -353,16 +381,24 @@ export default function AdminModelsPage() {
       content: `确认${modelForm.editing ? '更新' : '新增'}模型「${name}」？`,
       okText: '保存',
       cancelText: '取消',
-      onOk: () => runSaveModel(name, input, output, order),
+      onOk: () => runSaveModel(name, input, output, order, costInput, costOutput),
     });
   }
 
-  async function runSaveModel(name: string, input: number, output: number, order: number) {
+  async function runSaveModel(
+    name: string,
+    input: number,
+    output: number,
+    order: number,
+    costInput: number,
+    costOutput: number,
+  ) {
     if (!modelForm || inFlight.current) return;
     inFlight.current = true;
     setBusy(true);
     try {
       const prices = { inputMilliCreditsPer1k: input, outputMilliCreditsPer1k: output };
+      const costs = { inputCentsPerMillion: costInput, outputCentsPerMillion: costOutput };
       const displayName = modelForm.displayName.trim() || null;
       if (modelForm.editing) {
         await updateAdminModel({
@@ -374,6 +410,7 @@ export default function AdminModelsPage() {
           modalities: modelForm.modalities,
           sortOrder: order,
           prices,
+          costs,
         });
       } else {
         await createAdminModel({
@@ -385,6 +422,7 @@ export default function AdminModelsPage() {
           modalities: modelForm.modalities,
           sortOrder: order,
           prices,
+          costs,
         });
       }
       setModelForm(null);
@@ -523,6 +561,23 @@ export default function AdminModelsPage() {
     else void message.success(`已更新 ${ok} 个模型价格`);
   }
 
+  async function applyReprice() {
+    if (!repriceForm || repriceBusy) return;
+    setRepriceBusy(true);
+    try {
+      const result = await repriceAdminModels(repriceForm.markup);
+      setRepriceForm(null);
+      await refreshAfterWrite();
+      void message.success(
+        `已按 ${result.markupPercent}% 毛利重算 ${result.updated} 个模型价格`,
+      );
+    } catch (err) {
+      handleErr(err);
+    } finally {
+      setRepriceBusy(false);
+    }
+  }
+
   const providers = data?.providers ?? [];
   const allModels = data?.models ?? [];
   const hasUnboundModels = allModels.some((m) => !m.providerId);
@@ -535,6 +590,9 @@ export default function AdminModelsPage() {
         (m) => !priceForm.onlyUnpriced || (m.inputMilliCreditsPer1k === 0 && m.outputMilliCreditsPer1k === 0),
       )
     : [];
+  const pricedCostCount = allModels.filter(
+    (m) => m.costInputCentsPerMillion > 0 || m.costOutputCentsPerMillion > 0,
+  ).length;
   // 筛选后总数变小可能让当前页越界：渲染时夹取，不额外触发一次 setState。
   const maxPage = Math.max(1, Math.ceil(models.length / pageSize));
   const currentPage = Math.min(page, maxPage);
@@ -654,6 +712,8 @@ export default function AdminModelsPage() {
                 sortOrder: String(m.sortOrder),
                 input: String(m.inputMilliCreditsPer1k),
                 output: String(m.outputMilliCreditsPer1k),
+                costInput: formatCostYuan(m.costInputCentsPerMillion),
+                costOutput: formatCostYuan(m.costOutputCentsPerMillion),
               })
             }
           >
@@ -859,6 +919,18 @@ export default function AdminModelsPage() {
                   }
                 >
                   批量设置价格
+                </Button>
+                <Button
+                  size="small"
+                  disabled={pricedCostCount === 0}
+                  title={
+                    pricedCostCount === 0
+                      ? '先在模型里填写成本价（元/百万 tokens）'
+                      : `按成本重算 ${pricedCostCount} 个模型`
+                  }
+                  onClick={() => setRepriceForm({ markup: 60 })}
+                >
+                  按成本重算
                 </Button>
               </Space>
             }
@@ -1135,6 +1207,38 @@ export default function AdminModelsPage() {
                 onChange={(v) => setModelForm({ ...modelForm, output: numberText(v) })}
               />
             </div>
+            <div>
+              <Typography.Text type="secondary">成本 输入（元/百万 tokens）</Typography.Text>
+              <InputNumber
+                style={{ width: '100%', marginTop: 4 }}
+                min={0}
+                max={1_000_000}
+                step={0.1}
+                precision={2}
+                placeholder="留 0 表示未填成本"
+                value={modelForm.costInput === '' ? null : Number(modelForm.costInput)}
+                disabled={busy}
+                onChange={(v) =>
+                  setModelForm({ ...modelForm, costInput: v === null ? '' : String(v) })
+                }
+              />
+            </div>
+            <div>
+              <Typography.Text type="secondary">成本 输出（元/百万 tokens）</Typography.Text>
+              <InputNumber
+                style={{ width: '100%', marginTop: 4 }}
+                min={0}
+                max={1_000_000}
+                step={0.1}
+                precision={2}
+                placeholder="留 0 表示未填成本"
+                value={modelForm.costOutput === '' ? null : Number(modelForm.costOutput)}
+                disabled={busy}
+                onChange={(v) =>
+                  setModelForm({ ...modelForm, costOutput: v === null ? '' : String(v) })
+                }
+              />
+            </div>
             <Space size={8}>
               <Typography.Text type="secondary">启用</Typography.Text>
               <Switch
@@ -1260,6 +1364,49 @@ export default function AdminModelsPage() {
                     .map((m) => m.model)
                     .join('、')}${bulkPriceTargets.length > 5 ? ' 等' : ''}`
                 : ''}
+            </Typography.Text>
+          </Space>
+        ) : null}
+      </Modal>
+
+      <Modal
+        open={repriceForm !== null}
+        title="按成本重算价格"
+        okText={repriceBusy ? '重算中…' : '开始重算'}
+        okButtonProps={{ loading: repriceBusy }}
+        cancelText="取消"
+        cancelButtonProps={{ disabled: repriceBusy }}
+        onOk={() => void applyReprice()}
+        onCancel={() => {
+          if (!repriceBusy) setRepriceForm(null);
+        }}
+        width={520}
+      >
+        {repriceForm ? (
+          <Space direction="vertical" size={12} style={{ width: '100%' }}>
+            <Alert
+              type="info"
+              showIcon
+              message={`仅重算已填成本的 ${pricedCostCount} 个模型`}
+              description="售价（毫积分/1K）= 成本（元/百万）× (1 + 毛利) ÷ 积分单价（当前 ¥0.0495），向上取整到 5。未填成本的模型保持原价。"
+            />
+            <div>
+              <Typography.Text>毛利率（%）</Typography.Text>
+              <InputNumber
+                style={{ width: '100%', marginTop: 4 }}
+                min={0}
+                max={1000}
+                precision={0}
+                value={repriceForm.markup}
+                disabled={repriceBusy}
+                onChange={(v) =>
+                  setRepriceForm({ markup: typeof v === 'number' ? v : 60 })
+                }
+              />
+            </div>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              示例：成本 ¥2/百万、毛利 60% → 2 × 1.6 ÷ 0.0495 ≈ 64.6 → 65 毫积分/1K。
+              成本越高、毛利越高，售价越高；调完可回列表核对。
             </Typography.Text>
           </Space>
         ) : null}

@@ -397,6 +397,8 @@ CREATE TABLE "ModelPrice" (
     "sortOrder" INTEGER NOT NULL DEFAULT 0,
     "inputMilliCreditsPer1k" INTEGER NOT NULL,
     "outputMilliCreditsPer1k" INTEGER NOT NULL,
+    "costInputCentsPerMillion" INTEGER NOT NULL DEFAULT 0,
+    "costOutputCentsPerMillion" INTEGER NOT NULL DEFAULT 0,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
     CONSTRAINT "ModelPrice_pkey" PRIMARY KEY ("model")
@@ -998,6 +1000,8 @@ COMMENT ON COLUMN "ModelPrice"."capabilities" IS '模型能力分类：chat / em
 COMMENT ON COLUMN "ModelPrice"."sortOrder" IS '目录排序值，越小越靠前';
 COMMENT ON COLUMN "ModelPrice"."inputMilliCreditsPer1k" IS '输入每千 token 毫积分费率';
 COMMENT ON COLUMN "ModelPrice"."outputMilliCreditsPer1k" IS '输出每千 token 毫积分费率';
+COMMENT ON COLUMN "ModelPrice"."costInputCentsPerMillion" IS '输入成本价（分/百万 tokens），用于按成本×毛利自动定价；0 表示未填';
+COMMENT ON COLUMN "ModelPrice"."costOutputCentsPerMillion" IS '输出成本价（分/百万 tokens），用于按成本×毛利自动定价；0 表示未填';
 COMMENT ON COLUMN "ModelPrice"."updatedAt" IS '更新时间';
 COMMENT ON TABLE "Setting" IS '系统配置表：运营平台可调的运行参数，取值优先级为 DB > 环境变量 > 默认值';
 COMMENT ON COLUMN "Setting"."key" IS '配置键（见 SETTING_SPECS，如 maxRounds / confirmTimeoutMs / alertsEnabled）';

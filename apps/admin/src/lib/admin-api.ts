@@ -354,6 +354,12 @@ export function deleteModelProvider(id: string): Promise<void> {
   });
 }
 
+export interface ModelCostInput {
+  /** 成本价（分/百万 tokens），0 表示未填。 */
+  inputCentsPerMillion: number;
+  outputCentsPerMillion: number;
+}
+
 export function createAdminModel(input: {
   model: string;
   displayName?: string;
@@ -363,6 +369,7 @@ export function createAdminModel(input: {
   modalities?: ModelModality[];
   sortOrder?: number;
   prices: { inputMilliCreditsPer1k: number; outputMilliCreditsPer1k: number };
+  costs?: ModelCostInput;
 }): Promise<AdminModelDto> {
   return request('/api/admin/models', { method: 'POST', body: JSON.stringify(input) });
 }
@@ -376,8 +383,19 @@ export function updateAdminModel(input: {
   modalities?: ModelModality[];
   sortOrder?: number;
   prices?: { inputMilliCreditsPer1k: number; outputMilliCreditsPer1k: number };
+  costs?: ModelCostInput;
 }): Promise<AdminModelDto> {
   return request('/api/admin/models', { method: 'PATCH', body: JSON.stringify(input) });
+}
+
+/** 按成本 × 毛利重算所有填了成本的模型售价。 */
+export function repriceAdminModels(
+  markupPercent: number,
+): Promise<{ updated: number; markupPercent: number }> {
+  return request('/api/admin/models/reprice', {
+    method: 'POST',
+    body: JSON.stringify({ markupPercent }),
+  });
 }
 
 export function deleteAdminModel(model: string): Promise<void> {

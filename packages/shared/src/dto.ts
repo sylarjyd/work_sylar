@@ -1143,6 +1143,10 @@ export interface AdminModelDto {
   sortOrder: number;
   inputMilliCreditsPer1k: number;
   outputMilliCreditsPer1k: number;
+  /** 输入成本价（分/百万 tokens）；0 表示未填，不参与按成本重算。 */
+  costInputCentsPerMillion: number;
+  /** 输出成本价（分/百万 tokens）；0 表示未填。 */
+  costOutputCentsPerMillion: number;
   isDefault: boolean;
   updatedAt: string;
 }

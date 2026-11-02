@@ -84,9 +84,16 @@ interface ModelRow {
   sortOrder: number;
   inputMilliCreditsPer1k: number;
   outputMilliCreditsPer1k: number;
+  costInputCentsPerMillion: number;
+  costOutputCentsPerMillion: number;
   updatedAt: Date;
   provider: { id: string; name: string } | null;
 }
+
+/** 1 积分的内部结算价（元）：¥99/2000 积分 ≈ 0.0495。套餐调整时同步这里或设环境变量。 */
+const CREDIT_UNIT_CNY = Number(process.env.CREDIT_UNIT_CNY ?? 0.0495);
+/** 成本价上限（分/百万）：¥100 万/百万 tokens，足够覆盖任何厂商。 */
+const MAX_COST_CENTS = 100_000_000;
 
 function text(raw: unknown, code: string, maxLength: number): string {
   if (typeof raw !== 'string') throw new BadRequestException(code);
@@ -140,6 +147,37 @@ function prices(raw: unknown): {
     inputMilliCreditsPer1k: priceInt(p.inputMilliCreditsPer1k),
     outputMilliCreditsPer1k: priceInt(p.outputMilliCreditsPer1k),
   };
+}
+
+function costInt(raw: unknown): number {
+  if (typeof raw !== 'number' || !Number.isSafeInteger(raw) || raw < 0 || raw > MAX_COST_CENTS) {
+    throw new BadRequestException('invalid_cost');
+  }
+  return raw;
+}
+
+/** 成本价（分/百万 tokens）；两项都必填，0 表示未填成本。 */
+function costs(raw: unknown): {
+  costInputCentsPerMillion: number;
+  costOutputCentsPerMillion: number;
+} {
+  if (raw === null || typeof raw !== 'object') throw new BadRequestException('invalid_cost');
+  const c = raw as Record<string, unknown>;
+  return {
+    costInputCentsPerMillion: costInt(c.inputCentsPerMillion),
+    costOutputCentsPerMillion: costInt(c.outputCentsPerMillion),
+  };
+}
+
+/**
+ * 按「成本 × (1 + 毛利) ÷ 积分单价」折算售价（毫积分/1K），向上取整到 5。
+ * 例：成本 ¥2/百万、毛利 60% → 2 × 1.6 ÷ 0.0495 ≈ 64.6 → 65。
+ */
+function priceFromCost(costCentsPerMillion: number, markupPercent: number): number {
+  const sellCny = (costCentsPerMillion / 100) * (1 + markupPercent / 100);
+  const raw = sellCny / CREDIT_UNIT_CNY;
+  if (!Number.isFinite(raw) || raw <= 0) return 1;
+  return Math.max(1, Math.ceil(raw / 5) * 5);
 }
 
 function modelName(raw: unknown): string {
@@ -210,6 +248,8 @@ function toModelDto(row: ModelRow, defaultModel: string | null): AdminModelDto {
     sortOrder: row.sortOrder,
     inputMilliCreditsPer1k: row.inputMilliCreditsPer1k,
     outputMilliCreditsPer1k: row.outputMilliCreditsPer1k,
+    costInputCentsPerMillion: row.costInputCentsPerMillion ?? 0,
+    costOutputCentsPerMillion: row.costOutputCentsPerMillion ?? 0,
     isDefault: defaultModel === row.model,
     updatedAt: row.updatedAt.toISOString(),
   };
@@ -447,6 +487,7 @@ export class AdminModelsService {
       body?.modalities === undefined ? ['text'] : modalities(body.modalities);
     const order = body?.sortOrder === undefined ? 0 : sortOrder(body.sortOrder);
     const price = prices(body?.prices);
+    const cost = body?.costs === undefined ? undefined : costs(body.costs);
     try {
       const row = await this.prisma.$transaction(async (tx) => {
         const created = await tx.modelConfig.create({
@@ -459,6 +500,7 @@ export class AdminModelsService {
             modalities: modelModalities,
             sortOrder: order,
             ...price,
+            ...(cost ?? {}),
           },
           include: { provider: { select: { id: true, name: true } } },
         });
@@ -499,6 +541,8 @@ export class AdminModelsService {
       sortOrder?: number;
       inputMilliCreditsPer1k?: number;
       outputMilliCreditsPer1k?: number;
+      costInputCentsPerMillion?: number;
+      costOutputCentsPerMillion?: number;
     } = {};
     if (body?.displayName !== undefined) data.displayName = optionalText(body.displayName, 128);
     if (body?.providerId !== undefined) {
@@ -511,6 +555,7 @@ export class AdminModelsService {
     if (body?.modalities !== undefined) data.modalities = modalities(body.modalities);
     if (body?.sortOrder !== undefined) data.sortOrder = sortOrder(body.sortOrder);
     if (body?.prices !== undefined) Object.assign(data, prices(body.prices));
+    if (body?.costs !== undefined) Object.assign(data, costs(body.costs));
     if (Object.keys(data).length === 0) throw new BadRequestException('invalid_model_patch');
 
     const defaultModel = await this.readDefault(this.prisma);
@@ -563,6 +608,70 @@ export class AdminModelsService {
       if (code === 'P2003') throw new NotFoundException('provider_not_found');
       throw err;
     }
+  }
+
+  /**
+   * 按成本重算售价：只处理填了成本（任一 > 0）的模型，
+   * 售价 = 成本 × (1 + 毛利) ÷ 积分单价，向上取整到 5 毫积分/1K。
+   */
+  async repriceModels(
+    rawMarkup: unknown,
+    actor: AdminActor,
+  ): Promise<{ updated: number; markupPercent: number }> {
+    let markupPercent = 60;
+    if (rawMarkup !== undefined && rawMarkup !== null) {
+      if (
+        typeof rawMarkup !== 'number' ||
+        !Number.isFinite(rawMarkup) ||
+        rawMarkup < 0 ||
+        rawMarkup > 1000
+      ) {
+        throw new BadRequestException('invalid_markup');
+      }
+      markupPercent = Math.round(rawMarkup);
+    }
+
+    const rows = await this.prisma.modelConfig.findMany({
+      where: {
+        OR: [
+          { costInputCentsPerMillion: { gt: 0 } },
+          { costOutputCentsPerMillion: { gt: 0 } },
+        ],
+      },
+      select: {
+        model: true,
+        inputMilliCreditsPer1k: true,
+        outputMilliCreditsPer1k: true,
+        costInputCentsPerMillion: true,
+        costOutputCentsPerMillion: true,
+      },
+    });
+
+    let updated = 0;
+    await this.prisma.$transaction(async (tx) => {
+      for (const row of rows) {
+        const input =
+          row.costInputCentsPerMillion > 0
+            ? priceFromCost(row.costInputCentsPerMillion, markupPercent)
+            : row.inputMilliCreditsPer1k;
+        const output =
+          row.costOutputCentsPerMillion > 0
+            ? priceFromCost(row.costOutputCentsPerMillion, markupPercent)
+            : row.outputMilliCreditsPer1k;
+        await tx.modelConfig.update({
+          where: { model: row.model },
+          data: { inputMilliCreditsPer1k: input, outputMilliCreditsPer1k: output },
+        });
+        updated += 1;
+      }
+    });
+
+    await this.audit.bestEffort(actor, {
+      action: 'model.reprice',
+      targetType: 'modelConfig',
+      summary: { markupPercent, updated },
+    });
+    return { updated, markupPercent };
   }
 
   async removeModel(model: string, actor: AdminActor): Promise<void> {

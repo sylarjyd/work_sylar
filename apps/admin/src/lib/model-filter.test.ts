@@ -13,6 +13,8 @@ function model(patch: Partial<AdminModelDto> & { model: string }): AdminModelDto
     sortOrder: 0,
     inputMilliCreditsPer1k: 0,
     outputMilliCreditsPer1k: 0,
+    costInputCentsPerMillion: 0,
+    costOutputCentsPerMillion: 0,
     isDefault: false,
     updatedAt: '2026-10-01T00:00:00Z',
     ...patch,

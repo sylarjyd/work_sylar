@@ -107,6 +107,15 @@ export class AdminModelsController {
     await this.models.removeModel(model, actorOf(user, req));
   }
 
+  @Post('models/reprice')
+  repriceModels(
+    @CurrentUser() user: JwtPayload,
+    @Req() req: FastifyRequest,
+    @Body() body: Record<string, unknown>,
+  ): Promise<{ updated: number; markupPercent: number }> {
+    return this.models.repriceModels(body?.markupPercent, actorOf(user, req));
+  }
+
   @Post('models/test')
   testModel(
     @CurrentUser() user: JwtPayload,
