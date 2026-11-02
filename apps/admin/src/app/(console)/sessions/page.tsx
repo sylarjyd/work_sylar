@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import dynamic from 'next/dynamic';
 import {
   Alert,
   App,
@@ -28,7 +29,13 @@ import {
   listAdminSessions,
 } from '../../../lib/admin-api';
 import { clearToken, isUnauthorized } from '@ai-office/web-core';
-import { FilePreviewDialog, type PreviewTarget } from '@ai-office/web-core/file-preview';
+import type { PreviewTarget } from '@ai-office/web-core/file-preview';
+
+// 预览器带 file-viewer 全套渲染器，体量很大；按需加载，避免拖慢会话页编译与首屏。
+const FilePreviewDialog = dynamic(
+  () => import('@ai-office/web-core/file-preview').then((mod) => mod.FilePreviewDialog),
+  { ssr: false },
+);
 
 const PAGE_SIZE = 20;
 const MESSAGE_PAGE_SIZE = 50;

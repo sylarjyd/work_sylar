@@ -96,6 +96,20 @@ export function AdminShell({ children }: { children: ReactNode }) {
     else if (window.matchMedia('(max-width: 960px)').matches) setCollapsed(true);
   }, []);
 
+  // 空闲时预取全部菜单路由：开发模式下按需编译才是切页慢的主因，先编译好再点。
+  useEffect(() => {
+    if (!ready) return;
+    const warm = () => {
+      for (const item of ADMIN_NAV_ITEMS) router.prefetch(item.href);
+    };
+    const idle = window.requestIdleCallback?.(warm, { timeout: 2000 });
+    if (idle === undefined) {
+      const timer = window.setTimeout(warm, 800);
+      return () => window.clearTimeout(timer);
+    }
+    return () => window.cancelIdleCallback(idle);
+  }, [ready, router]);
+
   function toggleCollapsed() {
     const next = !collapsed;
     setCollapsed(next);
@@ -120,7 +134,12 @@ export function AdminShell({ children }: { children: ReactNode }) {
     icon: ICONS[item.href],
     // 折叠时 AntD 用 title 作为图标 tooltip；显式给字符串避免把 Link 塞进 tooltip。
     title: item.label,
-    label: <Link href={item.href}>{item.label}</Link>,
+    label: (
+      // 悬停即预取：开发模式下路由按需编译，指针停留的这几百毫秒足够后台编译完。
+      <Link href={item.href} onMouseEnter={() => router.prefetch(item.href)}>
+        {item.label}
+      </Link>
+    ),
   });
 
   // 分组做二级菜单，可点击标题收起/展开，独立页面直接作为一级菜单；
