@@ -35,9 +35,9 @@ import {
   isForbidden,
   listAdminKbBases,
 } from '../../../lib/admin-api';
+import { adminPagination, PAGE_SIZE_DEFAULT } from '../../../lib/pagination';
 import { clearToken, isUnauthorized } from '@ai-office/web-core';
 
-const PAGE_SIZE = 20;
 const DOC_PAGE_SIZE = 10;
 
 function formatBytes(bytes: number): string {
@@ -82,6 +82,7 @@ export default function AdminKbPage() {
   const [items, setItems] = useState<AdminKbBaseItemDto[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(PAGE_SIZE_DEFAULT);
   const [qInput, setQInput] = useState('');
   const [tenantInput, setTenantInput] = useState('');
   const [q, setQ] = useState('');
@@ -115,7 +116,7 @@ export default function AdminKbPage() {
     setLoading(true);
     setError('');
     try {
-      const data = await listAdminKbBases({ page, pageSize: PAGE_SIZE, q, tenantId });
+      const data = await listAdminKbBases({ page, pageSize, q, tenantId });
       if (id !== loadSeq.current) return;
       setItems(data.items);
       setTotal(data.total);
@@ -125,7 +126,7 @@ export default function AdminKbPage() {
     } finally {
       if (id === loadSeq.current) setLoading(false);
     }
-  }, [page, q, tenantId, handleError]);
+  }, [page, pageSize, q, tenantId, handleError]);
 
   useEffect(() => {
     void load();
@@ -443,14 +444,15 @@ export default function AdminKbPage() {
           columns={columns}
           dataSource={items}
           scroll={{ x: 1000 }}
-          pagination={{
-            current: page,
-            pageSize: PAGE_SIZE,
+          pagination={adminPagination({
+            page,
+            pageSize,
             total,
-            showSizeChanger: false,
-            showTotal: (t) => `共 ${t} 个知识库`,
-            onChange: setPage,
-          }}
+            onChange: (nextPage, nextSize) => {
+              setPage(nextSize === pageSize ? nextPage : 1);
+              setPageSize(nextSize);
+            },
+          })}
         />
       </Card>
 

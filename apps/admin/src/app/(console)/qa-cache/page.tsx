@@ -26,9 +26,9 @@ import {
   resetAdminSetting,
   updateAdminSetting,
 } from '../../../lib/admin-api';
+import { adminPagination, PAGE_SIZE_DEFAULT } from '../../../lib/pagination';
 import { clearToken, isUnauthorized } from '@ai-office/web-core';
 
-const PAGE_SIZE = 20;
 const DEFAULT_TTL = 300;
 const MIN_TTL = 10;
 const MAX_TTL = 86400;
@@ -47,6 +47,7 @@ export default function AdminQaCachePage() {
   const [detail, setDetail] = useState<AdminQaCacheItemDto | null>(null);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(PAGE_SIZE_DEFAULT);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -85,7 +86,7 @@ export default function AdminQaCachePage() {
     setLoading(true);
     setError('');
     try {
-      const data = await listAdminQaCache({ page, pageSize: PAGE_SIZE });
+      const data = await listAdminQaCache({ page, pageSize });
       // 过期响应不写状态
       if (id !== loadSeq.current) return true;
       setItems(data.items);
@@ -101,7 +102,7 @@ export default function AdminQaCachePage() {
     } finally {
       if (id === loadSeq.current) setLoading(false);
     }
-  }, [page, handleErr]);
+  }, [page, pageSize, handleErr]);
 
   // 写操作结束后必须调用最新的 load，避免用旧的页码闭包覆盖后续状态
   const loadRef = useRef(load);
@@ -394,13 +395,15 @@ export default function AdminQaCachePage() {
           rowClassName={() => 'admin-clickable-row'}
           onRow={(record) => ({ onClick: () => setDetail(record) })}
           locale={{ emptyText: '暂无未过期缓存' }}
-          pagination={{
-            current: page,
-            pageSize: PAGE_SIZE,
+          pagination={adminPagination({
+            page,
+            pageSize,
             total,
-            showSizeChanger: false,
-            onChange: setPage,
-          }}
+            onChange: (nextPage, nextSize) => {
+              setPage(nextSize === pageSize ? nextPage : 1);
+              setPageSize(nextSize);
+            },
+          })}
         />
       </Card>
 

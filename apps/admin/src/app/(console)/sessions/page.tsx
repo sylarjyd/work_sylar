@@ -28,6 +28,7 @@ import {
   listAdminMessages,
   listAdminSessions,
 } from '../../../lib/admin-api';
+import { adminPagination, PAGE_SIZE_DEFAULT } from '../../../lib/pagination';
 import { clearToken, isUnauthorized } from '@ai-office/web-core';
 import type { PreviewTarget } from '@ai-office/web-core/file-preview';
 
@@ -37,7 +38,6 @@ const FilePreviewDialog = dynamic(
   { ssr: false },
 );
 
-const PAGE_SIZE = 20;
 const MESSAGE_PAGE_SIZE = 50;
 
 function formatTime(value: string): string {
@@ -54,6 +54,7 @@ export default function AdminSessionsPage() {
   const [items, setItems] = useState<AdminSessionItemDto[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(PAGE_SIZE_DEFAULT);
   const [q, setQ] = useState('');
   const [status, setStatus] = useState('');
   const [tenantId, setTenantId] = useState('');
@@ -98,7 +99,7 @@ export default function AdminSessionsPage() {
     try {
       const data = await listAdminSessions({
         page,
-        pageSize: PAGE_SIZE,
+        pageSize,
         q,
         status,
         tenantId,
@@ -115,7 +116,7 @@ export default function AdminSessionsPage() {
     } finally {
       if (id === loadSeq.current) setLoading(false);
     }
-  }, [page, q, status, tenantId, userId, handleErr]);
+  }, [page, pageSize, q, status, tenantId, userId, handleErr]);
 
   // 写操作结束后必须调用最新的 load，避免用旧的筛选闭包覆盖用户刚改的条件
   const loadRef = useRef(load);
@@ -389,13 +390,15 @@ export default function AdminSessionsPage() {
           dataSource={items}
           scroll={{ x: 1100 }}
           locale={{ emptyText: '没有匹配的会话' }}
-          pagination={{
-            current: page,
-            pageSize: PAGE_SIZE,
+          pagination={adminPagination({
+            page,
+            pageSize,
             total,
-            showSizeChanger: false,
-            onChange: setPage,
-          }}
+            onChange: (nextPage, nextSize) => {
+              setPage(nextSize === pageSize ? nextPage : 1);
+              setPageSize(nextSize);
+            },
+          })}
         />
       </Card>
 

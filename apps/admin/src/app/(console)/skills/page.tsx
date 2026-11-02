@@ -32,12 +32,12 @@ import {
   testAdminSkill,
   uploadAdminSkillPackage,
 } from '../../../lib/admin-api';
+import { adminPagination, PAGE_SIZE_DEFAULT } from '../../../lib/pagination';
 import { clearToken, isUnauthorized } from '@ai-office/web-core';
 import { SkillDetailDialog } from '@ai-office/web-core/skill-detail';
 import { SkillEditor, type SkillEditorValue } from '@ai-office/web-core/skill-editor';
 import { SkillTestDialog } from '@ai-office/web-core/skill-test';
 
-const PAGE_SIZE = 20;
 
 const EMPTY_VALUE: SkillEditorValue = {
   meta: { name: '', slug: '', description: '', content: '' },
@@ -80,6 +80,7 @@ export default function AdminSkillsPage() {
   const [items, setItems] = useState<SkillDto[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(PAGE_SIZE_DEFAULT);
   const [scope, setScope] = useState<'all' | 'public' | 'personal'>('all');
   const [q, setQ] = useState('');
   const [detailFor, setDetailFor] = useState<SkillDto | null>(null);
@@ -124,7 +125,7 @@ export default function AdminSkillsPage() {
     try {
       const data = await listAdminSkills({
         page,
-        pageSize: PAGE_SIZE,
+        pageSize,
         ...(scope === 'all' ? {} : { scope }),
         ...(q.trim() ? { q: q.trim() } : {}),
       });
@@ -138,7 +139,7 @@ export default function AdminSkillsPage() {
     } finally {
       if (id === loadSeq.current) setLoading(false);
     }
-  }, [page, scope, q, handleErr]);
+  }, [page, pageSize, scope, q, handleErr]);
 
   const loadRef = useRef(load);
   useEffect(() => {
@@ -486,14 +487,15 @@ export default function AdminSkillsPage() {
           dataSource={items}
           scroll={{ x: 1300 }}
           locale={{ emptyText: '暂无技能' }}
-          pagination={{
-            current: page,
-            pageSize: PAGE_SIZE,
+          pagination={adminPagination({
+            page,
+            pageSize,
             total,
-            showSizeChanger: false,
-            showTotal: (t) => `共 ${t} 条`,
-            onChange: setPage,
-          }}
+            onChange: (nextPage, nextSize) => {
+              setPage(nextSize === pageSize ? nextPage : 1);
+              setPageSize(nextSize);
+            },
+          })}
         />
       </Card>
 

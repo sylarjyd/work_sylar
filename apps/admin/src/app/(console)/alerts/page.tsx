@@ -24,6 +24,7 @@ import {
   sendAdminAlertTest,
   updateAdminAlertRule,
 } from '../../../lib/admin-api';
+import { adminPagination, PAGE_SIZE_DEFAULT } from '../../../lib/pagination';
 import { clearToken, isUnauthorized } from '@ai-office/web-core';
 import {
   alertDeliveryText,
@@ -32,7 +33,6 @@ import {
   type AlertRuleDraft,
 } from '../../../lib/alert-draft';
 
-const PAGE_SIZE = 20;
 
 function formatTime(value: string): string {
   return new Date(value).toLocaleString('zh-CN', { hour12: false });
@@ -49,6 +49,7 @@ export default function AdminAlertsPage() {
   const [events, setEvents] = useState<AdminAlertEventDto[]>([]);
   const [eventsTotal, setEventsTotal] = useState(0);
   const [eventPage, setEventPage] = useState(1);
+  const [eventPageSize, setEventPageSize] = useState(PAGE_SIZE_DEFAULT);
   const [eventStatus, setEventStatus] = useState<'' | 'firing' | 'resolved'>('');
   const [rulesLoading, setRulesLoading] = useState(true);
   const [eventsLoading, setEventsLoading] = useState(true);
@@ -101,7 +102,7 @@ export default function AdminAlertsPage() {
       const data = await listAdminAlertEvents({
         status: eventStatus || undefined,
         page: eventPage,
-        pageSize: PAGE_SIZE,
+        pageSize: eventPageSize,
       });
       if (id !== eventsSeq.current) return;
       setEvents(data.items);
@@ -111,7 +112,7 @@ export default function AdminAlertsPage() {
     } finally {
       if (id === eventsSeq.current) setEventsLoading(false);
     }
-  }, [eventStatus, eventPage, handleErr]);
+  }, [eventStatus, eventPage, eventPageSize, handleErr]);
 
   useEffect(() => {
     void loadEvents();
@@ -409,13 +410,15 @@ export default function AdminAlertsPage() {
           dataSource={events}
           scroll={{ x: 1000 }}
           locale={{ emptyText: '暂无事件' }}
-          pagination={{
-            current: eventPage,
-            pageSize: PAGE_SIZE,
+          pagination={adminPagination({
+            page: eventPage,
+            pageSize: eventPageSize,
             total: eventsTotal,
-            showSizeChanger: false,
-            onChange: setEventPage,
-          }}
+            onChange: (nextPage, nextSize) => {
+              setEventPage(nextSize === eventPageSize ? nextPage : 1);
+              setEventPageSize(nextSize);
+            },
+          })}
         />
       </Card>
     </Space>

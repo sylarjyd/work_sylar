@@ -36,9 +36,9 @@ import {
   listAdminSkills,
   updateAdminAssistant,
 } from '../../../lib/admin-api';
+import { adminPagination, PAGE_SIZE_DEFAULT } from '../../../lib/pagination';
 import { clearToken, isUnauthorized } from '@ai-office/web-core';
 
-const PAGE_SIZE = 20;
 
 const PERMISSION_LABELS: Record<string, string> = {
   standard: '标准',
@@ -71,6 +71,7 @@ export default function AdminAssistantsPage() {
   const [items, setItems] = useState<AdminAssistantDto[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(PAGE_SIZE_DEFAULT);
   const [scope, setScope] = useState<'all' | 'public' | 'personal'>('all');
   const [q, setQ] = useState('');
   const [detail, setDetail] = useState<AdminAssistantDto | null>(null);
@@ -107,7 +108,7 @@ export default function AdminAssistantsPage() {
     try {
       const data = await listAdminAssistants({
         page,
-        pageSize: PAGE_SIZE,
+        pageSize,
         ...(scope === 'all' ? {} : { scope }),
         ...(q.trim() ? { q: q.trim() } : {}),
       });
@@ -120,7 +121,7 @@ export default function AdminAssistantsPage() {
     } finally {
       if (id === loadSeq.current) setLoading(false);
     }
-  }, [page, scope, q, handleErr]);
+  }, [page, pageSize, scope, q, handleErr]);
 
   useEffect(() => {
     void load();
@@ -362,14 +363,15 @@ export default function AdminAssistantsPage() {
           dataSource={items}
           scroll={{ x: 1500 }}
           locale={{ emptyText: '暂无助手' }}
-          pagination={{
-            current: page,
-            pageSize: PAGE_SIZE,
+          pagination={adminPagination({
+            page,
+            pageSize,
             total,
-            showSizeChanger: false,
-            showTotal: (t) => `共 ${t} 条`,
-            onChange: setPage,
-          }}
+            onChange: (nextPage, nextSize) => {
+              setPage(nextSize === pageSize ? nextPage : 1);
+              setPageSize(nextSize);
+            },
+          })}
         />
       </Card>
 

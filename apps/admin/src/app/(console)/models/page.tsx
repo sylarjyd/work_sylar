@@ -47,6 +47,7 @@ import {
 } from '../../../lib/admin-api';
 import { PROVIDER_PRESETS, presetByKey, presetKeyOfBaseUrl } from '../../../lib/model-providers';
 import { filterAdminModels, UNBOUND_PROVIDER } from '../../../lib/model-filter';
+import { adminPagination, PAGE_SIZE_DEFAULT } from '../../../lib/pagination';
 import { clearToken, isUnauthorized } from '@ai-office/web-core';
 
 /** 与数据库 int 上限保持一致，避免提交后才由服务端报错。 */
@@ -117,6 +118,9 @@ export default function AdminModelsPage() {
   const [capFilter, setCapFilter] = useState<'all' | ModelCapability>('all');
   // 厂商筛选与能力分类叠加生效；'__none__' 表示未绑定厂商的环境变量模型。
   const [providerFilter, setProviderFilter] = useState('all');
+  // 模型列表在前端筛选，分页也在前端做；切换筛选后页码超出范围会自动夹回。
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(PAGE_SIZE_DEFAULT);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [loading, setLoading] = useState(true);
@@ -477,6 +481,10 @@ export default function AdminModelsPage() {
     providerId: providerFilter,
     capability: capFilter,
   });
+  // 筛选后总数变小可能让当前页越界：渲染时夹取，不额外触发一次 setState。
+  const maxPage = Math.max(1, Math.ceil(models.length / pageSize));
+  const currentPage = Math.min(page, maxPage);
+  const pagedModels = models.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
   const columns: TableColumnsType<AdminModelDto> = [
     {
@@ -763,9 +771,17 @@ export default function AdminModelsPage() {
           size="middle"
           loading={loading}
           columns={columns}
-          dataSource={models}
+          dataSource={pagedModels}
           scroll={{ x: 1500 }}
-          pagination={false}
+          pagination={adminPagination({
+            page: currentPage,
+            pageSize,
+            total: models.length,
+            onChange: (nextPage, nextSize) => {
+              setPage(nextSize === pageSize ? nextPage : 1);
+              setPageSize(nextSize);
+            },
+          })}
           locale={{
             emptyText:
               providerFilter === 'all' && capFilter === 'all'

@@ -11,6 +11,7 @@ import {
   listAdminUsers,
   updateAdminUser,
 } from '../../../lib/admin-api';
+import { adminPagination, PAGE_SIZE_DEFAULT } from '../../../lib/pagination';
 import { clearToken, isUnauthorized } from '@ai-office/web-core';
 
 export default function AdminUsersPage() {
@@ -19,6 +20,7 @@ export default function AdminUsersPage() {
   const [items, setItems] = useState<AdminUserItemDto[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(PAGE_SIZE_DEFAULT);
   const [q, setQ] = useState('');
   const [status, setStatus] = useState('');
   const [role, setRole] = useState('');
@@ -32,7 +34,7 @@ export default function AdminUsersPage() {
     setLoading(true);
     setError('');
     try {
-      const data = await listAdminUsers({ page, pageSize: 20, q, status, role });
+      const data = await listAdminUsers({ page, pageSize, q, status, role });
       // 过期响应不写状态
       if (id !== loadSeq.current) return true;
       setItems(data.items);
@@ -54,7 +56,7 @@ export default function AdminUsersPage() {
     } finally {
       if (id === loadSeq.current) setLoading(false);
     }
-  }, [page, q, status, role, router]);
+  }, [page, pageSize, q, status, role, router]);
 
   // 写操作结束后必须调用最新的 load，避免用旧的筛选闭包覆盖用户刚改的条件
   const loadRef = useRef(load);
@@ -242,13 +244,15 @@ export default function AdminUsersPage() {
           dataSource={items}
           scroll={{ x: 760 }}
           locale={{ emptyText: '没有匹配的用户' }}
-          pagination={{
-            current: page,
-            pageSize: 20,
+          pagination={adminPagination({
+            page,
+            pageSize,
             total,
-            showSizeChanger: false,
-            onChange: setPage,
-          }}
+            onChange: (nextPage, nextSize) => {
+              setPage(nextSize === pageSize ? nextPage : 1);
+              setPageSize(nextSize);
+            },
+          })}
         />
       </Card>
     </Space>

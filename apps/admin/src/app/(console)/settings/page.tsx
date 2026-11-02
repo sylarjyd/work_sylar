@@ -25,6 +25,7 @@ import {
   updateAdminSetting,
 } from '../../../lib/admin-api';
 import { clearToken, isUnauthorized } from '@ai-office/web-core';
+import { adminPagination, PAGE_SIZE_DEFAULT } from '../../../lib/pagination';
 
 const SOURCE_LABEL: Record<SettingSource, string> = {
   db: '数据库',
@@ -124,6 +125,8 @@ export default function AdminSettingsPage() {
   const router = useRouter();
   const { modal } = App.useApp();
   const [items, setItems] = useState<AdminSettingDto[]>([]);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(PAGE_SIZE_DEFAULT);
   const [draft, setDraft] = useState<Record<string, string>>({});
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -444,9 +447,17 @@ export default function AdminSettingsPage() {
           size="middle"
           loading={loading}
           columns={columns}
-          dataSource={items}
+          dataSource={items.slice((page - 1) * pageSize, page * pageSize)}
           scroll={{ x: 1100 }}
-          pagination={false}
+          pagination={adminPagination({
+            page,
+            pageSize,
+            total: items.length,
+            onChange: (nextPage, nextSize) => {
+              setPage(nextSize === pageSize ? nextPage : 1);
+              setPageSize(nextSize);
+            },
+          })}
           locale={{ emptyText: '暂无参数' }}
         />
       </Card>

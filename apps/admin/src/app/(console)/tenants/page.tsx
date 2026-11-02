@@ -30,9 +30,9 @@ import {
   listAdminPlans,
   listAdminTenants,
 } from '../../../lib/admin-api';
+import { adminPagination, PAGE_SIZE_DEFAULT } from '../../../lib/pagination';
 import { clearToken, isUnauthorized } from '@ai-office/web-core';
 
-const PAGE_SIZE = 20;
 
 function formatTime(value: string): string {
   return new Date(value).toLocaleString('zh-CN', { hour12: false });
@@ -45,6 +45,7 @@ export default function AdminTenantsPage() {
   const [plans, setPlans] = useState<AdminPlanDto[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(PAGE_SIZE_DEFAULT);
   const [q, setQ] = useState('');
   const [planId, setPlanId] = useState('');
   const [detail, setDetail] = useState<AdminTenantDetailDto | null>(null);
@@ -86,7 +87,7 @@ export default function AdminTenantsPage() {
       if (!opts?.preserveError) setError('');
       try {
         const [data, planRows] = await Promise.all([
-          listAdminTenants({ page, pageSize: PAGE_SIZE, q, planId }),
+          listAdminTenants({ page, pageSize, q, planId }),
           listAdminPlans(),
         ]);
         // 过期请求：已有更新的请求在途，视为无需提示失败
@@ -313,13 +314,15 @@ export default function AdminTenantsPage() {
           dataSource={items}
           scroll={{ x: 960 }}
           locale={{ emptyText: '没有匹配的租户' }}
-          pagination={{
-            current: page,
-            pageSize: PAGE_SIZE,
+          pagination={adminPagination({
+            page,
+            pageSize,
             total,
-            showSizeChanger: false,
-            onChange: setPage,
-          }}
+            onChange: (nextPage, nextSize) => {
+              setPage(nextSize === pageSize ? nextPage : 1);
+              setPageSize(nextSize);
+            },
+          })}
         />
       </Card>
 

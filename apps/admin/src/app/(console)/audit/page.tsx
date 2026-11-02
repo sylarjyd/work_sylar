@@ -6,9 +6,9 @@ import { Alert, Card, Input, Space, Table, Typography } from 'antd';
 import type { TableColumnsType } from 'antd';
 import type { AdminAuditItemDto } from '@ai-office/shared';
 import { adminErrorText, isForbidden, listAdminAudit } from '../../../lib/admin-api';
+import { adminPagination, PAGE_SIZE_DEFAULT } from '../../../lib/pagination';
 import { clearToken, isUnauthorized } from '@ai-office/web-core';
 
-const PAGE_SIZE = 20;
 
 function formatTime(value: string): string {
   return new Date(value).toLocaleString('zh-CN', { hour12: false });
@@ -19,6 +19,7 @@ export default function AdminAuditPage() {
   const [items, setItems] = useState<AdminAuditItemDto[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(PAGE_SIZE_DEFAULT);
   const [action, setAction] = useState('');
   const [targetType, setTargetType] = useState('');
   const [targetId, setTargetId] = useState('');
@@ -51,7 +52,7 @@ export default function AdminAuditPage() {
     try {
       const data = await listAdminAudit({
         page,
-        pageSize: PAGE_SIZE,
+        pageSize,
         action,
         targetType,
         targetId,
@@ -68,7 +69,7 @@ export default function AdminAuditPage() {
     } finally {
       if (id === loadSeq.current) setLoading(false);
     }
-  }, [page, action, targetType, targetId, actorId, handleErr]);
+  }, [page, pageSize, action, targetType, targetId, actorId, handleErr]);
 
   useEffect(() => {
     void load();
@@ -170,13 +171,15 @@ export default function AdminAuditPage() {
           dataSource={items}
           scroll={{ x: 1100 }}
           locale={{ emptyText: '暂无审计记录' }}
-          pagination={{
-            current: page,
-            pageSize: PAGE_SIZE,
+          pagination={adminPagination({
+            page,
+            pageSize,
             total,
-            showSizeChanger: false,
-            onChange: setPage,
-          }}
+            onChange: (nextPage, nextSize) => {
+              setPage(nextSize === pageSize ? nextPage : 1);
+              setPageSize(nextSize);
+            },
+          })}
         />
       </Card>
     </Space>
