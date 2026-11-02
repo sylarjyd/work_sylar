@@ -892,6 +892,30 @@ export interface CreditLedgerItemDto {
   createdAt: string;
 }
 
+/** 套餐订单（用户侧）。 */
+export interface PlanOrderDto {
+  id: string;
+  planId: string;
+  planName: string;
+  amountCents: number;
+  /** pending / paid / canceled / refunded */
+  status: string;
+  /** mock / wechat / alipay */
+  provider: string;
+  providerTradeNo: string | null;
+  periodStart: string | null;
+  periodEnd: string | null;
+  createdAt: string;
+  paidAt: string | null;
+}
+
+/** 运营端订单行：带租户与用户信息。 */
+export interface AdminPlanOrderDto extends PlanOrderDto {
+  tenantId: string;
+  tenantName: string;
+  userEmail: string;
+}
+
 export interface CreditLedgerPageDto {
   items: CreditLedgerItemDto[];
   nextCursor: string | null;

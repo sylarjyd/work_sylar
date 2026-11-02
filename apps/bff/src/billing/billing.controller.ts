@@ -1,5 +1,21 @@
-import { BadRequestException, Controller, Get, Query, UseGuards } from '@nestjs/common';
-import type { BillingSummaryDto, PlanDto, CreditLedgerPageDto, UsageAggregateDto } from '@ai-office/shared';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  Param,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
+import type {
+  BillingSummaryDto,
+  PlanDto,
+  CreditLedgerPageDto,
+  PlanOrderDto,
+  UsageAggregateDto,
+} from '@ai-office/shared';
 import { BillingService } from './billing.service';
 import { JwtGuard } from '../auth/jwt.guard';
 import { CurrentUser } from '../auth/current-user';
@@ -56,6 +72,31 @@ export class BillingController {
         ? new Date(toDate.getTime() - 365 * 24 * 60 * 60 * 1000)
         : fromDate;
     return this.billing.usage(user.tenantId, start, toDate, groupBy === 'model' ? 'model' : 'day');
+  }
+
+  @Get('orders')
+  orders(@CurrentUser() user: JwtPayload): Promise<PlanOrderDto[]> {
+    return this.billing.listOrders(user.tenantId);
+  }
+
+  @Post('orders')
+  createOrder(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: { planId?: unknown; provider?: unknown },
+  ): Promise<PlanOrderDto> {
+    if (typeof body?.planId !== 'string' || body.planId === '') {
+      throw new BadRequestException('invalid_plan');
+    }
+    return this.billing.createOrder(user.tenantId, user.sub, body.planId, body.provider);
+  }
+
+  @Post('orders/:id/pay')
+  @HttpCode(200)
+  payOrder(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+  ): Promise<PlanOrderDto> {
+    return this.billing.payOrder(user.tenantId, id);
   }
 }
 

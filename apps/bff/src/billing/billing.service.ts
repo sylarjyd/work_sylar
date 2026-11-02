@@ -13,6 +13,7 @@ import type {
   BillingSummaryDto,
   CreditLedgerPageDto,
   PlanDto,
+  PlanOrderDto,
   RunBilling,
   UsageAggregateDto,
   UsageEvent,
@@ -31,6 +32,12 @@ type Db = Prisma.TransactionClient;
 export type BillingWriteHook = (tx: Prisma.TransactionClient) => Promise<void>;
 
 const HOLD_TTL_MS = 24 * 60 * 60 * 1000;
+
+/** free 体验套餐不随月份续发，周期设为长期有效；余额耗尽后由 402 引导订阅。 */
+const FREE_PERIOD_END = new Date('9999-12-31T00:00:00.000Z');
+
+/** 订单支付渠道：mock 用于联调，wechat/alipay 需配置商户参数后启用。 */
+const ORDER_PROVIDERS = ['mock', 'wechat', 'alipay'];
 
 /** 当前自然月（UTC）：月初到下月月初。 */
 export function currentPeriod(now: Date): { start: Date; end: Date } {
@@ -103,15 +110,14 @@ export class BillingService implements OnModuleDestroy {
       return { plan: existing.plan, sub: { ...existing, status: 'expired' } };
     }
 
-    // free 自动续期：条件更新保证并发下只有一方发放。
-    const { start, end } = currentPeriod(now);
+    // free 是「一次性体验」：到期后不再续发积分，只把周期延长到长期有效。
+    const { start } = currentPeriod(now);
     const renewed = await this.prisma.$transaction(async (tx) => {
       const res = await tx.subscription.updateMany({
         where: { tenantId, periodEnd: { lte: now } },
-        data: { status: 'active', periodStart: start, periodEnd: end },
+        data: { status: 'active', periodStart: start, periodEnd: FREE_PERIOD_END },
       });
       if (res.count === 0) return null;
-      await this.grantPeriod(tx, tenantId, existing.plan, start, end);
       return tx.subscription.findUnique({ where: { tenantId } });
     });
     if (renewed) return { plan: existing.plan, sub: renewed };
@@ -127,12 +133,14 @@ export class BillingService implements OnModuleDestroy {
     now: Date,
   ): Promise<{ plan: Plan; sub: Subscription }> {
     const plan = await this.requirePlan('free');
-    const { start, end } = currentPeriod(now);
+    const start = now;
+    const end = FREE_PERIOD_END;
     try {
       const sub = await this.prisma.$transaction(async (tx) => {
         const created = await tx.subscription.create({
           data: { tenantId, planId: plan.id, status: 'active', periodStart: start, periodEnd: end },
         });
+        // 体验额度只发一次；之后余额不足即 402，引导订阅。
         await this.grantPeriod(tx, tenantId, plan, start, end);
         return created;
       });
@@ -517,6 +525,82 @@ export class BillingService implements OnModuleDestroy {
     return this.summary(tenantId);
   }
 
+  /** 用户下单：只创建待支付订单，金额取套餐当前价格快照。 */
+  async createOrder(
+    tenantId: string,
+    userId: string,
+    planId: string,
+    providerRaw: unknown,
+  ): Promise<PlanOrderDto> {
+    const provider = typeof providerRaw === 'string' && providerRaw ? providerRaw : 'mock';
+    if (!ORDER_PROVIDERS.includes(provider)) {
+      throw new BadRequestException('invalid_payment_provider');
+    }
+    if (provider !== 'mock') throw new BadRequestException('payment_not_configured');
+    const plan = await this.prisma.plan.findUnique({ where: { id: planId } });
+    if (!plan || !plan.active) throw new NotFoundException('plan_not_found');
+    if (plan.id === 'free') throw new BadRequestException('free_not_subscribable');
+    const row = await this.prisma.planOrder.create({
+      data: {
+        tenantId,
+        userId,
+        planId: plan.id,
+        amountCents: plan.priceCents,
+        provider,
+        status: 'pending',
+      },
+      include: { plan: true },
+    });
+    return toPlanOrderDto(row);
+  }
+
+  /** 模拟支付：原子地把订单置为 paid 并开通/续期订阅、发放积分。 */
+  async payOrder(tenantId: string, orderId: string): Promise<PlanOrderDto> {
+    const order = await this.prisma.planOrder.findFirst({
+      where: { id: orderId, tenantId },
+      include: { plan: true },
+    });
+    if (!order) throw new NotFoundException('order_not_found');
+    if (order.status === 'paid') return toPlanOrderDto(order);
+    if (order.status !== 'pending') throw new BadRequestException('order_not_payable');
+    if (order.provider !== 'mock') throw new BadRequestException('payment_not_configured');
+
+    const now = new Date();
+    const end = addMonth(now);
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const locked = await tx.planOrder.updateMany({
+        where: { id: orderId, tenantId, status: 'pending' },
+        data: {
+          status: 'paid',
+          paidAt: now,
+          providerTradeNo: `mock_${now.getTime()}`,
+          periodStart: now,
+          periodEnd: end,
+        },
+      });
+      if (locked.count === 0) throw new BadRequestException('order_not_payable');
+      await tx.subscription.upsert({
+        where: { tenantId },
+        create: { tenantId, planId: order.planId, status: 'active', periodStart: now, periodEnd: end },
+        update: { planId: order.planId, status: 'active', periodStart: now, periodEnd: end },
+      });
+      await this.grantPeriod(tx, tenantId, order.plan, now, end);
+      return tx.planOrder.findUnique({ where: { id: orderId }, include: { plan: true } });
+    });
+    return toPlanOrderDto(updated as NonNullable<typeof updated>);
+  }
+
+  /** 用户自己的订单，最近 50 条。 */
+  async listOrders(tenantId: string): Promise<PlanOrderDto[]> {
+    const rows = await this.prisma.planOrder.findMany({
+      where: { tenantId },
+      orderBy: { createdAt: 'desc' },
+      take: 50,
+      include: { plan: true },
+    });
+    return rows.map(toPlanOrderDto);
+  }
+
   async adjust(
     tenantId: string,
     amount: number,
@@ -715,4 +799,33 @@ export class BillingService implements OnModuleDestroy {
       ]),
     );
   }
+}
+
+/** 订单 DTO：金额与周期均取订单快照，套餐名取当前套餐名。 */
+function toPlanOrderDto(row: {
+  id: string;
+  planId: string;
+  amountCents: number;
+  status: string;
+  provider: string;
+  providerTradeNo: string | null;
+  periodStart: Date | null;
+  periodEnd: Date | null;
+  createdAt: Date;
+  paidAt: Date | null;
+  plan: { name: string };
+}): PlanOrderDto {
+  return {
+    id: row.id,
+    planId: row.planId,
+    planName: row.plan.name,
+    amountCents: row.amountCents,
+    status: row.status,
+    provider: row.provider,
+    providerTradeNo: row.providerTradeNo,
+    periodStart: row.periodStart?.toISOString() ?? null,
+    periodEnd: row.periodEnd?.toISOString() ?? null,
+    createdAt: row.createdAt.toISOString(),
+    paidAt: row.paidAt?.toISOString() ?? null,
+  };
 }
