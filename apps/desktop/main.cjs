@@ -1,5 +1,22 @@
 const { app, BrowserWindow, Menu, shell, session, dialog } = require('electron');
 const path = require('node:path');
+const fs = require('node:fs');
+const os = require('node:os');
+
+// WORKBUDDY_DEBUG=1 时把启动过程写入临时目录，便于排查启动即退出的问题。
+const DEBUG = process.env.WORKBUDDY_DEBUG === '1';
+const DEBUG_FILE = path.join(os.tmpdir(), 'worksylar-boot.log');
+function bootLog(message) {
+  if (!DEBUG) return;
+  try {
+    fs.appendFileSync(DEBUG_FILE, `${new Date().toISOString()} ${message}\n`);
+  } catch {
+    // 日志失败不影响启动。
+  }
+}
+process.on('uncaughtException', (err) => bootLog(`uncaught: ${err && err.stack}`));
+process.on('unhandledRejection', (err) => bootLog(`rejection: ${err}`));
+bootLog(`boot pid=${process.pid}`);
 
 // 默认连本地工作台，方便当前阶段直接使用；线上通过 WORKBUDDY_URL 覆盖。
 const APP_URL = process.env.WORKBUDDY_URL || 'http://localhost:3000';
@@ -33,6 +50,7 @@ function createWindow() {
   });
 
   mainWindow.loadURL(APP_URL);
+  bootLog(`loadURL ${APP_URL}`);
 
   // 站外链接交给系统浏览器，避免在客户端里打开不可信页面。
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
@@ -71,9 +89,12 @@ function createWindow() {
 }
 
 if (!app.requestSingleInstanceLock()) {
+  bootLog('single-instance lock failed → quit');
   app.quit();
 } else {
+  bootLog('single-instance lock acquired');
   app.on('second-instance', () => {
+    bootLog('second-instance');
     if (mainWindow) {
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.focus();
@@ -81,7 +102,7 @@ if (!app.requestSingleInstanceLock()) {
   });
 
   app.whenReady().then(() => {
-    // 默认拒绝摄像头/麦克风等权限，后续按业务需要再放开。
+    bootLog('app ready');    // 默认拒绝摄像头/麦克风等权限，后续按业务需要再放开。
     session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => {
       callback(false);
     });
@@ -137,6 +158,7 @@ if (!app.requestSingleInstanceLock()) {
     );
 
     createWindow();
+    bootLog('window created');
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();
