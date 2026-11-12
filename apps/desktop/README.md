@@ -40,6 +40,16 @@ $env:WORKBUDDY_URL="https://app.worksylar.com"
 
 或直接修改 `main.cjs` 的默认值后重新打包。
 
+## 启动异常：被终端安全软件拦截
+
+若双击 exe 无窗口、进程立即退出（本机装有深信服 SangforSP/UDProtect 时常见），
+Electron 会在执行 `main.js` 之前被拦截（最小 Electron 应用同样复现）。处理顺序：
+
+1. 在安全软件控制台把 `WorkSylar.exe` 或整个解压目录加入白名单；
+2. 或对 exe 做代码签名后重新分发；
+3. 临时替代：双击 `WorkSylar.cmd`，用 Edge/Chrome 应用模式打开工作台
+   （无地址栏，效果接近桌面客户端，支持 `WORKBUDDY_URL` 覆盖地址）。
+
 ## 说明
 
 - 桌面版加载远端页面，升级 Web 即同步升级客户端；离线能力需要另行做静态导出或本地服务。
