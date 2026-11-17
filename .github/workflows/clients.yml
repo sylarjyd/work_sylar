@@ -39,7 +39,12 @@ jobs:
           name: worksylar-desktop-${{ matrix.os }}
           path: |
             apps/desktop/release/*.exe
+            apps/desktop/release/*.exe.blockmap
+            apps/desktop/release/*.zip
             apps/desktop/release/*.dmg
+            apps/desktop/Install-WorkSylar.cmd
+            apps/desktop/Install-WorkSylar.ps1
+            apps/desktop/WorkSylar.cmd
             apps/desktop/release/*.AppImage
             apps/desktop/release/*.deb
           if-no-files-found: warn

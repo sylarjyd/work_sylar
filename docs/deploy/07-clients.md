@@ -27,10 +27,16 @@ pnpm --filter @ai-office/desktop dist     # 当前系统安装包
 
 产物：`apps/desktop/release/`
 
-**当前状态（Windows）**：已产出 `WorkSylar-0.1.0-win-x64.exe`（portable，74MB，
-SHA256 `4D00CECFFB5B019214148A78362A695D39E957F6C9EA08B2F7C5000CE31CCFF8`）。
-本机构建 NSIS 安装包时，electron-builder 在最后一步执行未签名安装器被系统安全策略
-拦截；已保留 NSIS 配置，配置代码签名或在 CI 上构建即可产出安装包。
+**当前状态（Windows）**：`dist:win` 可产出三类产物——
+`WorkSylar-Setup-<ver>-win-<arch>.exe`（NSIS 安装包）、
+`WorkSylar-<ver>-win-<arch>.zip`（解压即用）、
+`WorkSylar-Portable-<ver>-win-<arch>.exe`（单文件便携版）。
+
+**未签名会被终端安全软件拦截**：本机实测装有深信服 UD Protect + 腾讯电脑管家，
+Electron exe 在 `main.cjs` 执行前即被终止（退出码 `0x80000003`，不产生启动日志），
+NSIS 安装器也可能只完成解压、无法写入快捷方式与卸载项。正式分发必须做 Windows
+代码签名（CI 注入 `CSC_LINK` / `CSC_KEY_PASSWORD`），或在企业环境加白名单；
+两者都不具备时可用 `apps/desktop/Install-WorkSylar.cmd` 以 Edge/Chrome 应用模式安装。
 macOS/Linux 与移动端本次未构建。
 
 - Windows：NSIS 安装包（x64 + arm64）

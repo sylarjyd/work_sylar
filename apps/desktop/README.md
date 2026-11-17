@@ -17,17 +17,25 @@ $env:WORKBUDDY_URL="https://app.worksylar.com"; pnpm --filter @ai-office/desktop
 ## 打包
 
 ```bash
-pnpm --filter @ai-office/desktop dist:win:portable  # Windows 单文件（已验证可产出）
-pnpm --filter @ai-office/desktop dist:win           # Windows NSIS 安装包
+pnpm --filter @ai-office/desktop dist:win:x64       # NSIS 安装包 + ZIP（本机快速验证）
+pnpm --filter @ai-office/desktop dist:win           # 全量 Windows 产物
+pnpm --filter @ai-office/desktop dist:win:setup     # 仅 NSIS 安装包
+pnpm --filter @ai-office/desktop dist:win:zip       # 仅解压即用包
+pnpm --filter @ai-office/desktop dist:win:portable  # 单文件便携版
 pnpm --filter @ai-office/desktop dist:mac           # macOS DMG（需在 macOS 上执行）
 pnpm --filter @ai-office/desktop dist:linux         # AppImage + deb
 ```
 
-产物在 `apps/desktop/release/`。
+产物在 `apps/desktop/release/`：
 
-**Windows 已验证产物**：`WorkSylar-0.1.0-win-x64.exe`（portable，约 74MB）。
-当前构建机上 NSIS 安装包在最后一步被系统安全策略拦截（electron-builder 无法执行
-未签名的安装器），因此先用 portable 单文件分发；签名后或换 CI 构建即可产出 NSIS。
+| 产物 | 用途 | 说明 |
+| --- | --- | --- |
+| `WorkSylar-Setup-<ver>-win-<arch>.exe` | 标准安装包 | NSIS 助手式安装，默认按当前用户安装，无需管理员权限 |
+| `WorkSylar-<ver>-win-<arch>.zip` | 解压即用 | 解压后运行 `win-unpacked/WorkSylar.exe` |
+| `WorkSylar-Portable-<ver>-win-<arch>.exe` | 单文件便携版 | 运行时会解压到 `%TEMP%`；TEMP 不可写时改用 ZIP |
+
+> 旧版本把便携版命名为 `WorkSylar-<ver>-win-x64.exe`，容易被当成安装包分发；
+> 现已将 Setup / Portable / ZIP 分开命名，`dist:win` 可直接产出 NSIS 安装包。
 
 ## 运行地址
 
@@ -40,15 +48,34 @@ $env:WORKBUDDY_URL="https://app.worksylar.com"
 
 或直接修改 `main.cjs` 的默认值后重新打包。
 
-## 启动异常：被终端安全软件拦截
+## 安装/启动异常：被终端安全软件拦截
 
-若双击 exe 无窗口、进程立即退出（本机装有深信服 SangforSP/UDProtect 时常见），
-Electron 会在执行 `main.js` 之前被拦截（最小 Electron 应用同样复现）。处理顺序：
+若双击安装包或 `WorkSylar.exe` 无窗口、进程立即退出（本机实测装有深信服
+Sangfor UD Protect + 腾讯电脑管家），说明 exe 在执行 `main.cjs` 之前就被拦截：
 
-1. 在安全软件控制台把 `WorkSylar.exe` 或整个解压目录加入白名单；
-2. 或对 exe 做代码签名后重新分发；
-3. 临时替代：双击 `WorkSylar.cmd`，用 Edge/Chrome 应用模式打开工作台
-   （无地址栏，效果接近桌面客户端，支持 `WORKBUDDY_URL` 覆盖地址）。
+- 进程退出码 `-2147483645`（`0x80000003`，STATUS_BREAKPOINT）；
+- `WORKBUDDY_DEBUG=1` 也不生成 `%TEMP%\worksylar-boot.log`，排除应用自身崩溃；
+- 安装器可能只完成文件解压，快捷方式与卸载注册项被中断。
+
+**根因**：安装器与 Electron exe 均未签名，终端安全软件对未知可执行文件默认拒绝。
+按优先级处理：
+
+1. **代码签名（根治）**：准备 OV/EV 代码签名证书，在 CI 配置 `CSC_LINK` /
+   `CSC_KEY_PASSWORD` 后重新打包。证书受信任后 SmartScreen 与安全软件才会放行。
+2. **加白名单（企业内网）**：由管理员把 `WorkSylar-Setup-*.exe` 或安装目录加入
+   安全软件白名单。
+3. **浏览器应用模式（无需签名，立即可用）**：运行 `Install-WorkSylar.cmd`，
+   用系统自带 Edge/Chrome 应用模式安装桌面与开始菜单快捷方式，并写入控制面板卸载项：
+
+   ```bat
+   Install-WorkSylar.cmd
+   Install-WorkSylar.cmd https://app.worksylar.com
+   ```
+
+   卸载：控制面板 → 应用 → WorkSylar（浏览器应用模式），或运行安装目录下的
+   `Uninstall.cmd`。也可直接双击 `WorkSylar.cmd` 免安装启动。
+
+   分发时请把 `Install-WorkSylar.cmd` 与 `Install-WorkSylar.ps1` 放在一起打包。
 
 ## 说明
 

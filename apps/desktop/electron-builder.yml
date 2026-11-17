@@ -13,18 +13,45 @@ files:
 asar: true
 npmRebuild: false
 
+# 随应用一起分发：Electron exe 被安全软件拦截时，可直接运行应用模式安装器。
+extraFiles:
+  - Install-WorkSylar.cmd
+  - Install-WorkSylar.ps1
+  - WorkSylar.cmd
+
 win:
+  icon: build/icon.ico
+  executableName: WorkSylar
   target:
     - target: nsis
       arch: [x64, arm64]
+    # 解压即用包：杀软环境/无法运行安装器时使用。
+    - target: zip
+      arch: [x64]
   artifactName: WorkSylar-${version}-win-${arch}.${ext}
+  # 代码签名：配置 CSC_LINK / CSC_KEY_PASSWORD 后 electron-builder 会自动签名；
+  # 未签名时 Windows SmartScreen 与终端安全软件可能直接拦截安装器与 exe。
 
 nsis:
+  # 与 portable 产物区分命名，避免把便携版误当作安装包分发。
+  artifactName: WorkSylar-Setup-${version}-win-${arch}.${ext}
   oneClick: false
   perMachine: false
+  allowElevation: true
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
+  createStartMenuShortcut: true
   shortcutName: WorkSylar
+  uninstallDisplayName: WorkSylar ${version}
+  runAfterFinish: true
+  deleteAppDataOnUninstall: false
+  # 简体中文界面（2052 = zh-CN）。
+  language: "2052"
+  installerLanguages:
+    - zh_CN
+
+portable:
+  artifactName: WorkSylar-Portable-${version}-win-${arch}.${ext}
 
 mac:
   target:
